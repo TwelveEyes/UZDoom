@@ -5037,6 +5037,10 @@ void AActor::HandleSpawnFlags ()
 	{
 		flags4 |= MF4_STANDSTILL;
 	}
+	if (SpawnFlags & MTF_NOINFIGHTING)
+	{
+		flags5 |= MF5_NOINFIGHTING;
+	}
 	if (SpawnFlags & MTF_FRIENDLY)
 	{
 		flags |= MF_FRIENDLY;
