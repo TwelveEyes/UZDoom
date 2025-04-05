@@ -109,6 +109,8 @@ const char *GetVersionString();
 
 #if defined(__APPLE__) || defined(_WIN32)
 #define GAME_DIR GAMENAME
+#elif defined(__HAIKU__)
+#define GAME_DIR "config/settings/" GAMENAME
 #endif
 
 #define DEFAULT_DISCORD_APP_ID "951303644597325885"
