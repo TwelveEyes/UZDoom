@@ -767,6 +767,8 @@ class Object native
 	private native static void HandleDeprecatedFlags(Object obj, bool set, int index);
 	private native static bool CheckDeprecatedFlags(Object obj, int index);
 	
+	native static Name ValidateNameIndex(int index);
+
 	native static uint MSTime();
 	native static double MSTimeF();
 	native vararg static void ThrowAbortException(String fmt, ...);
