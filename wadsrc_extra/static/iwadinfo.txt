@@ -338,7 +338,6 @@ IWad
 		          "DMENUPIC", "M_ACPT", "M_CAN", "M_EXITO", "M_CHG"
 	BannerColors = "54 54 54", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -376,7 +375,6 @@ IWad
 	Load = "extras.wad", "soundtrack"
 	BannerColors = "00 7c 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -391,7 +389,6 @@ IWad
 	MustContain = "SMOOSHED", "ANIMDEFS", "LANGUAGE", "MAPINFO", "ENDOOM", "M_DOOM", "TITLEPIC", "TEXTURES"
 	BannerColors = "a8 00 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -408,7 +405,6 @@ IWad
 		          "DPHOOF","BFGGA0","HEADA1","CYBRA1","SPIDA1D1", "E4M2", "E1M10", "SEWERS"
 	BannerColors = "18 18 18", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -425,7 +421,6 @@ IWad
 		          "DPHOOF","BFGGA0","HEADA1","CYBRA1","SPIDA1D1", "E4M2"
 	BannerColors = "54 54 54", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -442,7 +437,6 @@ IWad
 		          "DPHOOF","BFGGA0","HEADA1","CYBRA1","SPIDA1D1"
 	BannerColors = "54 54 54", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -456,7 +450,6 @@ IWad
 	MustContain = "E1M1"
 	BannerColors = "54 54 54", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -471,7 +464,6 @@ IWad
 	MustContain = "MAP01", "REDTNT2", "DMAPINFO"
 	BannerColors = "00 7c 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -502,7 +494,6 @@ IWad
 	MustContain = "MAP01", "REDTNT2"
 	BannerColors = "a8 00 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -517,7 +508,6 @@ IWad
 	MustContain = "MAP01", "CAMO1", "DMAPINFO"
 	BannerColors = "00 7c 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -548,7 +538,6 @@ IWad
 	MustContain = "MAP01", "CAMO1"
 	BannerColors = "a8 00 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -596,7 +585,6 @@ IWad
 	BannerColors = "a8 00 00", "a8 a8 a8"
 	Load = "nerve.wad"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -628,7 +616,6 @@ IWad
 	BannerColors = "00 7c 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
 	Load = "nerveunity.wad", "extras.wad", "soundtrack"
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -645,7 +632,6 @@ IWad
 	IgnoreTitlePatches = 1
 	Load = "nerve.wad"
 	DeleteLumps = "M_EPI1", "M_EPI2", "M_EPISOD"
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -659,7 +645,6 @@ IWad
 	Compatibility = "Shorttex", "nosectionmerge"
 	MustContain = "MAP01", "WIOBJ"
 	BannerColors = "ff ff ff", "a8 00 00"
-	SupportWAD = "id24res.wad"
 }
 
 IWad
@@ -674,7 +659,6 @@ IWad
 	MustContain = "MAP01", "MAP30"
 	BannerColors = "a8 00 00", "a8 a8 a8"
 	IgnoreTitlePatches = 1
-	SupportWAD = "id24res.wad"
 }
 
 // NRFTL must be last to be checked because MAP01 is its only requirement
