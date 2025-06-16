@@ -485,7 +485,7 @@ void StartNetwork (bool autoPort)
 #ifndef __sun
 	ioctlsocket (mysocket, FIONBIO, &trueval);
 #else
-	fcntl(mysocket, F_SETFL, trueval | O_NONBLOCK);
+	fcntl(MySocket, F_SETFL, trueVal | O_NONBLOCK);
 #endif
 }
 
