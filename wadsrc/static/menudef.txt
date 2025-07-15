@@ -1333,6 +1333,9 @@ OptionMenu "MiscOptions" protected
 	Option "$MISCMNU_HIDEEXTREME",				"m_hideextreme", "OnOff"
 	StaticText " "
 	Option "$MISCMNU_ALWAYSTALLY",				"sv_alwaystally", "AlwaysTally"
+
+	StaticText " "
+	Option "$MISCMNU_DISCORDRPC",				"i_discordrpc",	"OnOff"
 	
 }
 
