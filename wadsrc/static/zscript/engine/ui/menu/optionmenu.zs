@@ -518,6 +518,7 @@ class OptionMenu : Menu
 			{
 				i += mDesc.mScrollPos;
 				if (i >= mDesc.mItems.Size()) break;	// skipped beyond end of menu
+				if (i < 0) i = 0;
 			}
 			bool isSelected = mDesc.mSelectedItem == i;
 			int cur_indent = mDesc.mItems[i].Draw(mDesc, y, indent, isSelected);
