@@ -407,7 +407,8 @@ void AActor::Serialize(FSerializer &arc)
 		("morphflags", MorphFlags)
 		("premorphproperties", PremorphProperties)
 		("morphexitflash", MorphExitFlash)
-		("damagesource", damagesource);
+		("damagesource", damagesource)
+		A("decalgenerator", DecalGenerator);
 
 
 		SerializeTerrain(arc, "floorterrain", floorterrain, &def->floorterrain);
