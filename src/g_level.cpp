@@ -549,6 +549,19 @@ static void InitPlayerClasses ()
 	}
 }
 
+// Account for additional players joining from a save file.
+static void UpdatePlayerClass(int i)
+{
+	if (!savegamerestore || !playeringame[i])
+		return;
+
+	SinglePlayerClass[i] = players[i].userinfo.GetPlayerClassNum();
+	if (SinglePlayerClass[i] < 0)
+		SinglePlayerClass[i] = (pr_classchoice()) % PlayerClasses.Size();
+	players[i].cls = nullptr;
+	players[i].CurrentPlayerClass = SinglePlayerClass[i];
+}
+
 //==========================================================================
 //
 //
@@ -1996,7 +2009,7 @@ void G_WriteVisited(FSerializer &arc)
 	}
 
 	// Store player classes to be used when spawning a random class
-	if (multiplayer)
+	if (!multiplayer || !deathmatch)
 	{
 		arc.Array("randomclasses", SinglePlayerClass, MAXPLAYERS);
 	}
@@ -2080,7 +2093,10 @@ void G_ReadVisited(FSerializer &arc)
 		for (int i = 0; i < MAXPLAYERS; ++i)
 		{
 			FStringf key("%d", i);
-			arc(key.GetChars(), players[i].cls);
+			if (!arc.HasKey(key.GetChars()))
+				UpdatePlayerClass(i);
+			else
+				arc(key.GetChars(), players[i].cls);
 		}
 		arc.EndObject();
 	}

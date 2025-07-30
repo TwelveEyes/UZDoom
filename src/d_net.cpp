@@ -1677,6 +1677,9 @@ static void SendSetup (uint32_t playersdetected[MAXNETNODES], uint8_t gotsetup[M
 			}
 		}
 	}
+
+	// Reset this immediately so any further RNG calls the engine has to make will be synced.
+	FRandom::StaticClearRandom();
 }
 
 //
