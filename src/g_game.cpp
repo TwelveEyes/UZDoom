@@ -2612,7 +2612,6 @@ void G_WriteDemoTiccmd (ticcmd_t *cmd, int player, int buf)
 	{
 		memcpy (demo_p, specdata, speclen);
 		demo_p += speclen;
-		NetSpecs[player][buf].SetData (NULL, 0);
 	}
 
 	// [RH] Now write out a "normal" ticcmd.
