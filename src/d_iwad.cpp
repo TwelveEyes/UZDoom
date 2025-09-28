@@ -743,6 +743,10 @@ int FIWadManager::IdentifyVersion (std::vector<std::string>&wadfiles, const char
 					  "1. Place one or more of these wads in ~/Library/Application Support/" GAMENAMELOWERCASE "/\n"
 					  "2. Edit your ~/Library/Preferences/" GAMENAMELOWERCASE ".ini and add the directories\n"
 					  "of your iwads to the list beneath [IWADSearch.Directories]");
+#elif defined(IS_FLATPAK)
+		gamedir = "~/.var/app/" APPID "/.config/" GAMENAMELOWERCASE "/";
+		cfgfile = "~/.var/app/" APPID "/.config/" GAMENAMELOWERCASE "/" GAMENAMELOWERCASE ".ini";
+		extrasteps = "\n3. Validate your Flatpak permissions, so that Flatpak has access to your directories with wads";
 #else
 					  "1. Place one or more of these wads in ~/.config/" GAMENAMELOWERCASE "/.\n"
 					  "2. Edit your ~/.config/" GAMENAMELOWERCASE "/" GAMENAMELOWERCASE ".ini and add the directories of your\n"
