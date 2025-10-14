@@ -324,7 +324,7 @@ struct FExitText
 struct level_info_t
 {
 	int			levelnum;
-	int			broken_id24_levelnum;
+	int			id24_levelnum;
 	
 	FString		MapName;
 	FString		NextMap;
