@@ -121,6 +121,7 @@ FGameConfigFile::FGameConfigFile ()
 		// Arch Linux likes them in /usr/share/doom
 		// Debian likes them in /usr/share/games/doom
 		// I assume other distributions don't do anything radically different
+		SetValueForKey ("Path", "/usr/share/games/lzdoom", true);
 		SetValueForKey ("Path", "/usr/local/share/doom", true);
 		SetValueForKey ("Path", "/usr/local/share/games/doom", true);
 		SetValueForKey ("Path", "/usr/share/doom", true);
@@ -148,6 +149,7 @@ FGameConfigFile::FGameConfigFile ()
 		SetValueForKey ("Path", SHARE_DIR, true);
 		SetValueForKey ("Path", SHARE_DIR "/doom", true);
 		SetValueForKey ("Path", SHARE_DIR "/games/doom", true);
+		SetValueForKey ("Path", "/usr/share/games/lzdoom", true);
 		SetValueForKey ("Path", "/usr/local/share/doom", true);
 		SetValueForKey ("Path", "/usr/local/share/games/doom", true);
 		SetValueForKey ("Path", "/usr/share/doom", true);
@@ -177,6 +179,8 @@ FGameConfigFile::FGameConfigFile ()
 		SetValueForKey("Path", "$HOME/" GAME_DIR "/fm_banks", true);
 		SetValueForKey("Path", "$HOME/.local/share/games/doom/soundfonts", true);
 		SetValueForKey("Path", "$HOME/.local/share/games/doom/fm_banks", true);
+		SetValueForKey("Path", "/usr/share/games/lzdoom/soundfonts", true);
+		SetValueForKey("Path", "/usr/share/games/lzdoom/fm_banks", true);
 		SetValueForKey("Path", "/usr/local/share/doom/soundfonts", true);
 		SetValueForKey("Path", "/usr/local/share/doom/fm_banks", true);
 		SetValueForKey("Path", "/usr/local/share/games/doom/soundfonts", true);
