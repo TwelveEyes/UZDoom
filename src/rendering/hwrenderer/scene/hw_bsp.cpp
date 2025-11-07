@@ -50,7 +50,7 @@
 #include <immintrin.h>
 #endif // ARCH_IA32
 
-CVAR(Bool, gl_multithread, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+CVAR(Bool, gl_multithread, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 EXTERN_CVAR(Float, r_actorspriteshadowdist)
 EXTERN_CVAR(Bool, r_radarclipper)
@@ -86,6 +86,7 @@ struct RenderJob
 	int type;
 	subsector_t *sub;
 	seg_t *seg;
+	bool isculled;
 };
 
 
@@ -95,11 +96,11 @@ class RenderJobQueue
 	std::atomic<int> readindex{};
 	std::atomic<int> writeindex{};
 public:
-	void AddJob(int type, subsector_t *sub, seg_t *seg = nullptr)
+	void AddJob(int type, subsector_t *sub, seg_t *seg = nullptr, bool isculled = false)
 	{
 		// This does not check for array overflows. The pool should be large enough that it never hits the limit.
 
-		pool[writeindex] = { type, sub, seg };
+		pool[writeindex] = { type, sub, seg, isculled };
 		writeindex++;	// update index only after the value has been written.
 	}
 
@@ -186,7 +187,7 @@ void HWDrawInfo::WorkerThread()
 			}
 			else back = nullptr;
 
-			wall.Process(&disp, job->seg, front, back);
+			wall.Process(&disp, job->seg, front, back, job->isculled);
 			rendered_lines++;
 			SetupWall.Unclock();
 			break;
@@ -282,6 +283,7 @@ inline bool IsDistanceCulled(seg_t *line)
 void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 {
 	const bool doOob = Viewpoint.bDoOob;
+	bool isculled = false;
 
 #ifdef _DEBUG
 	if (seg->linedef && seg->linedef->Index() == 38)
@@ -356,22 +358,18 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 
 	uint8_t ispoly = uint8_t(seg->sidedef->Flags & WALLF_POLYOBJ);
 
-	if (!gl_multithread && IsDistanceCulled(seg))
+	if (IsDistanceCulled(seg))
 	{
-		HWWall wall;
-		HWWallDispatcher disp(this);
-		wall.sub = currentsubsector;
-		wall.Process(&disp, seg, seg->frontsector, seg->backsector, true);
+		isculled = true;
 		clipper.SafeAddClipRange(startAngle, endAngle);
-		return;
 	}
 
-	if (!seg->backsector)
+	if (!seg->backsector && !isculled)
 	{
 		if(!doOob)
 			if (!(seg->sidedef->Flags & WALLF_DITHERTRANS_MID)) clipper.SafeAddClipRange(startAngle, endAngle);
 	}
-	else if (!ispoly)	// Two-sided polyobjects never obstruct the view
+	else if (!ispoly && !isculled)	// Two-sided polyobjects never obstruct the view
 	{
 		if (currentsector->sectornum == seg->backsector->sectornum)
 		{
@@ -401,7 +399,7 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 			}
 		}
 	}
-	else 
+	else if (!isculled)
 	{
 		// Backsector for polyobj segs is always the containing sector itself
 		backsector = currentsector;
@@ -417,7 +415,7 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 		{
 			if (multithread)
 			{
-				jobQueue.AddJob(RenderJob::WallJob, seg->Subsector, seg);
+				jobQueue.AddJob(RenderJob::WallJob, seg->Subsector, seg, isculled);
 			}
 			else
 			{
@@ -425,7 +423,7 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 				HWWallDispatcher disp(this);
 				SetupWall.Clock();
 				wall.sub = seg->Subsector;
-				wall.Process(&disp, seg, currentsector, backsector);
+				wall.Process(&disp, seg, currentsector, backsector, isculled);
 				rendered_lines++;
 				SetupWall.Unclock();
 			}
