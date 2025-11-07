@@ -41,21 +41,21 @@ const char *GetVersionString();
 
 /** Lots of different version numbers **/
 
-#define VERSIONSTR "4.15pre"
+#define VERSIONSTR "4.14.3"
 
 // The version as seen in the Windows resource
-#define RC_FILEVERSION 4,14,9999,0
-#define RC_PRODUCTVERSION 4,14,9999,0
+#define RC_FILEVERSION 4,14,3,0
+#define RC_PRODUCTVERSION 4,14,3,0
 #define RC_PRODUCTVERSION2 VERSIONSTR
 // These are for content versioning.
 #define VER_MAJOR 4
-#define VER_MINOR 15
-#define VER_REVISION 0
+#define VER_MINOR 14
+#define VER_REVISION 3
 
 // This should always refer to the GZDoom version a derived port is based on and not reflect the derived port's version number!
 #define ENG_MAJOR 4
-#define ENG_MINOR 15
-#define ENG_REVISION 0
+#define ENG_MINOR 14
+#define ENG_REVISION 3
 
 // Version identifier for network games.
 // Bump it every time you do a release unless you're certain you
@@ -109,8 +109,6 @@ const char *GetVersionString();
 
 #if defined(__APPLE__) || defined(_WIN32)
 #define GAME_DIR GAMENAME
-#else
-#define GAME_DIR ".config/" GAMENAMELOWERCASE
 #endif
 
 #define DEFAULT_DISCORD_APP_ID "951303644597325885"
@@ -119,6 +117,5 @@ const int SAVEPICWIDTH = 216;
 const int SAVEPICHEIGHT = 162;
 const int VID_MIN_WIDTH = 320;
 const int VID_MIN_HEIGHT = 200;
-
 
 #endif //__VERSION_H__
