@@ -364,8 +364,10 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 		clipper.SafeAddClipRange(startAngle, endAngle);
 	}
 
-	// [XA] TODO: replace backsector check with flag check outright;
-	// handle the 1s line case by setting the flag in the map loader
+	// [XA] NOTE: this used to be a check for !seg->backsector, but
+	// MapLoader::UpdateSidedefFlags now automagically applies the
+	// WALLF_BLOCKRENDERING flag to any sidedefs belonging to a 1s
+	// line, allowing these two checks to be collapsed into one.
 	if (!seg->backsector || (seg->sidedef->Flags & WALLF_BLOCKRENDERING))
 	{
 		if(!doOob)
