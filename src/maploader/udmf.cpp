@@ -1420,6 +1420,10 @@ public:
 				Flag(sd->Flags, WALLF_NOAUTODECALS, key);
 				continue;
 
+			case NAME_Blockrendering:
+				Flag(sd->Flags, WALLF_BLOCKRENDERING, key);
+				continue;
+
 			case NAME_colorization_top:
 				sd->SetTextureFx(side_t::top, TexMan.GetTextureManipulation(CheckString(key)));
 				break;
