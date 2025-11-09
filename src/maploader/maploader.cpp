@@ -2184,6 +2184,7 @@ void MapLoader::LoadSideDefs2 (MapData *map, FMissingTextureTracker &missingtex)
 		sd->SetTextureYOffset(LittleShort(msd->rowoffset));
 		sd->SetTextureXScale(1.);
 		sd->SetTextureYScale(1.);
+		sd->ClearAlpha();
 		sd->linedef = nullptr;
 		sd->Flags = 0;
 		sd->UDMFIndex = i;
