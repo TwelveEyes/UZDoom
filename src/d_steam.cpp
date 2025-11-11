@@ -1,9 +1,11 @@
 /*
-** i_steam.cpp
+** d_steam.cpp
 ** Detection for IWADs installed by Steam (or other distributors)
 **
 **---------------------------------------------------------------------------
-** Copyright 2013 Braden Obrzut
+** Copyright 1998-2009 Randy Heit
+** Copyright 2007-2012 Skulltag Development Team
+** Copyright 2007-2016 Zandronum Development Team
 ** Copyright 2017-2025 GZDoom Maintainers and Contributors
 ** Copyright 2025 UZDoom Maintainers and Contributors
 ** All rights reserved.
@@ -19,6 +21,15 @@
 **    documentation and/or other materials provided with the distribution.
 ** 3. The name of the author may not be used to endorse or promote products
 **    derived from this software without specific prior written permission.
+** 4. Redistributions in any form must be accompanied by information on how to
+**    obtain complete source code for the software and any accompanying software
+**    that uses the software. The source code must either be included in the
+**    distribution or be available for no more than the cost of distribution plus
+**    a nominal fee, and must be freely redistributable under reasonable
+**    conditions. For an executable file, complete source code means the source
+**    code for all modules it contains. It does not include source code for
+**    modules or files that typically accompany the major components of the
+**    operating system on which the executable file runs.
 **
 ** THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
 ** IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
@@ -32,81 +43,63 @@
 ** THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 **---------------------------------------------------------------------------
 **
-**
 */
 
-#include <sys/stat.h>
-
-#ifdef __APPLE__
-#include "m_misc.h"
-#endif // __APPLE__
-
-#include "d_main.h"
 #include "d_steam.h"
-#include "engineerrors.h"
 #include "sc_man.h"
-#include "cmdlib.h"
 
-TArray<FString> I_GetSteamPath()
+static void PSR_FindEndBlock(FScanner &sc)
 {
-	TArray<FString> result;
-	TArray<FString> SteamInstallFolders;
-
-	// Linux and OS X actually allow the user to install to any location, so
-	// we need to figure out on an app-by-app basis where the game is installed.
-	// To do so, we read the virtual registry.
-#ifdef __APPLE__
-	const FString appSupportPath = M_GetMacAppSupportPath();
-	FString regPath = appSupportPath + "/Steam/config/libraryfolders.vdf";
-	try
+	int depth = 1;
+	do
 	{
-		SteamInstallFolders = D_ParseSteamRegistry(regPath.GetChars());
+		if(sc.CheckToken('}'))
+			--depth;
+		else if(sc.CheckToken('{'))
+			++depth;
+		else
+			sc.MustGetAnyToken();
 	}
-	catch(class CRecoverableError &error)
-	{
-		// If we can't parse for some reason just pretend we can't find anything.
-		return result;
-	}
-
-	SteamInstallFolders.Push(appSupportPath + "/Steam/steamapps/common");
-#else
-	char* home = getenv("HOME");
-	if(home != NULL && *home != '\0')
-	{
-		FString regPath;
-		regPath.Format("%s/.steam/steam/config/libraryfolders.vdf", home);
-
-		try
-		{
-			SteamInstallFolders = D_ParseSteamRegistry(regPath.GetChars());
-		}
-		catch(class CRecoverableError &error)
-		{
-			// If we can't parse for some reason just pretend we can't find anything.
-			return result;
-		}
-
-		regPath.Format("%s/.steam/steam/steamapps/common", home);
-		SteamInstallFolders.Push(regPath);
-	}
-#endif
-
-	for (unsigned int i = 0; i < SteamInstallFolders.Size(); ++i)
-	{
-		for (unsigned int app = 0; app < std::size(SteamAppInfoList); ++app)
-		{
-			struct stat st;
-			FString candidate(SteamInstallFolders[i] + "/" + SteamAppInfoList[app].BasePath);
-			if(DirExists(candidate.GetChars()))
-				result.Push(candidate);
-		}
-	}
-
-	return result;
+	while(depth);
 }
 
-TArray<FString> I_GetGogPaths()
+TArray<FString> D_ParseSteamRegistry(const char* path)
 {
-	// GOG's Doom games are Windows only at the moment
-	return TArray<FString>();
+	TArray<FString> result;
+	FScanner sc;
+	if (sc.OpenFile(path))
+	{
+		sc.SetCMode(true);
+
+		sc.MustGetToken(TK_StringConst);
+		sc.MustGetToken('{');
+		// Get a list of possible install directories.
+		while(sc.GetToken() && sc.TokenType != '}')
+		{
+			sc.TokenMustBe(TK_StringConst);
+			sc.MustGetToken('{');
+
+			while(sc.GetToken() && sc.TokenType != '}')
+			{
+				sc.TokenMustBe(TK_StringConst);
+				FString key(sc.String);
+				if(key.CompareNoCase("path") == 0)
+				{
+					sc.MustGetToken(TK_StringConst);
+					result.Push(FString(sc.String) + "/steamapps/common");
+					PSR_FindEndBlock(sc);
+					break;
+				}
+				else if(sc.CheckToken('{'))
+				{
+					PSR_FindEndBlock(sc);
+				}
+				else
+				{
+					sc.MustGetToken(TK_StringConst);
+				}
+			}
+		}
+	}
+	return result;
 }
