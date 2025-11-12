@@ -443,7 +443,7 @@ public:
 				builder.OptionalExtension(VK_MVK_MACOS_SURFACE_EXTENSION_NAME); // MVK_macos_surface, optional, deprecated
 				auto vulkanInstance = builder.Create();
 
-				VkSurfaceKHR surfacehandle = nullptr;
+				VkSurfaceKHR surfacehandle = VK_NULL_HANDLE;
 				if (!I_CreateVulkanSurface(vulkanInstance->Instance, &surfacehandle))
 					VulkanError("I_CreateVulkanSurface failed");
 
