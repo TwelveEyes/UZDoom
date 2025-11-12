@@ -2098,6 +2098,10 @@ static void CheckCmdLine()
 	const char *v;
 
 	if (!batchrun) Printf ("Checking cmd-line parameters...\n");
+
+	v = Args->CheckValue ("-config");
+	if (v)	Printf ("Using config file %s\n", v);
+
 	if (Args->CheckParm ("-nomonsters"))	flags |= DF_NO_MONSTERS;
 	if (Args->CheckParm ("-respawn"))		flags |= DF_MONSTERS_RESPAWN;
 	if (Args->CheckParm ("-fast"))			flags |= DF_FAST_MONSTERS;
