@@ -335,18 +335,14 @@ void FGameConfigFile::DoAutoloadSetup (FIWadManager *iwad_man)
 
 void FGameConfigFile::DoGlobalSetup ()
 {
-	bool badconfig = false;
-
 	if (SetSection ("GlobalSettings.Unknown"))
 	{
 		ReadCVars (CVAR_GLOBALCONFIG);
 	}
-	else badconfig = true;
 	if (SetSection ("GlobalSettings"))
 	{
 		ReadCVars (CVAR_GLOBALCONFIG);
 	}
-	else badconfig = true;
 	if (SetSection ("LastRun"))
 	{
 		const char *lastver = GetValueForKey ("Version");
@@ -633,10 +629,6 @@ void FGameConfigFile::DoGlobalSetup ()
 			}
 		}
 	}
-	else badconfig = true;
-
-	if (FileExisted && badconfig)
-		I_Error ("Corrupt config file.\n");
 }
 
 void FGameConfigFile::DoGameSetup (const char *gamename)
