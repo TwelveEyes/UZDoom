@@ -42,67 +42,24 @@
 #endif // __APPLE__
 
 #include "d_main.h"
-#include "d_steam.h"
 #include "engineerrors.h"
 #include "sc_man.h"
 #include "cmdlib.h"
 
-TArray<FString> I_GetSteamPath()
+FString I_GetSteamPath()
 {
-	TArray<FString> result;
-	TArray<FString> SteamInstallFolders;
-
-	// Linux and OS X actually allow the user to install to any location, so
-	// we need to figure out on an app-by-app basis where the game is installed.
-	// To do so, we read the virtual registry.
 #ifdef __APPLE__
-	const FString appSupportPath = M_GetMacAppSupportPath();
-	FString regPath = appSupportPath + "/Steam/config/libraryfolders.vdf";
-	try
-	{
-		SteamInstallFolders = D_ParseSteamRegistry(regPath.GetChars());
-	}
-	catch(class CRecoverableError &error)
-	{
-		// If we can't parse for some reason just pretend we can't find anything.
-		return result;
-	}
-
-	SteamInstallFolders.Push(appSupportPath + "/Steam/steamapps/common");
+	return M_GetMacAppSupportPath() + "/Steam";
 #else
 	char* home = getenv("HOME");
-	if(home != NULL && *home != '\0')
+	if (home != NULL && *home != '\0')
 	{
 		FString regPath;
-		regPath.Format("%s/.steam/steam/config/libraryfolders.vdf", home);
-
-		try
-		{
-			SteamInstallFolders = D_ParseSteamRegistry(regPath.GetChars());
-		}
-		catch(class CRecoverableError &error)
-		{
-			// If we can't parse for some reason just pretend we can't find anything.
-			return result;
-		}
-
-		regPath.Format("%s/.steam/steam/steamapps/common", home);
-		SteamInstallFolders.Push(regPath);
+		regPath.Format("%s/.steam/steam", home);
+		return regPath;
 	}
+	return "";
 #endif
-
-	for (unsigned int i = 0; i < SteamInstallFolders.Size(); ++i)
-	{
-		for (unsigned int app = 0; app < std::size(SteamAppInfoList); ++app)
-		{
-			struct stat st;
-			FString candidate(SteamInstallFolders[i] + "/" + SteamAppInfoList[app].BasePath);
-			if(DirExists(candidate.GetChars()))
-				result.Push(candidate);
-		}
-	}
-
-	return result;
 }
 
 TArray<FString> I_GetGogPaths()

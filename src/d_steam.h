@@ -49,35 +49,6 @@
 #ifndef __D_STEAM_H__
 #define __D_STEAM_H__
 
-struct SteamAppInfo
-{
-	const char* const BasePath;
-	const int AppID;
-};
-
-inline constexpr SteamAppInfo SteamAppInfoList[] =
-{
-	{"Doom 2/base", 2300},
-	{"Final Doom/base", 2290},
-	{"Heretic Shadow of the Serpent Riders/base", 2390},
-	{"Hexen/base", 2360},
-	{"Hexen Deathkings of the Dark Citadel/base", 2370},
-	{"Ultimate Doom/base", 2280},
-	{"Ultimate Doom/base/doom2", 2280},
-	{"Ultimate Doom/base/tnt", 2280},
-	{"Ultimate Doom/base/plutonia", 2280},
-	{"DOOM 3 BFG Edition/base/wads", 208200},
-	{"Strife", 317040},
-	{"Ultimate Doom/rerelease/DOOM_Data/StreamingAssets", 2280},
-	{"Ultimate Doom/rerelease", 2280},
-	{"Doom 2/rerelease/DOOM II_Data/StreamingAssets", 2300},
-	{"Doom 2/finaldoombase", 2300},
-    {"Master Levels of Doom/doom2", 9160},
-	{"Heretic + Hexen/dos/base/heretic", 3286930},
-	{"Heretic + Hexen/dos/base/hexen", 3286930},
-	{"Heretic + Hexen/dos/base/hexendk", 3286930}
-};
-
-TArray<FString> D_ParseSteamRegistry(const char* path);
+TArray<FString> D_GetSteamGamePaths();
 
 #endif // __D_STEAM_H__

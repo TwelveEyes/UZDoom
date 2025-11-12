@@ -72,7 +72,6 @@
 
 #include "d_main.h"
 #include "d_net.h"
-#include "d_steam.h"
 #include "g_game.h"
 #include "c_dispatch.h"
 
@@ -233,43 +232,17 @@ TArray<FString> I_GetGogPaths()
 //
 //==========================================================================
 
-TArray<FString> I_GetSteamPath()
+FString I_GetSteamPath()
 {
-	TArray<FString> result;
-	FString steamPath;
+	FString SteamPath;
 
-	if (!QueryPathKey(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", steamPath))
+	if (!QueryPathKey(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", SteamPath))
 	{
-		if (!QueryPathKey(HKEY_LOCAL_MACHINE, L"Software\\Valve\\Steam", L"InstallPath", steamPath))
-			return result;
+		if (!QueryPathKey(HKEY_LOCAL_MACHINE, L"Software\\Valve\\Steam", L"InstallPath", SteamPath))
+			return "";
 	}
 
-	try
-	{
-		TArray<FString> paths = D_ParseSteamRegistry((steamPath + "/config/libraryfolders.vdf").GetChars());
-
-		for (FString& path : paths)
-		{
-			path.ReplaceChars('\\', '/');
-			path += "/";
-		}
-
-		paths.Push(steamPath + "/steamapps/common/");
-
-		for (unsigned int i = 0; i < std::size(SteamAppInfoList); ++i)
-		{
-			for (const FString& path : paths)
-			{
-				result.Push(path + SteamAppInfoList[i].BasePath);
-			}
-		}
-	}
-	catch (const CRecoverableError& err)
-	{
-		// don't abort on errors in here. Just return an empty path.
-	}
-
-	return result;
+	return SteamPath;
 }
 
 //==========================================================================

@@ -33,21 +33,22 @@
 **
 */
 #include "d_main.h"
+#include "d_steam.h"
+#include "engineerrors.h"
+#include "filesystem.h"
+#include "findfile.h"
+#include "fs_findfile.h"
+#include "gameconfigfile.h"
 #include "gi.h"
 #include "cmdlib.h"
 #include "doomstat.h"
 #include "i_system.h"
-#include "filesystem.h"
 #include "m_argv.h"
 #include "m_misc.h"
 #include "sc_man.h"
 #include "v_video.h"
-#include "gameconfigfile.h"
 #include "version.h"
-#include "engineerrors.h"
 #include "v_text.h"
-#include "fs_findfile.h"
-#include "findfile.h"
 #include "i_interface.h"
 #include "gstrings.h"
 
@@ -84,7 +85,7 @@ void FIWadManager::ParseIWadInfo(const char *fn, const char *data, int datasize,
 				// Skip the rest.
 				break;
 			}
-				
+
 			FIWADInfo *iwad = result ? result : &mIWadInfos[mIWadInfos.Reserve(1)];
 			sc.MustGetStringName("{");
 			while (!sc.CheckString("}"))
@@ -469,7 +470,7 @@ void FIWadManager::CollectSearchPaths()
 		}
 	}
 	mSearchPaths.Append(I_GetGogPaths());
-	mSearchPaths.Append(I_GetSteamPath());
+	mSearchPaths.Append(D_GetSteamGamePaths());
 	mSearchPaths.Append(I_GetBethesdaPath());
 
 	// Unify and remove trailing slashes

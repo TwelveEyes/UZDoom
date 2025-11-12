@@ -46,7 +46,7 @@ int I_PickIWad (WadStuff *wads, int numwads, bool queryiwad, int defaultiwad, in
 
 // [RH] Checks the registry for Steam's install path, so we can scan its
 // directories for IWADs if the user purchased any through Steam.
-TArray<FString> I_GetSteamPath();
+FString I_GetSteamPath();
 
 TArray<FString> I_GetGogPaths();
 
