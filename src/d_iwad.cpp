@@ -62,6 +62,9 @@ EXTERN_CVAR(String, language)
 
 CVAR(Bool, i_loadsupportwad, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG) // Disabled in net games.
 
+// Search game distributors' (Steam, GOG, Bethesda) paths for installed IWADs
+CVAR(Bool, i_searchdistributors, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+
 //==========================================================================
 //
 // Parses IWAD definitions
@@ -469,9 +472,13 @@ void FIWadManager::CollectSearchPaths()
 			}
 		}
 	}
-	mSearchPaths.Append(I_GetGogPaths());
-	mSearchPaths.Append(D_GetSteamGamePaths());
-	mSearchPaths.Append(I_GetBethesdaPath());
+
+	if (i_searchdistributors)
+	{
+		mSearchPaths.Append(I_GetGogPaths());
+		mSearchPaths.Append(D_GetSteamGamePaths());
+		mSearchPaths.Append(I_GetBethesdaPath());
+	}
 
 	// Unify and remove trailing slashes
 	for (auto &str : mSearchPaths)
