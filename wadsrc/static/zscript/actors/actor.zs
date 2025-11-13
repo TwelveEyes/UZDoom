@@ -1441,7 +1441,7 @@ class Actor : Thinker native
 				A_StartSound("*grunt", CHAN_VOICE);
 				grunted = true;
 			}
-			bool isliquid = (pos.Z <= floorz) && HitFloor ();
+			bool isliquid = (pos.Z <= floorz) && GetFloorTerrain().IsLiquid;
 			if (onmobj != NULL || !isliquid)
 			{
 				if (!grunted)
