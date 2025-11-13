@@ -55,7 +55,7 @@ FString I_GetSteamPath()
 	if (home != NULL && *home != '\0')
 	{
 		FString regPath;
-		regPath.Format("%s/.steam/steam", home);
+		regPath.Format("%s/.local/share/Steam", home);
 		return regPath;
 	}
 	return "";
