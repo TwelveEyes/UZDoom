@@ -124,6 +124,14 @@ GMPLYMNU_MULTIPLAYERTHINGS		= "Spawn multi. things";
 GGLOADED						= "game loaded.";
 CMPTMNU_OLDRANDOM				= "Use original Doom pseudo-RNG";
 OPTVAL_LOWEST12					= "Lowest Possible Scale (1.2)";
+GLPREFMNU_MAPLIGHTMODE			= "Test old lightning modes";
+OPTVAL_STANDARD					= "Standard";
+OPTVAL_BRIGHT					= "Bright";
+OPTVAL_DOOM						= "Doom";
+OPTVAL_DARK						= "Dark";
+OPTVAL_LEGACY					= "Doom Legacy";
+OPTVAL_BUILD					= "Build";
+OPTVAL_SOFTWARE					= "Software";
 
 // Placeholder definitions for strings that are in the game content table where the labels are needed even when that file is not loaded.
 

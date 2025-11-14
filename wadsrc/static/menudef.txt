@@ -2576,6 +2576,18 @@ OptionValue "LightingModes"
 	2, "$OPTVAL_VANILLA"
 }
 
+OptionValue "MapLightModes"
+{
+	-1, "Inactive"
+	0, "$OPTVAL_STANDARD"
+	1, "$OPTVAL_BRIGHT"
+	2, "$OPTVAL_DOOM"
+	3, "$OPTVAL_DARK"
+	4, "$OPTVAL_LEGACY"
+	5, "$OPTVAL_BUILD"
+	8, "$OPTVAL_SOFTWARE"
+}
+
 OptionValue "Precision"
 {
 	0, "$OPTVAL_SPEED"
@@ -2737,6 +2749,7 @@ OptionMenu "OpenGLOptions" protected
 	Submenu "$GLMNU_POSTPROCESS",				"PostProcessMenu"
 	StaticText " "
 	Option "$GLPREFMNU_SECLIGHTMODE",			gl_lightmode,					"LightingModes"
+	Option "$GLPREFMNU_MAPLIGHTMODE",			gl_maplightmode,				"MapLightModes"
 	Option "$GLPREFMNU_SWLMBANDED",				gl_bandedswlight,				"OnOff"
 	Option "$GLPREFMNU_FOGMODE",				gl_fogmode,						"FogMode"
 	Option "$GLPREFMNU_FOGFORCEFULLBRIGHT",		gl_brightfog,					"YesNo"
