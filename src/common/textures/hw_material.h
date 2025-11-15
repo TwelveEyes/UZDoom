@@ -32,7 +32,7 @@ class FMaterial
 public:
 	static void SetLayerCallback(IHardwareTexture* (*layercallback)(int layer, int translation));
 
-	FGameTexture *sourcetex;	// the owning texture. 
+	FGameTexture *sourcetex = nullptr;	// the owning texture.
 
 	FMaterial(FGameTexture *tex, int scaleflags);
 	virtual ~FMaterial();

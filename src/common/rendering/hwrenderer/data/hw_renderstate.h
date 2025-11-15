@@ -90,10 +90,10 @@ struct FStateVec4
 struct FMaterialState
 {
 	FMaterial *mMaterial = nullptr;
-	int mClampMode;
-	int mTranslation;
-	int mOverrideShader;
-	bool mChanged;
+	int mClampMode = CLAMP_NONE;
+	int mTranslation = 0;
+	int mOverrideShader = -1;
+	bool mChanged = false;
 
 	void Reset()
 	{
