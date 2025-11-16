@@ -364,12 +364,12 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 		clipper.SafeAddClipRange(startAngle, endAngle);
 	}
 
-	if (!seg->backsector && !isculled)
+	if (!seg->backsector)
 	{
 		if(!doOob)
 			if (!(seg->sidedef->Flags & WALLF_DITHERTRANS_MID)) clipper.SafeAddClipRange(startAngle, endAngle);
 	}
-	else if (!ispoly && !isculled)	// Two-sided polyobjects never obstruct the view
+	else if (!ispoly)	// Two-sided polyobjects never obstruct the view
 	{
 		if (currentsector->sectornum == seg->backsector->sectornum)
 		{
@@ -399,7 +399,7 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 			}
 		}
 	}
-	else if (!isculled)
+	else
 	{
 		// Backsector for polyobj segs is always the containing sector itself
 		backsector = currentsector;
