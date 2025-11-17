@@ -564,6 +564,7 @@ void PerformWipe(FTexture* startimg, FTexture* endimg, int wipe_type, bool stops
 		}
 	} while (!done);
 	delete wiper;
+	wiper = nullptr;
 	I_FreezeTime(false);
 	GSnd->SetSfxPaused(false, 1);
 
