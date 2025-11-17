@@ -210,6 +210,7 @@ void PolyRenderState::SetColormapShader(bool enable)
 void PolyRenderState::EndRenderPass()
 {
 	mDrawCommands = nullptr;
+	mMaterial.mMaterial = nullptr;
 	mNeedApply = true;
 	mFirstMatrixApply = true;
 }
