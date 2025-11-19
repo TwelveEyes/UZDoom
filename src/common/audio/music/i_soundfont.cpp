@@ -340,7 +340,7 @@ void FSoundFontManager::ProcessOneFile(const char* fn)
 	for (auto &sfi : soundfonts)
 	{
 		// We already got a soundfont with this name. Do not add again.
-		if (sfi.mName.CompareNoCase(fb))
+		if (sfi.mName.CompareNoCase(fb) == 0)
 		{
 			SF_LOG("s", fn);
 			return;
