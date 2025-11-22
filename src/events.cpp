@@ -340,7 +340,7 @@ bool EventManager::RegisterHandler(DStaticEventHandler* handler)
 	return true;
 }
 
-bool EventManager::UnregisterHandler(DStaticEventHandler* handler)
+bool EventManager::UnregisterHandler(DStaticEventHandler *handler, bool destroying)
 {
 	if (handler == nullptr || handler->ObjectFlags & OF_EuthanizeMe)
 		return false;
@@ -373,7 +373,8 @@ bool EventManager::UnregisterHandler(DStaticEventHandler* handler)
 	if (handler->IsStatic())
 	{
 		handler->ObjectFlags &= ~OF_Transient;
-		handler->Destroy();
+		if (!destroying)
+			handler->Destroy();
 	}
 	return true;
 }
@@ -2386,7 +2387,7 @@ void DStaticEventHandler::NewGame()
 void DStaticEventHandler::OnDestroy()
 {
 	if (owner)
-		owner->UnregisterHandler(this);
+		owner->UnregisterHandler(this, true);
 	Super::OnDestroy();
 }
 
