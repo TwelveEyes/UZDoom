@@ -22,23 +22,29 @@ jobs:
 
         - name: macOS
           os: macos-14
-          extra_options: -DDYN_OPENAL=OFF
+          extra_options: -DHAVE_VULKAN=ON -DHAVE_GLES2=OFF -DDYN_OPENAL=OFF -DOPENAL_INCLUDE_DIR=/opt/homebrew/opt/openal-soft/include/AL -DOPENAL_LIBRARY=/opt/homebrew/opt/openal-soft/lib/libopenal.dylib
           deps_cmdline: |
-            brew install  \
-              vulkan-volk \
-              molten-vk   \
-              libvpx      \
+            brew install   \
+              dylibbundler \
+              fluid-synth  \
+              openal-soft  \
+              vulkan-volk  \
+              molten-vk    \
+              libvpx       \
               sdl2
           build_type: Release
 
         - name: macOS
           os: macos-14
-          extra_options: -DDYN_OPENAL=OFF
+          extra_options: -DHAVE_VULKAN=ON -DHAVE_GLES2=OFF -DDYN_OPENAL=OFF -DOPENAL_INCLUDE_DIR=/opt/homebrew/opt/openal-soft/include/AL -DOPENAL_LIBRARY=/opt/homebrew/opt/openal-soft/lib/libopenal.dylib
           deps_cmdline: |
-            brew install  \
-              vulkan-volk \
-              molten-vk   \
-              libvpx      \
+            brew install   \
+              dylibbundler \
+              fluid-synth  \
+              openal-soft  \
+              vulkan-volk  \
+              molten-vk    \
+              libvpx       \
               sdl2
           build_type: RelWithDebInfo
 
@@ -155,8 +161,39 @@ jobs:
             if [[ ! -d uzdoom.app ]] && [[ -d ${{ matrix.config.build_type }}/uzdoom.app ]]; then
                 mv ${{ matrix.config.build_type }}/uzdoom.app uzdoom.app
             fi
-            mv package/licenses.zip uzdoom.app
-            # copy fm_banks + soundfonts ?
+            mv package/licenses.zip uzdoom.app/Contents/Resources
+            mv zmusic/lib/libzmusic.dylib libzmusic.1.dylib
+            cp *.pk3 uzdoom.app/Contents/MacOS
+
+            SIGN_ID="-"
+            SIGN_OPTS=""
+
+            if [[ -n "${{ secrets.MACOS_CERTIFICATE }}" ]]; then
+                echo "${{ secrets.MACOS_CERTIFICATE }}" | base64 --decode > certificate.p12
+                security create-keychain -p "" build.keychain
+                security default-keychain -s build.keychain
+                security unlock-keychain -p "" build.keychain
+                security import certificate.p12 -k build.keychain -P "${{ secrets.MACOS_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+                security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+
+                SIGN_ID="${{ secrets.MACOS_CERTIFICATE_ID }}"
+                SIGN_OPTS="--options=runtime"
+            fi
+
+            dylibbundler -ns -of -cd -b \
+              -x ./uzdoom.app/Contents/MacOS/uzdoom \
+              -d ./uzdoom.app/Contents/Libs \
+              -p @executable_path/../Libs/
+
+            xattr -cr uzdoom.app
+
+            find uzdoom.app/Contents/Libs -type f -name "*.dylib" -print0 | while IFS= read -r -d '' file; do
+                codesign --remove-signature "$file"
+                codesign --force $SIGN_OPTS -s "$SIGN_ID" "$file"
+            done
+
+            /usr/bin/codesign --force --deep $SIGN_OPTS -s "$SIGN_ID" uzdoom.app -v
+
             cp -r uzdoom.app package
 
             cd package
