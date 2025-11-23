@@ -2,11 +2,23 @@
 
 [![Build Status](https://github.com/drfrag666/gzdoom/workflows/Continuous%20Integration/badge.svg)](https://github.com/drfrag666/gzdoom/actions?query=workflow%3A%22Continuous+Integration%22)
 
-## LZDoom is a classic style GZDoom fork with lower system requirements
+## LZDoom is a legacy GZDoom fork with lower system requirements
 
-Copyright (c) 1998-2025 ZDoom + GZDoom + UZDoom teams, and contributors
+Copyright 1993-1997 id Software, Raven Software and contributors
 
-Doom Source (c) 1997 id Software, Raven Software, and contributors
+Copyright 1998-2016 Marisa Heit
+
+Copyright 2002-2016 Christoph Oelckers
+
+Copyright 2017-2025 GZDoom Maintainers and Contributors
+
+Copyright 2025 UZDoom Maintainers and Contributors
+
+GLES renderer Copyright (c) 2021-2025 Emile Belanger (emileb AKA beloko)
+
+Softpoly renderer Copyright (c) 2016-2025 Magnus Norddahl (dpJudas)
+
+Icon and logo Copyright (c) 2019 Daniel Gimmer (Tormentor667)
 
 Please see license files for individual contributor licenses
 
