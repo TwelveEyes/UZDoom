@@ -127,7 +127,7 @@ void PolyTriangleThreadData::PushStreamData(const StreamData &data, const PolyPu
 			int modulatedEnd = static_cast<int>(lightRange.Y) + start;
 			for (int i = modulatedStart; i < modulatedEnd; i += 4)
 			{
-				if (numPolyLights == maxPolyLights)
+				if (i < 0 || numPolyLights == maxPolyLights)
 					break;
 
 				auto &lightpos = lights[i];
