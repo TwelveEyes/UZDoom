@@ -12,46 +12,35 @@ jobs:
         config:
         - name: Visual Studio 2022
           os: windows-2022
+          extra_options: -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
           build_type: Release
 
         - name: Visual Studio 2022
           os: windows-2022
+          extra_options: -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
           build_type: RelWithDebInfo
 
         - name: macOS
           os: macos-14
-          deps_cmdline: brew install libvpx
+          extra_options: -DDYN_OPENAL=OFF
+          deps_cmdline: |
+            brew install  \
+              vulkan-volk \
+              molten-vk   \
+              libvpx      \
+              sdl2
           build_type: Release
 
         - name: macOS
           os: macos-14
-          extra_options: -G Xcode -DDYN_OPENAL=OFF
-          deps_cmdline: brew install libvpx
+          extra_options: -DDYN_OPENAL=OFF
+          deps_cmdline: |
+            brew install  \
+              vulkan-volk \
+              molten-vk   \
+              libvpx      \
+              sdl2
           build_type: RelWithDebInfo
-
-        # - name: Linux GCC 9
-        #   os: ubuntu-22.04
-        #   extra_options: -DCMAKE_C_COMPILER=gcc-9 -DCMAKE_CXX_COMPILER=g++-9
-        #   deps_cmdline: sudo apt-get update && sudo apt-get install libsdl2-dev libvpx-dev libwebp-dev waylandpp-dev libbz2-dev libomp-dev libopenal-dev
-        #   build_type: RelWithDebInfo
-        #
-        # - name: Linux GCC 12 # last known good
-        #   os: ubuntu-22.04
-        #   extra_options: -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12
-        #   deps_cmdline: sudo apt-get update && sudo apt-get install libsdl2-dev libvpx-dev libwebp-dev waylandpp-dev libbz2-dev libomp-dev libopenal-dev
-        #   build_type: MinSizeRel
-        #
-        # - name: Linux Clang 11
-        #   os: ubuntu-22.04
-        #   extra_options: -DCMAKE_C_COMPILER=clang-11 -DCMAKE_CXX_COMPILER=clang++-11
-        #   deps_cmdline: sudo apt-get update && sudo apt-get install clang-11 libsdl2-dev libvpx-dev libwebp-dev waylandpp-dev libbz2-dev libomp-dev libopenal-dev
-        #   build_type: Debug
-        #
-        # - name: Linux Clang 15 # last known good
-        #   os: ubuntu-22.04
-        #   extra_options: -DCMAKE_C_COMPILER=clang-15 -DCMAKE_CXX_COMPILER=clang++-15
-        #   deps_cmdline: sudo apt-get update && sudo apt-get install clang-15 libsdl2-dev libvpx-dev libwebp-dev waylandpp-dev libbz2-dev libomp-dev libopenal-dev
-        #   build_type: Release
 
         - name: Linux GCC
           os: ubuntu-latest
@@ -74,7 +63,15 @@ jobs:
           build_type: Release
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Setup
+      uses: actions/checkout@v4
+
+    - name: Setup
+      id: ghd
+      uses: proudust/gh-describe@v2
+
+    - name: Setup
+      uses: ilammy/msvc-dev-cmd@v1
 
     - name: Install Dependencies
       shell: bash
@@ -94,21 +91,21 @@ jobs:
           tar -xf "${ZMUSIC_PACKAGE}"
         fi
 
-    - name: Git describe
-      id: ghd
-      uses: proudust/gh-describe@v2
-
     - name: Configure
       shell: bash
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.build_type }} -DCMAKE_PREFIX_PATH=`pwd`/build/zmusic -DPK3_QUIET_ZIPDIR=ON ${{ matrix.config.extra_options }} .
+        cmake -B build -S . \
+          -DCMAKE_BUILD_TYPE=${{ matrix.config.build_type }} \
+          -DCMAKE_PREFIX_PATH=`pwd`/build/zmusic \
+          -DPK3_QUIET_ZIPDIR=ON ${{ matrix.config.extra_options }} \
+          -G Ninja
 
     - name: Build
       shell: bash
       run: |
         export GIT_DESCRIBE="${{ steps.ghd.outputs.describe }}"
         export MAKEFLAGS=--keep-going
-        cmake --build build --config ${{ matrix.config.build_type }} --parallel 3
+        cmake --build build --config ${{ matrix.config.build_type }}
 
     - name: Create Package
       shell: bash
@@ -144,7 +141,10 @@ jobs:
             mkdir package/fm_banks
             cp ../fm_banks/GENMIDI.GS.wopl ../fm_banks/gs-by-papiezak-and-sneakernets.wopn package/fm_banks
 
-            cp ${{ matrix.config.build_type }}/uzdoom.* ${{ matrix.config.build_type }}/*.pk3 package
+            if [[ -d "${{ matrix.config.build_type }}" ]]; then
+              mv ${{ matrix.config.build_type }}/* .
+            fi
+            cp uzdoom.* *.pk3 package
 
             cd package
             7z a -sdel -r "${packagename}.zip" *
@@ -152,7 +152,7 @@ jobs:
 
         elif [[ "${{ runner.os }}" == 'macOS' ]]; then
 
-            if [[ "${{ matrix.config.build_type }}" != 'Release' ]]; then
+            if [[ ! -d uzdoom.app ]] && [[ -d ${{ matrix.config.build_type }}/uzdoom.app ]]; then
                 mv ${{ matrix.config.build_type }}/uzdoom.app uzdoom.app
             fi
             mv package/licenses.zip uzdoom.app
