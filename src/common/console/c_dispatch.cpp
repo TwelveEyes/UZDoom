@@ -878,7 +878,7 @@ FExecList *C_ParseCmdLineParams(FExecList *exec)
 			}
 
 			cmdString = BuildString (cmdlen, Args->GetArgList (argstart));
-			if (!cmdString.IsEmpty())
+			if (cmdString.Len() > 1)
 			{
 				if (exec == NULL)
 				{
