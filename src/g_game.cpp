@@ -2081,7 +2081,7 @@ void G_DoLoadGame ()
 	arc("Engine", engine);
 	arc("Current Map", map);
 
-	if (engine.CompareNoCase(GAMESIG) != 0 && engine.CompareNoCase("GZDOOM") != 0)
+	if (engine.CompareNoCase(GAMESIG) != 0 && engine.CompareNoCase("GZDOOM") != 0 && engine.CompareNoCase("UZDOOM") != 0)
 	{
 		// Make a special case for the message printed for old savegames that don't
 		// have this information.
@@ -2096,18 +2096,18 @@ void G_DoLoadGame ()
 		return;
 	}
 
-	if ((engine.CompareNoCase(GAMESIG) == 0 && SaveVersion < MINSAVEVER) || (engine.CompareNoCase("GZDOOM") == 0 && SaveVersion < MINGZSAVEVER))
+	if (SaveVersion < MINSAVEVER || SaveVersion > SAVEVER)
 	{
 		FString message;
-		if (engine.CompareNoCase(GAMESIG) == 0 && SaveVersion < MINSAVEVER)
+		if (SaveVersion < MINSAVEVER)
 		{
 			message = GStrings.GetString("TXT_TOOOLDSG");
 			message.Substitute("%e", FStringf("%d", MINSAVEVER));
 		}
 		else
 		{
-			message = GStrings.GetString("TXT_TOOOLDSG");
-			message.Substitute("%e", FStringf("%d", MINGZSAVEVER));
+			message = GStrings.GetString("TXT_TOONEWSG");
+			message.Substitute("%e", FStringf("%d", SAVEVER));
 		}
 		message.Substitute("%d", FStringf("%d", SaveVersion));
 		LoadGameError(message.GetChars());

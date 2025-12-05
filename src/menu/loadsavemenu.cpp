@@ -104,14 +104,14 @@ void FSavegameManager::ReadSaveStrings()
 						FString creationtime = arc.GetString("Creation Time");
 
 
-						if ((engine.Compare(GAMESIG) != 0 && engine.CompareNoCase("GZDOOM") != 0) || savever > SAVEVER)
+						if ((engine.Compare(GAMESIG) != 0 && engine.Compare("GZDOOM") != 0 && engine.Compare("UZDOOM") != 0) || savever > SAVEVER)
 						{
 							// different engine or newer version:
 							// not our business. Leave it alone.
 							continue;
 						}
 
-						if ((engine.Compare(GAMESIG) == 0 && savever < MINSAVEVER) || (engine.Compare("GZDOOM") == 0 && savever < MINGZSAVEVER))
+						if (savever < MINSAVEVER)
 						{
 							// old, incompatible savegame. List as not usable.
 							oldVer = true;
