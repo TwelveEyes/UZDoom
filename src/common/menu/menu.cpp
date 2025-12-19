@@ -1052,6 +1052,7 @@ CCMD(switchui)
 	if (ui_classic) ui_classic = false;
 	else ui_classic = true;
 	M_ClearMenus();
+	Printf("Switching the UI requires a restart\n");
 }
 
 
