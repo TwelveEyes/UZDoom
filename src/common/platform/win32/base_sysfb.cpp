@@ -60,6 +60,19 @@ extern "C" {
 EXTERN_CVAR(Int, vid_defwidth)
 EXTERN_CVAR(Int, vid_defheight)
 
+CUSTOM_CVAR(Bool, vid_fsdwmhack, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
+{
+	setmodeneeded = true;
+}
+CUSTOM_CVAR(Int, vid_fsdwmhackalpha, 255, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+{
+	if (self < 0)
+		self = 0;
+	else if (self > 255)
+		self = 255;
+}
+
+
 //==========================================================================
 //
 // Windows framebuffer
@@ -306,8 +319,17 @@ void SystemBaseFrameBuffer::PositionWindow(bool fullscreen, bool initialcall)
 	style = WS_VISIBLE | WS_CLIPSIBLINGS;
 	exStyle = 0;
 
+	bool fsdwmhack = vid_fsdwmhack;
 	if (fullscreen)
-		style |= WS_POPUP;
+	{
+		if (!fsdwmhack)
+			style |= WS_POPUP;
+		else
+		{
+			style = WS_VISIBLE | WS_OVERLAPPED;
+			exStyle = WS_EX_LAYERED;
+		}
+	}
 	else
 	{
 		style |= WS_OVERLAPPEDWINDOW;
@@ -319,10 +341,18 @@ void SystemBaseFrameBuffer::PositionWindow(bool fullscreen, bool initialcall)
 
 	if (fullscreen)
 	{
-		SetWindowPos(mainwindow.GetHandle(), 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-		MoveWindow(mainwindow.GetHandle(), monRect.left, monRect.top, monRect.right-monRect.left, monRect.bottom-monRect.top, FALSE);
-
-		// And now, seriously, it IS in the right place. Promise.
+		if (!fsdwmhack)
+		{
+			SetWindowPos(mainwindow.GetHandle(), 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+			MoveWindow(mainwindow.GetHandle(), monRect.left, monRect.top, monRect.right-monRect.left, monRect.bottom-monRect.top, FALSE);
+			// And now, seriously, it IS in the right place. Promise.
+		}
+		else
+		{
+			SetWindowPos(mainwindow.GetHandle(), HWND_TOP, 0, 0, int(monRect.right - monRect.left), int(monRect.bottom - monRect.top), 0);
+			BYTE opacity = vid_fsdwmhackalpha;
+			SetLayeredWindowAttributes(mainwindow.GetHandle(), 0, opacity, LWA_ALPHA);
+		}
 	}
 	else
 	{
