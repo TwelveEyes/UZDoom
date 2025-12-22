@@ -36,8 +36,6 @@ struct ModelAnim
 	double switchOffset = 0; // when the animation was changed -- where to interpolate the switch from
 };
 
-static_assert(sizeof(ModelAnim) == sizeof(double) * 6);
-
 using ModelAnimFrame = std::variant<std::nullptr_t, ModelAnimFrameInterp, ModelAnimFramePrecalculatedIQM>;
 
 double getCurrentFrame(const ModelAnim &anim, double tic, bool *looped);
