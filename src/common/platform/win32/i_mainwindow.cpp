@@ -714,8 +714,16 @@ LRESULT MainWindow::OnCommand(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LRESULT MainWindow::OnClose(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-	PostQuitMessage(0);
-	return DefWindowProc(hWnd, msg, wParam, lParam);
+	if (NetStartPane != NULL)
+	{
+		PostMessage(hWnd, WM_COMMAND, 1337, 1337);
+		return 0;
+	}
+	else
+	{
+		PostQuitMessage(0);
+		return DefWindowProc(hWnd, msg, wParam, lParam);
+	}
 }
 
 LRESULT MainWindow::OnDestroy(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
