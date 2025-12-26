@@ -92,6 +92,11 @@ const char *GetVersionString();
 
 // This is so that derivates can use the same savegame versions without worrying about engine compatibility
 #define GAMESIG "LZDOOM"
+
+// list of compatible ports, ex.:
+// #define ALLOWLOADIN "PORT1", "PORT2", "PORT3"
+#define ALLOWLOADIN "UZDOOM"
+
 #define BASEWAD "lzdoom.pk3"
 // Set OPTIONALWAD to "" (null) to disable searching for it
 #define OPTIONALWAD "game_support.pk3"

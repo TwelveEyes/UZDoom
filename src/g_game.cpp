@@ -2460,6 +2460,17 @@ void G_DoSaveGame (bool okForQuicksave, bool forceQuicksave, FString filename, c
 		.AddString("Title", description)
 		.AddString("Current Map", primaryLevel->MapName.GetChars());
 
+	TArray<const char *> allowLoadIn {ALLOWLOADIN};
+
+	if(allowLoadIn.Size() > 0)
+	{
+		savegameinfo.BeginArray("AllowLoadIn");
+		for(const char *port : allowLoadIn)
+		{
+			savegameinfo.AddString(nullptr, port);
+		}
+		savegameinfo.EndArray();
+	}
 
 	PutSaveWads (savegameinfo);
 	PutSaveComment (savegameinfo);
