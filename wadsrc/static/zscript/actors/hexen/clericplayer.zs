@@ -18,7 +18,7 @@ class ClericPlayer : PlayerPawn
 		Player.JumpZ 9;
 		Player.Viewheight 48;
 		Player.SpawnClass "Cleric";
-		Player.DisplayName "Cleric";
+		Player.DisplayName "$MNU_CLERIC";
 		Player.SoundClass "cleric";
 		Player.ScoreIcon "CLERFACE";
 		Player.InvulnerabilityMode "Ghost";
