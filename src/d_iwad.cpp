@@ -827,12 +827,6 @@ int FIWadManager::IdentifyVersion (std::vector<std::string>&wadfiles, const char
 		iwadnum++;
 	}
 
-	fileSystem.SetIwadNum(iwadnum);
-	if (picks[pick].mRequiredPath.IsNotEmpty())
-	{
-		D_AddFile (wadfiles, picks[pick].mRequiredPath.GetChars(), true, -1, GameConfig);
-		iwadnum++;
-	}
 	auto info = mIWadInfos[picks[pick].mInfoIndex];
 
 	// Support WADs also need to be loaded before the IWAD as per the spec.
@@ -847,9 +841,18 @@ int FIWadManager::IdentifyVersion (std::vector<std::string>&wadfiles, const char
 			if(supportWAD.IsNotEmpty())
 			{
 				D_AddFile(wadfiles, supportWAD.GetChars(), true, -1, GameConfig);
+				iwadnum++;
 			}
 		}
 	}
+
+	fileSystem.SetIwadNum(iwadnum);
+	if (picks[pick].mRequiredPath.IsNotEmpty())
+	{
+		D_AddFile (wadfiles, picks[pick].mRequiredPath.GetChars(), true, -1, GameConfig);
+		iwadnum++;
+	}
+
 	D_AddFile (wadfiles, picks[pick].mFullPath.GetChars(), true, -1, GameConfig);
 	fileSystem.SetMaxIwadNum(iwadnum);
 
