@@ -408,7 +408,9 @@ void AActor::Serialize(FSerializer &arc)
 		("premorphproperties", PremorphProperties)
 		("morphexitflash", MorphExitFlash)
 		("damagesource", damagesource)
-		A("decalgenerator", DecalGenerator);
+		A("decalgenerator", DecalGenerator)
+		A("minrespawntics", MinRespawnTics)
+		A("respawndice", RespawnDice);
 
 
 		SerializeTerrain(arc, "floorterrain", floorterrain, &def->floorterrain);
@@ -4497,6 +4499,12 @@ void AActor::Tick ()
 	if (tics == -1 || state->GetCanRaise())
 	{
 		int respawn_monsters = G_SkillProperty(SKILLP_Respawn);
+
+		if (MinRespawnTics > 0)
+			respawn_monsters = MinRespawnTics;
+		else if (MinRespawnTics < 0)
+			respawn_monsters = -MinRespawnTics * TICRATE;
+
 		// check for nightmare respawn
 		if (!(flags5 & MF5_ALWAYSRESPAWN))
 		{
@@ -4516,7 +4524,7 @@ void AActor::Tick ()
 		if (Level->time & 31)
 			return;
 
-		if (pr_nightmarerespawn() > 4)
+		if (pr_nightmarerespawn() > RespawnDice)
 			return;
 
 		P_NightmareRespawn (this);
