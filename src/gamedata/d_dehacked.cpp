@@ -3362,7 +3362,7 @@ static bool DoDehPatch(int flags)
 
 	if (StateMap.Size() == 0 && !LoadDehSupp ()) // only load this once.
 	{
-		Printf ("Could not load DEH support data\n");
+		Printf (TEXTCOLOR_ORANGE "Could not load DEH support data\n");
 		UnloadDehSupp ();
 		PatchName = "";
 		delete[] PatchFile;
