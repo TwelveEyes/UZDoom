@@ -244,8 +244,8 @@ enum : unsigned int
 	COMPATF2_VOODOO_ZOMBIES = 1 << 15,	// [RL0] allow playerinfo, playerpawn, and voodoo health to all be different, and skip killing the player's mobj if a voodoo doll dies to allow voodoo zombies
 	COMPATF2_FDTELEPORT		= 1 << 16,	// Emulate Final Doom's teleporter z glitch.
 	COMPATF2_NOACSARGCHECK	= 1 << 17,	// Disable arg count checking for ACS
-	COMPATF2_OLD_RANDOM_GENERATOR = 1 << 18,	// [BB] Use Doom's random table instead of ZDoom's random number generator.
-
+	COMPATF2_OLD_RANDOM_GENERATOR = 1 << 18,	// [ED850] Use Doom's random table instead of ZDoom's random number generator.
+	COMPATF2_EMULATEMIKOPORTALS = 1 << 19, // Emulate Mikoportals Z Underflow
 };
 
 // Emulate old bugs for select maps. These are not exposed by a cvar

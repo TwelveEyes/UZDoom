@@ -175,6 +175,8 @@ static FCompatOption Options[] =
 	{ "voodoozombies",			COMPATF2_VOODOO_ZOMBIES, SLOT_COMPAT2 },
 	{ "fdteleport",				COMPATF2_FDTELEPORT, SLOT_COMPAT2 },
 	{ "noacsargcheck",			COMPATF2_NOACSARGCHECK, SLOT_COMPAT2 },
+	{ "emulatemikoportals",		COMPATF2_EMULATEMIKOPORTALS, SLOT_COMPAT2 },
+
 	{ NULL, 0, 0 }
 };
 
