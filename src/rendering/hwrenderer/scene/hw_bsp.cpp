@@ -364,10 +364,10 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 		clipper.SafeAddClipRange(startAngle, endAngle);
 	}
 
-	// [XA] NOTE: this used to be a check for !seg->backsector, but
-	// MapLoader::UpdateSidedefFlags now automagically applies the
-	// WALLF_BLOCKRENDERING flag to any sidedefs belonging to a 1s
-	// line, allowing these two checks to be collapsed into one.
+	// [XA] NOTE: ideally it'd be nice to collapse these checks into one,
+	// but it's possible to add & remove WALLF_BLOCKRENDERING via zscript
+	// so auto-setting it on 1s lines may result in a crash if someone
+	// later tries to remove the flag from a line.
 	if (!seg->backsector || (seg->sidedef->Flags & WALLF_BLOCKRENDERING))
 	{
 		if(!doOob)
