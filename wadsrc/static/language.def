@@ -123,6 +123,7 @@ GMPLYMNU_DOUBLESPAWN			= "Spawn double the monsters";
 GMPLYMNU_MULTIPLAYERTHINGS		= "Spawn multi. things";
 GGLOADED						= "game loaded.";
 CMPTMNU_OLDRANDOM				= "Use original Doom pseudo-RNG";
+CMPTMNU_EMULATEMIKOPORTALS		= "Emulate Mikoportals";
 OPTVAL_LOWEST12					= "Lowest Possible Scale (1.2)";
 GLPREFMNU_MAPLIGHTMODE			= "Test old lighting modes";
 OPTVAL_STANDARD					= "Standard";
