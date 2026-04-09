@@ -294,7 +294,7 @@ class ListMenuItemPlayerDisplay : ListMenuItem
 			
 				if (sprite.IsValid())
 				{
-					let trans = mTranslate? Translation.MakeID(TRANSLATION_Players, MAXPLAYERS) : 0;
+					let trans = (!playdef.bDONTTRANSLATE && mTranslate) ? Translation.MakeID(TRANSLATION_Players, MAXPLAYERS) : 0;
 					let tscale = TexMan.GetScaledSize(sprite);
 					Scale.X *= sx * tscale.X;
 					Scale.Y *= sy * tscale.Y;
@@ -358,7 +358,7 @@ class PlayerMenuPlayerDisplay : ListMenuItemPlayerDisplay
 		
 			if (sprite.IsValid())
 			{
-				let trans = mTranslate? Translation.MakeID(TRANSLATION_Players, MAXPLAYERS) : 0;
+				let trans = (!playdef.bDONTTRANSLATE && mTranslate) ? Translation.MakeID(TRANSLATION_Players, MAXPLAYERS) : 0;
 				let tscale = TexMan.GetScaledSize(sprite);
 				Scale.X *= CleanXfac_1 * tscale.X * (ui_classic? 1 : 2);
 				Scale.Y *= CleanYfac_1 * tscale.Y * (ui_classic? 1 : 2);
