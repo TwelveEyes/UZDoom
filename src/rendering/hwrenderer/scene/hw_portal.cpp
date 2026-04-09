@@ -37,6 +37,7 @@
 #include "hw_clock.h"
 #include "hw_lighting.h"
 #include "texturemanager.h"
+#include "hw_viewpointbuffer.h"
 
 EXTERN_CVAR(Int, r_mirror_recursions)
 EXTERN_CVAR(Bool, gl_portals)
@@ -262,6 +263,12 @@ void HWPortal::SetupStencil(HWDrawInfo *di, FRenderState &state, bool usestencil
 	
 	if (usestencil)
 	{
+		if (GetMirrorSide() != 0) // (strcmp(GetName(), "Planemirror ceiling") == 0) || (strcmp(GetName(), "Planemirror floor") == 0))
+		{
+			di->VPUniforms.mViewMatrix.translate(0.0, -zshift * GetMirrorSide(), 0.0);
+			screen->mViewpoints->SetViewpoint(state, &di->VPUniforms);
+		}
+
 		// Create stencil
 		state.SetStencil(0, SOP_Increment);	// create stencil, increment stencil of valid pixels
 		state.SetColorMask(false);
@@ -306,6 +313,11 @@ void HWPortal::SetupStencil(HWDrawInfo *di, FRenderState &state, bool usestencil
 		}
 		screen->stencilValue++;
 		
+		if (GetMirrorSide() != 0) // (strcmp(GetName(), "Planemirror ceiling") == 0) || (strcmp(GetName(), "Planemirror floor") == 0))
+		{
+			di->VPUniforms.mViewMatrix.translate(0.0, zshift * GetMirrorSide(), 0.0);
+			screen->mViewpoints->SetViewpoint(state, &di->VPUniforms);
+		}
 		
 	}
 	else
@@ -340,6 +352,12 @@ void HWPortal::RemoveStencil(HWDrawInfo *di, FRenderState &state, bool usestenci
 	if (usestencil)
 	{
 		
+		if (GetMirrorSide() != 0) // (strcmp(GetName(), "Planemirror ceiling") == 0) || (strcmp(GetName(), "Planemirror floor") == 0))
+		{
+			di->VPUniforms.mViewMatrix.translate(0.0, -zshift * GetMirrorSide(), 0.0);
+			screen->mViewpoints->SetViewpoint(state, &di->VPUniforms);
+		}
+
 		state.SetColorMask(false);						// no graphics
 		state.SetEffect(EFF_NONE);
 		state.ResetColor();
@@ -372,6 +390,11 @@ void HWPortal::RemoveStencil(HWDrawInfo *di, FRenderState &state, bool usestenci
 		
 		// restore old stencil op.
 		state.SetStencil(0, SOP_Keep);
+		if (GetMirrorSide() != 0) // (strcmp(GetName(), "Planemirror ceiling") == 0) || (strcmp(GetName(), "Planemirror floor") == 0))
+		{
+			di->VPUniforms.mViewMatrix.translate(0.0, zshift * GetMirrorSide(), 0.0);
+			screen->mViewpoints->SetViewpoint(state, &di->VPUniforms);
+		}
 	}
 	else
 	{
@@ -932,6 +955,28 @@ void HWPlaneMirrorPortal::DrawPortalStencil(FRenderState &state, int pass)
 
 			state.SetNormal(flat.plane.plane.Normal().X, flat.plane.plane.Normal().Z, flat.plane.plane.Normal().Y);
 			state.DrawIndexed(DT_Triangles, flat.iboindex + flat.section->vertexindex, flat.section->vertexcount, i == 0);
+		}
+		// Cannot combine these two for loops because of the DrawIndexed() vs Draw() calls interleaving
+		for (unsigned int i = 0; i < lines.Size(); i++)
+		{
+			flat.section = lines[i].sub->section;
+			flat.iboindex = lines[i].sub->sector->iboindex[isceiling ? sector_t::ceiling : sector_t::floor];
+			flat.plane.GetFromSector(lines[i].sub->sector, isceiling ? sector_t::ceiling : sector_t::floor);
+			screen->mVertexData->Map();
+			auto verts = screen->mVertexData->AllocVertices(5);
+			auto ptr = verts.first;
+			ptr[0].Set(lines[i].vertexes[0]->p.X, flat.plane.plane.ZatPoint(lines[i].vertexes[0]->p),
+					   lines[i].vertexes[0]->p.Y, 0, 0);
+			ptr[1].Set(lines[i].vertexes[1]->p.X, flat.plane.plane.ZatPoint(lines[i].vertexes[1]->p),
+					   lines[i].vertexes[1]->p.Y, 0, 0);
+			ptr[2].Set(lines[i].vertexes[1]->p.X, flat.plane.plane.ZatPoint(lines[i].vertexes[1]->p) + zshift*GetMirrorSide(),
+					   lines[i].vertexes[1]->p.Y, 0, 0);
+			ptr[3].Set(lines[i].vertexes[0]->p.X, flat.plane.plane.ZatPoint(lines[i].vertexes[0]->p) + zshift*GetMirrorSide(),
+					   lines[i].vertexes[0]->p.Y, 0, 0);
+			ptr[4].Set(lines[i].vertexes[0]->p.X, flat.plane.plane.ZatPoint(lines[i].vertexes[0]->p),
+					   lines[i].vertexes[0]->p.Y, 0, 0);
+			screen->mVertexData->Unmap();
+			state.Draw(DT_TriangleStrip, verts.second, 5, screen->IsVulkan());
 		}
 	}
 	else
