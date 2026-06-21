@@ -32,3 +32,4 @@ N/A                                   comp_respawn                              
 N/A                                   comp_soul                                                 Buggy lost soul bouncing
 COMPATF_CROSSDROPOFF                  comp_ledgeblock                         10                       Monsters are blocked by ledges (except when scrolling)
 ---todo                               comp_friendlyspawn                      1                          Spawned things inherit the friend attribute from the source
+COMPATF2_RESERVEDLINEFLAG             comp_reservedlineflag                   0                 Clear non-vanilla linedef flag bits, if ML_RESERVED is present, certain old editors set them all to ON.
