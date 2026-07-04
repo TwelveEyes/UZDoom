@@ -2963,6 +2963,7 @@ ExpEmit FxAssign::Emit(VMFunctionBuilder *build)
 		emitters.AddParameter(build, Base);
 		emitters.AddParameter(build, Right);
 		emitters.AddParameterIntConst(IsBitWrite - 64);
+		emitters.AddReturn(REGT_INT);
 		return emitters.EmitCall(build);
 	}
 }
