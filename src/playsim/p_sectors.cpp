@@ -918,8 +918,6 @@ void GetSpecial(sector_t *sector, secspecial_t *spec)
 	spec->damageinterval = sector->damageinterval;
 	spec->leakydamage = sector->leakydamage;
 	spec->Flags = sector->Flags & SECF_SPECIALFLAGS;
-	if (compatflags2 & COMPATF2_TRANSFERSECRETS && sector->isSecret())
-		sector->Flags |= SECF_SECRET;
 }
 
 //=====================================================================================
@@ -935,8 +933,6 @@ void SetSpecial(sector_t *sector, const secspecial_t *spec)
 	sector->damageinterval = spec->damageinterval;
 	sector->leakydamage = spec->leakydamage;
 	sector->Flags = (sector->Flags & ~SECF_SPECIALFLAGS) | (spec->Flags & SECF_SPECIALFLAGS);
-	if (compatflags2 & COMPATF2_TRANSFERSECRETS && (sector->isSecret() || spec->Flags & SECF_SECRET))
-		sector->Flags |= SECF_SECRET;
 }
 
 //=====================================================================================
@@ -952,7 +948,8 @@ void TransferSpecial(sector_t *sector, sector_t *model)
 	sector->damageinterval = model->damageinterval;
 	sector->leakydamage = model->leakydamage;
 	sector->Flags = (sector->Flags&~SECF_SPECIALFLAGS) | (model->Flags & SECF_SPECIALFLAGS);
-	if (compatflags2 & COMPATF2_TRANSFERSECRETS && (sector->isSecret() || model->isSecret()))
+	// According to https://forum.zdoom.org/viewtopic.php?style=21&t=80227 this probably should be only for Doom
+	if ((compatflags2 & COMPATF2_TRANSFERSECRET) && gameinfo.gametype & GAME_DoomChex && model->isSecret())
 		sector->Flags |= SECF_SECRET;
 }
 

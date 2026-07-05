@@ -247,7 +247,7 @@ enum : unsigned int
 	COMPATF2_OLD_RANDOM_GENERATOR = 1 << 18,	// [ED850] Use Doom's random table instead of ZDoom's random number generator.
 	COMPATF2_EMULATEMIKOPORTALS = 1 << 19, // Emulate Mikoportals Z Underflow
 	COMPATF2_RESERVEDLINEFLAG	= 1 << 20, // disable certain linedef flag features that may clash with certain maps
-	COMPATF2_TRANSFERSECRETS	= 1 << 21, // Allow Boom's Transfer Specials to transfer Secrets
+	COMPATF2_TRANSFERSECRET	= 1 << 21, // Allow Boom's Transfer Specials to transfer Secrets
 };
 
 // Emulate old bugs for select maps. These are not exposed by a cvar
