@@ -124,6 +124,7 @@ GMPLYMNU_MULTIPLAYERTHINGS		= "Spawn multi. things";
 GGLOADED						= "game loaded.";
 CMPTMNU_OLDRANDOM				= "Use original Doom pseudo-RNG";
 CMPTMNU_EMULATEMIKOPORTALS		= "Emulate Mikoportals";
+CMPTMNU_TRANSFERSECRET			= "Transfer Secrets";
 OPTVAL_LOWEST12					= "Lowest Possible Scale (1.2)";
 GLPREFMNU_MAPLIGHTMODE			= "Test old lighting modes";
 OPTVAL_STANDARD					= "Standard";
