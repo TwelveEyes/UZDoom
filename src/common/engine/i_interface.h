@@ -86,8 +86,6 @@ struct FStartupSelectionInfo
 
 	// Launcher settings
 	bool notifyNewRelease = true;
-	FName prideColors = {};
-	float prideMix = 0;
 	unsigned LauncherWidth = 0;
 	unsigned LauncherHeight = 0;
 

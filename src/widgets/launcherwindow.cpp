@@ -65,7 +65,7 @@ LauncherWindow::LauncherWindow(FStartupSelectionInfo& info, struct WindowParams 
 	SetWindowTitle(GAMENAME);
 	this->SetStyleColor("background-color", Theme::getHeader(COLOR_BACKGROUND));
 
-	Banner = new LauncherBanner(this, info.prideColors, info.prideMix);
+	Banner = new LauncherBanner(this);
 	Pages = new TabWidget(this);
 	Pages->SetStyleColor("background-color", Theme::getMain(COLOR_BACKGROUND));
 	Buttonbar = new LauncherButtonbar(this);
