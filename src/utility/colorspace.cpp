@@ -35,25 +35,6 @@ Color rgb(ColorP r, ColorP g, ColorP b)
 	return { SRGB, r, g, b };
 }
 
-Color rgb(uint32_t rgb24)
-{
-	ColorP r = ((rgb24>>16)&0xff)/255.0f;
-	ColorP g = ((rgb24>>8 )&0xff)/255.0f;
-	ColorP b = ((rgb24    )&0xff)/255.0f;
-	return rgb(r, g, b);
-}
-
-uint32_t rgb24(const Color& c)
-{
-	Color C {c};
-	memcpy(&C, &c, sizeof(c));
-	_2rgb(C);
-	uint8_t r = static_cast<uint8_t>(C.rgb.r*255);
-	uint8_t g = static_cast<uint8_t>(C.rgb.g*255);
-	uint8_t b = static_cast<uint8_t>(C.rgb.b*255);
-	return r<<16 | g<<8 | b;
-};
-
 Color rgb(const Color& c)
 {
 	Color C {c};
