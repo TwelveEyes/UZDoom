@@ -30,14 +30,12 @@ class TextLabel;
 class LauncherBanner : public Widget
 {
 public:
-	LauncherBanner(Widget* parent, FName colors, float mix);
+	LauncherBanner(Widget* parent);
 
 	double GetPreferredHeight() override;
 
 private:
 	void OnGeometryChanged() override;
-
-	std::vector<std::tuple<std::unique_ptr<Widget>,std::unique_ptr<Widget>>> stripes;
 
 	ImageBox* Logo = nullptr;
 };
