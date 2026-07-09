@@ -59,7 +59,7 @@ struct FThinkerList
 	DThinker *GetTail() const;
 	bool IsEmpty() const;
 	void DestroyThinkers();
-	bool DoDestroyThinkers();
+	bool DoDestroyThinkers(bool& destroyed);
 	int TickThinkers(FThinkerList *dest);	// Returns: # of thinkers ticked
 	int ProfileThinkers(FThinkerList *dest);
 	void SaveList(FSerializer &arc);
