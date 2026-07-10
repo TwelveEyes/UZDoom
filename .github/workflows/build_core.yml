@@ -54,7 +54,7 @@ jobs:
         if [[ "$REPO" == UZDoom/UZDoom ]]; then
           if [[ "$REF" == refs/heads/trunk ]]; then
             environment="production"
-          elif [[ "$REF" =~ refs/heads/\d+\.\d+.* ]]; then
+          elif [[ "$REF" =~ ^refs/heads/[0-9]+\.[0-9]+$ ]]; then
             environment="production"
             stream="versioned"
           fi
