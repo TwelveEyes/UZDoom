@@ -1491,7 +1491,7 @@ std::optional<update_info_t> UpdateButtonBar::ParseRelease(T &&doc, bool &ok, bo
 
 	downloadName = relinfo["platforms"][RELEASE_JSON_PLATFORM_NAME].GetString();
 
-	DEBUG_LOG("%s", downloadName);
+	DEBUG_LOG("%s", downloadName.c_str());
 
 	for(int i = 0; i < (int)arr.Size(); i++)
 	{
@@ -1510,7 +1510,7 @@ std::optional<update_info_t> UpdateButtonBar::ParseRelease(T &&doc, bool &ok, bo
 	if(!download_link_found) FAIL_WITH_ERROR;
 	if(!HAS_MEMBER(doc, "body", String)) FAIL_WITH_ERROR;
 
-	DEBUG_LOG("%s", downloadUrl);
+	DEBUG_LOG("%s", downloadUrl.c_str());
 
 	ok = true;
 	return update_info_t{ver, false, SplitNewLines(doc["body"].GetString(), doc["body"].GetStringLength()), downloadUrl};
