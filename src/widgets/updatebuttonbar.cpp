@@ -894,6 +894,8 @@ protected:
 	{
 		if(!curl) return false;
 
+		DEBUG_LOG("fetching %s", url.c_str());
+
 		curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 		curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, acceptEncoding.c_str());
 
