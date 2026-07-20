@@ -35,7 +35,7 @@
 
 //==========================================================================
 //
-// <Tag>-<Distance>-g<commit>
+// <Tag>-<Distance>+<commit>
 //
 //==========================================================================
 
@@ -259,10 +259,7 @@ std::strong_ordering VersionInfo::operator <=> (const VersionInfo& o) const
 	}
 	if (auto cmp = (start_a <= len_a) <=> (start_b <= len_b); cmp != 0) return cmp;
 
-	// not actually part of semvers
-	return (distance >= 0 && o.distance >= 0)
-		? distance <=> o.distance
-		: o.distance <=> distance; // if one is negative, it has been edited. The edited one is "newer"
+	return std::strong_ordering::equivalent;
 }
 
 void VersionInfo::operator=(const char *string)
@@ -279,7 +276,7 @@ VersionInfo::operator FString() const
 	{
 		bool modified = dist < 0;
 		if (modified) dist = -(dist+1);
-		tmp.AppendFormat("+%d-%s%s", dist, commit, modified? "-m": "");
+		tmp.AppendFormat("-%d+%s%s", dist, commit, modified? "-m": "");
 	}
 	return tmp;
 }
