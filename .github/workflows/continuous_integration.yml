@@ -37,6 +37,7 @@ jobs:
           echo "mode=$mode" | tee -a "$GITHUB_OUTPUT"
           echo "branch=$branch" | tee -a "$GITHUB_OUTPUT"
 
+
       - name: Checkout
         if: ${{ github.ref_type == 'tag' }}
         uses: actions/checkout@v6
