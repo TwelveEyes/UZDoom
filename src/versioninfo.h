@@ -17,6 +17,8 @@
 
 #include "basics.h"
 
+#include <string>
+
 class FString;
 
 struct VersionInfo
