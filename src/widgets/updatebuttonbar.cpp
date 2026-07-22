@@ -1342,8 +1342,6 @@ public:
 #error "Updater not implemented for this platform"
 #endif
 
-#define UPDATER_STREAM "x-preview"
-
 template<typename T>
 std::optional<update_info_t> UpdateButtonBar::ParseRelease(T &&doc, bool &ok, bool &silentfail)
 {
@@ -1388,15 +1386,88 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 {
 	DEBUG_LOG("starting");
 
+	bool primary;
+	std::string stream = "latest";
+	auto TryGetData = [this, &primary, &stream]()
+	{
+		DEBUG_LOG("Trying '%s'", stream.c_str());
+		auto doc = (JsonDownloader {}).Perform(this, std::format(UPDATER_URL, stream, "_release.json"));
+		primary = doc.has_value();
+		if (!primary) doc = (JsonDownloader {}).Perform(this, std::format(UPDATER_URL_BACKUP, stream, "_release.json"));
+		return doc;
+	};
+	auto ToNum = [](unsigned &v, const std::string &str)
+	{
+		auto [p, e] = std::from_chars(str.data(), str.data()+str.size(), v);
+		return (e == std::errc{} && p == str.data()+str.size() && v >= 0);
+	};
+	auto GetReleaseData = [this, &TryGetData, &ToNum, &stream]
+	{
+		std::optional<rapidjson::Document> doc;
+		std::string current = GetVersionString();
+		std::string tag = GetGitTag();
+
+		if (!current.starts_with(tag))
+		{
+			stream = tag;
+			DEBUG_LOG("Preview build");
+			return TryGetData();
+		}
+
+		// try to get next prerelease tag by incrementing numeric prerelease parts
+		VersionInfo temp = GetCurrentVersion();
+		auto pre = std::string(temp.prerelease);
+		temp.prerelease[0] = temp.build[0] = '\0';
+		if (!pre.empty())
+		{
+			unsigned v;
+			auto base = std::string(temp);
+			std::vector<std::string> parts;
+			for (auto part : pre | std::views::split('.'))
+			{
+				parts.emplace_back(part.begin(), part.end());
+			}
+			if (!ToNum(v, parts.back()))
+			{ // final part was not numeric so we'll add it just to test
+				parts.emplace_back("0");
+			}
+			std::vector<std::string> candidates;
+			while (!parts.empty())
+			{
+				std::string end = parts.back();
+				parts.pop_back();
+				std::string release = base;
+				release += "-";
+				for (auto i = 0; i < parts.size(); i++)
+				{
+					release += parts[i] + ".";
+				}
+				if (ToNum(v, end))
+				{
+					release += std::to_string(v+1);
+					candidates.emplace_back(release);
+				}
+			}
+			candidates.emplace_back(base);
+			for (int i = candidates.size()-1; i >= 0; i--)
+			{
+				stream = candidates[i];
+				if (doc = TryGetData(); doc.has_value()) return doc;
+			}
+		}
+
+		return doc;
+	};
+
 	if(!InitCurl())
 	{
 		DEBUG_LOG("no curl");
 	}
 	else
 	{
-		auto doc = (JsonDownloader {}).Perform(this, std::format(UPDATER_URL, UPDATER_STREAM, "_release.json"));
-		bool primary = doc.has_value();
-		if (!primary) doc = (JsonDownloader {}).Perform(this, std::format(UPDATER_URL_BACKUP, UPDATER_STREAM, "_release.json"));
+		auto doc = GetReleaseData();
+
+		DEBUG_LOG("Using '%s'", stream.c_str());
 
 		if(!doc.has_value())
 		{
@@ -1412,11 +1483,11 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 			{
 				if (primary)
 				{
-					out->download_url = std::format(UPDATER_URL, UPDATER_STREAM, out->download_url);
+					out->download_url = std::format(UPDATER_URL, stream, out->download_url);
 				}
 				else
 				{
-					out->download_url = std::format(UPDATER_URL_BACKUP, UPDATER_STREAM, out->download_url);
+					out->download_url = std::format(UPDATER_URL_BACKUP, stream, out->download_url);
 				}
 
 				return out;

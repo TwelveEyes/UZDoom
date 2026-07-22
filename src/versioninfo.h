@@ -70,6 +70,7 @@ struct VersionInfo
 
 	void operator=(const char* string);
 	explicit operator FString() const;
+	explicit operator std::string() const;
 };
 
 // Cannot be a constructor because Lemon would puke on it.

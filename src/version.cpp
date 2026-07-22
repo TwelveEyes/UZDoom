@@ -267,3 +267,9 @@ VersionInfo::operator FString() const
 	if (*build) tmp.AppendFormat("+%s", build);
 	return tmp;
 }
+
+VersionInfo::operator std::string() const
+{
+	FString tmp = FString(*this);
+	return tmp.GetChars();
+}
