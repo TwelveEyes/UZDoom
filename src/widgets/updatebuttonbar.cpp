@@ -1479,7 +1479,6 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 
 			std::optional<update_info_t> out = ParseRelease(*doc, ok, silentfail);
 
-
 			if(ok)
 			{
 				if (primary)
