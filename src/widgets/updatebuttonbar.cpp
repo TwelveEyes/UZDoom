@@ -1468,6 +1468,7 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 	if(!InitCurl())
 	{
 		DEBUG_LOG("no curl");
+		ok = false;
 	}
 	else
 	{
@@ -1477,7 +1478,10 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 
 		if(!doc.has_value())
 		{
-			DEBUG_LOG("empty response");
+			DEBUG_LOG("empty response"); // TODO: report network issues.
+			                             // For now, the most likely time this will happen is when we are up-to-date
+			ok = true;
+			return std::nullopt;
 		}
 		else
 		{
