@@ -1376,12 +1376,20 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 
 	bool primary;
 	std::string stream = "latest";
-	auto TryGetData = [this, &primary, &stream]()
+	auto URL = [&stream](bool primary, std::string asset)
+	{
+		return primary
+			? std::format(UPDATER_URL, stream, asset)
+			: (stream == "latest")
+				? std::format(UPDATER_URL_BACKUP, stream, "download", asset)
+				: std::format(UPDATER_URL_BACKUP, "download", stream, asset);
+	};
+	auto TryGetData = [this, &primary, &stream, &URL]()
 	{
 		DEBUG_LOG("Trying '%s'", stream.c_str());
-		auto doc = (JsonDownloader {}).Perform(this, std::format(UPDATER_URL, stream, "_release.json"));
+		auto doc = (JsonDownloader {}).Perform(this, URL(true, "_release.json"));
 		primary = doc.has_value();
-		if (!primary) doc = (JsonDownloader {}).Perform(this, std::format(UPDATER_URL_BACKUP, stream, "_release.json"));
+		if (!primary) doc = (JsonDownloader {}).Perform(this, URL(false, "_release.json"));
 		return doc;
 	};
 	auto ToNum = [](unsigned &v, const std::string &str)
@@ -1479,14 +1487,7 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 
 			if(ok)
 			{
-				if (primary)
-				{
-					out->download_url = std::format(UPDATER_URL, stream, out->download_url);
-				}
-				else
-				{
-					out->download_url = std::format(UPDATER_URL_BACKUP, stream, out->download_url);
-				}
+				out->download_url = URL(primary, out->download_url);
 
 				return out;
 			}
