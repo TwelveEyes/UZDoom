@@ -235,7 +235,6 @@ std::strong_ordering VersionInfo::operator <=> (const VersionInfo& o) const
 		sub_b = ext_b.substr(start_b, end_b-start_b);
 		num_a = Number(sub_a);
 		num_b = Number(sub_b);
-		DEBUG_LOG("%.*s %.*s %d %d", sub_a.size(), sub_a.data(), sub_b.size(), sub_b.data(), num_a, num_b);
 		if (num_a < 0 || num_b < 0)
 		{
 			if (auto cmp = (num_a < 0) <=> (num_b < 0); cmp != 0) return cmp;
