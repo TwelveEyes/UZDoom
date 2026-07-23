@@ -42,8 +42,6 @@
 #define ENG_MINOR 0
 #define ENG_REVISION 0
 
-#define CURRENT_UPDATE_CHANNEL UpdateChannel::PREVIEW
-
 // Version stored in the ini's [LastRun] section.
 // Bump it if you made some configuration change that you want to
 // be able to migrate in FGameConfigFile::DoGlobalSetup().

@@ -463,23 +463,11 @@ UpdateButtonBar::UpdateButtonBar(LauncherWindow *parent, SettingsPage* settings)
 	_settings = settings;
 }
 
-FString UpdateButtonBar::UpdateToString()
-{
-	FString str = FString(currentUpdate->version);
-
-	if (CURRENT_UPDATE_CHANNEL == UpdateChannel::TESTING)
-	{
-		str.AppendFormat(" (%s)", GStrings.GetString("TXT_EXPERIMENTAL"));
-	}
-
-	return str;
-}
-
 void UpdateButtonBar::UpdateLanguage()
 {
 	if(currentUpdate.has_value())
 	{
-		text = FStringf("%s: %s", GStrings.GetString("UPDATER_UPDATE_AVAILABLE"), UpdateToString());
+		text = FStringf("%s: %s", GStrings.GetString("UPDATER_UPDATE_AVAILABLE"), FString(currentUpdate->version));
 	}
 	else
 	{
@@ -647,7 +635,7 @@ void UpdateButtonBar::OpenUpdateMenu(bool isAutoUpdate)
 
 	std::vector<std::string> updateInfo;
 
-	updateInfo.push_back((GAMENAME + (" " + UpdateToString())).GetChars());
+	updateInfo.push_back((GAMENAME + (" " + FString(currentUpdate->version))).GetChars());
 
 	OpenPopup(this, isAutoUpdate ? "UPDATER_UPDATE_AVAILABLE" : "TXT_UPDATE", updateInfo, actions, 500.0/*, isAutoUpdate ? POPUPF_DISALLOW_CLOSE : 0*/);
 }
@@ -1617,7 +1605,7 @@ void UpdateButtonBar::CheckForUpdate(bool force)
 
 			if(currentUpdate.has_value())
 			{
-				auto current = GetCurrentVersionForUpdate(CURRENT_UPDATE_CHANNEL);
+				auto current = GetCurrentVersion();
 				bool should_update = updater_debug_always_update || (currentUpdate->version > current);
 
 				DEBUG_LOG(

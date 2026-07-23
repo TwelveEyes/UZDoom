@@ -83,6 +83,4 @@ constexpr VersionInfo MakeVersion(unsigned int ma, unsigned int mi, unsigned int
 
 VersionInfo GetCurrentVersion();
 
-VersionInfo GetCurrentVersionForUpdate(UpdateChannel channel);
-
 VersionInfo GetCurrentEngineVersion();
