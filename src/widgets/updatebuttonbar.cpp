@@ -1418,7 +1418,13 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 		VersionInfo temp = GetCurrentVersion();
 		auto pre = std::string(temp.prerelease);
 		temp.prerelease[0] = temp.build[0] = '\0';
-		if (!pre.empty())
+		if (pre.empty())
+		{
+			stream = "latest";
+			DEBUG_LOG("Stable build");
+			return TryGetData();
+		}
+		else
 		{
 			unsigned v;
 			auto base = std::string(temp);
