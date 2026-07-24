@@ -1451,6 +1451,7 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 				}
 			}
 			candidates.emplace_back(base);
+			candidates.emplace_back("latest");
 			for (int i = candidates.size()-1; i >= 0; i--)
 			{
 				stream = candidates[i];
