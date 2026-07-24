@@ -1403,6 +1403,7 @@ std::optional<update_info_t> UpdateButtonBar::GetUpdateInfo(bool &ok)
 		std::string current = GetVersionString();
 		std::string tag = GetGitTag();
 
+
 		if (!current.starts_with(tag))
 		{
 			stream = tag;
