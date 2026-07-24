@@ -8,7 +8,11 @@ if (empty($release) || str_contains($release, '/')) die();
 $asset = $_GET["f"];
 if (empty($asset) || str_contains($asset, '/')) die();
 
-$url = "https://github.com/".$repo."/releases/download/".$release."/".$asset;
+if ($release === "latest") {
+    $url = "https://github.com/".$repo."/releases/".$release."/download/".$asset;
+} else {
+    $url = "https://github.com/".$repo."/releases/download/".$release."/".$asset;
+}
 
 header("Location: " . $url, true, 302);
 
