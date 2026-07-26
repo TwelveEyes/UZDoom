@@ -36,6 +36,12 @@ T smoothstep(const T edge0, const T edge1, const T x)
 	return t * t * (3.0 - 2.0 * t);
 }
 
+// [Sherbet] TODO FIX SmoothStep Simpler formula?
+inline float smoothstepf(float edge0, float edge1, float x) {
+	auto t = clamp((x - edge0) / (edge1 - edge0), 0.f, 1.f);
+	return t * t * (3.f - 2.f * t);
+}
+
 LightProbe* FindLightProbe(FLevelLocals* level, float x, float y, float z)
 {
 	LightProbe* foundprobe = nullptr;
@@ -126,7 +132,6 @@ void HWDrawInfo::GetDynSpriteLight(AActor *self, float x, float y, float z, FSec
 			light=node->lightsource;
 			if (light->ShouldLightActor(self))
 			{
-				float dist;
 				FVector3 L;
 
 				// This is a performance critical section of code where we cannot afford to let the compiler decide whether to inline the function or not.
@@ -146,26 +151,34 @@ void HWDrawInfo::GetDynSpriteLight(AActor *self, float x, float y, float z, FSec
 					L = FVector3(x - (float)light->X(), y - (float)light->Y(), z - (float)light->Z());
 				}
 
-				dist = (float)L.LengthSquared();
+				float dist = L.LengthSquaredF();
 				radius = light->GetRadius();
+				radius *= radius;
 
-				if (dist < radius * radius)
+				if (dist < radius)
 				{
-					dist = sqrtf(dist);	// only calculate the square root if we really need it.
-
-					frac = 1.0f - (dist / radius);
+					float frac = 1.0f - (dist / radius);
 
 					if (light->IsSpot())
 					{
-						L *= -1.0f / dist;
-						DAngle negPitch = -light->Pitch;
-						DAngle Angle = light->Yaw;
-						double xyLen = negPitch.Cos();
-						double spotDirX = -Angle.Cos() * xyLen;
-						double spotDirY = -Angle.Sin() * xyLen;
-						double spotDirZ = -negPitch.Sin();
-						double cosDir = L.X * spotDirX + L.Y * spotDirY + L.Z * spotDirZ;
-						frac *= (float)smoothstep(light->pSpotOuterAngle->Cos(), light->pSpotInnerAngle->Cos(), cosDir);
+						L *= -1.0f / sqrtf(dist);	// only calculate the square root if we really need it.
+						
+						// direction
+						float negPitch = (float)-light->Pitch.Degrees();
+						float Angle = (float)light->Yaw.Degrees();
+						float xyLen = -float_fastcosdeg(negPitch);
+
+						// faster calculations
+						float spotDirX = float_fastcosdeg(Angle) * xyLen;
+						float spotDirY = float_fastsindeg(Angle) * xyLen;
+						float spotDirZ = -float_fastsindeg(negPitch);
+
+						float cosDir = L.X * spotDirX + L.Y * spotDirY + L.Z * spotDirZ;
+						frac *= (float)smoothstepf(
+							float_fastcosdeg((float)light->pSpotOuterAngle->Degrees()),
+							float_fastcosdeg((float)light->pSpotInnerAngle->Degrees()),
+							cosDir
+						);
 					}
 
 					if (frac > 0 && (!light->shadowmapped || (light->GetRadius() > 0 && screen->mShadowMap.ShadowTest(light->Pos, { x, y, z }))))
