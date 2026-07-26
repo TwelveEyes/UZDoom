@@ -1257,7 +1257,6 @@ set( GAME_SOURCES
 	common/thirdparty/math/sqrt.c
 	common/thirdparty/math/tan.c
 	common/thirdparty/math/tanh.c
-	common/thirdparty/math/fastsin.cpp
 
 	common/filesystem/source/filesystem.cpp
 	common/filesystem/source/ancientzip.cpp

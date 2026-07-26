@@ -124,7 +124,7 @@ using BITFIELD = uint32_t;
 #undef M_PI
 #endif
 
-constexpr double M_PI = 3.14159265358979323846;	// matches value in gcc v2 math.h
+constexpr double M_PI = 3.14159265358979323846264338327950288;
 
 using std::min;
 using std::max;

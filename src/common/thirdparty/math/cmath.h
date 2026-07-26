@@ -6,6 +6,11 @@
 #define USE_CUSTOM_MATH	// we want repreducably reliable results, even at the cost of performance
 #define USE_FAST_MATH	// use faster table-based sin and cos variants with limited precision (sufficient for Doom gameplay)
 
+#define CMATHFLOOR std::floor
+#define CMATHABS std::abs
+#define FMATHFLOOR floorf
+#define FMATHABS fabsf
+
 extern"C"
 {
 double c_asin(double);
@@ -27,67 +32,70 @@ double c_pow(double, double);
 }
 
 
-// This uses a sine table with linear interpolation
-// For in-game calculations this is precise enough
-// and this code is more than 10x faster than the
-// Cephes sin and cos function.
-
-struct FFastTrig
-{
-	static const int TBLPERIOD = 8192;
-	static const int BITSHIFT = 19;
-	static const int REMAINDER = (1 << BITSHIFT) - 1;
-	float sinetable[2049];
-
-	double sinq1(unsigned);
-	
-public:
-	FFastTrig();
-	double sin(unsigned);
-	double cos(unsigned);
-};
-
-extern FFastTrig fasttrig;
-
-#define DEG2BAM(f) ((unsigned)RoundHalfEven((f) * (0x40000000/90.)))
-#define RAD2BAM(f) ((unsigned)RoundHalfEven((f) * (0x80000000/3.14159265358979323846)))
-
-inline double fastcosbam(unsigned int v)
-{
-	return fasttrig.cos(v);
+// [Sherbet] very fast cos/sin implementation haha wtf
+// the old gzdoom/zdoom used a lookup table for it's cos/sin functions, which is slow (it involved divisions and a table that could miss cache)
+// i've found that using this instead of the lookup table is way faster (probably because it's inlined + it's just a few calculations) and MORE accurate
+// the biggest trick here is the compile-time division tp_pi which saves us a TON of trouble so this entire thing just ends up being a
+// few subtractions, additions, and multiplications, absolutely no division involved at all. the extra precision feed is optional as well
+// but left in due to game logic requiring it (without it theres a 6% err on some ranges, untolerable). the renderer probably doesn't though.
+inline double fastcos(double x) {
+	const double tp_pi = 1. / (2. * M_PI);
+	x *= tp_pi;
+	x -= double(.25) + CMATHFLOOR(x + double(.25));
+	x *= double(16.) * (CMATHABS(x) - double(.5));
+	x += double(.225) * x * (CMATHABS(x) - double(1.)); // extra precision feed
+	return x;
 }
 
-inline double fastsinbam(unsigned int v)
-{
-	return fasttrig.sin(v);
+inline double fastsin(double x) {
+	const double tp_pi = -1. / (2. * M_PI); // neg for sine
+	x *= tp_pi;
+	x += CMATHFLOOR(double(.5) - x); // change for usage with sine
+	x *= double(16.) * (CMATHABS(x) - double(.5));
+	x += double(.225) * x * (CMATHABS(x) - double(1.)); // extra precision feed
+	return x;
 }
 
-inline double fastcosdeg(double v)
-{
-	return fasttrig.cos(DEG2BAM(v));
+// [Sherbet] just realized that this shit cannot be trusted in fucking ohio so im going to manually unroll it
+inline double fastcosdeg(double x) {
+	const double tp_pi = M_PI / (360. * M_PI);
+	x *= tp_pi;
+	x -= double(.25) + CMATHFLOOR(x + double(.25));
+	x *= double(16.) * (CMATHABS(x) - double(.5));
+	x += double(.225) * x * (CMATHABS(x) - double(1.)); // extra precision feed
+	return x;
 }
 
-inline double fastsindeg(double v)
-{
-	return fasttrig.sin(DEG2BAM(v));
+inline double fastsindeg(double x) {
+	const double tp_pi = -M_PI / (360. * M_PI); // neg for sine
+	x *= tp_pi;
+	x += CMATHFLOOR(double(.5) - x); // change for usage with sine
+	x *= double(16.) * (CMATHABS(x) - double(.5));
+	x += double(.225) * x * (CMATHABS(x) - double(1.)); // extra precision feed
+	return x;
 }
 
-inline double fastcos(double v)
-{
-	return fasttrig.cos(RAD2BAM(v));
+// [Sherbet] float versions, used in renderer math.
+inline float float_fastcosdeg(float x) {
+	const float tp_pi = 3.14159265358979323846f / (360.f * 3.14159265358979323846f);
+	x *= tp_pi;
+	x -= float(.25f) + FMATHFLOOR(x + float(.25f));
+	x *= float(16.f) * (FMATHABS(x) - float(.5f));
+	x += float(.225f) * x * (FMATHABS(x) - float(1.f)); // extra precision feed
+	return x;
 }
 
-inline double fastsin(double v)
-{
-	return fasttrig.sin(RAD2BAM(v));
+inline float float_fastsindeg(float x) {
+	const float tp_pi = -3.14159265358979323846f / (360.f * 3.14159265358979323846f); // neg for sine
+	x *= tp_pi;
+	x += FMATHFLOOR(float(.5f) - x); // change for usage with sine
+	x *= float(16.f) * (FMATHABS(x) - float(.5f));
+	x += float(.225f) * x * (FMATHABS(x) - float(1.f)); // extra precision feed
+	return x;
 }
 
-// these are supposed to be local to this file.
-#undef DEG2BAM
-#undef RAD2BAM
-
-inline double sindeg(double v)
-{
+// High accuracy degree, use only when absolutely required.
+inline double sindeg(double v) {
 #ifdef USE_CUSTOM_MATH
 	return c_sin(v * (3.14159265358979323846 / 180.));
 #else
@@ -95,8 +103,7 @@ inline double sindeg(double v)
 #endif
 }
 
-inline double cosdeg(double v)
-{
+inline double cosdeg(double v) {
 #ifdef USE_CUSTOM_MATH
 	return c_cos(v * (3.14159265358979323846 / 180.));
 #else
@@ -137,8 +144,8 @@ inline double cosdeg(double v)
 #else
 #define g_sindeg	fastsindeg
 #define g_cosdeg	fastcosdeg
-#define g_sinbam	fastsinbam
-#define g_cosbam	fastcosbam
+#define g_sinbam	fastsin
+#define g_cosbam	fastcos
 #define g_sin	fastsin
 #define g_cos	fastcos
 #endif
