@@ -1588,7 +1588,7 @@ void UpdateButtonBar::CheckForUpdate(bool force)
 
 				currentUpdate = GetUpdateInfo(ok);
 
-				if(!ok) return;
+				if(!ok || !currentUpdate.has_value()) return;
 
 				new_update = !was_cached || (currentUpdate->version != cachedVer);
 
