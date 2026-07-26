@@ -476,19 +476,17 @@ bool HWSprite::CalculateVertices(HWDrawInfo* di, FVector3* v, DVector3* vp)
 
 		// [fgsfds] calculate yaw vectors
 		float rollDegrees = doRoll ? Angles.Roll.Degrees() : 0;
-		float angleRad = (FAngle::fromDeg(270.) - HWAngles.Yaw).Radians();
+		float angleDeg = (FAngle::fromDeg(270.) - HWAngles.Yaw).Degrees();
 
 		// [fgsfds] Rotate the sprite about the sight vector (roll)
 		if (isWallSprite)
 		{
-			float yawvecX = Angles.Yaw.Cos();
-			float yawvecY = Angles.Yaw.Sin();
 			mat.Rotate(0, 1, 0, 0);
 			if (drawRollSpriteActor)
 			{
 
 				if (useOffsets) mat.Translate(xx, zz, yy);
-				mat.Rotate(yawvecX, 0, yawvecY, rollDegrees);
+				mat.Rotate(float_fastcosdeg(Angles.Yaw.Degrees()), 0, float_fastsindeg(Angles.Yaw.Degrees()), rollDegrees);
 				if (useOffsets) mat.Translate(-xx, -zz, -yy);
 			}
 		}
@@ -497,9 +495,9 @@ bool HWSprite::CalculateVertices(HWDrawInfo* di, FVector3* v, DVector3* vp)
 			if (useOffsets) mat.Translate(xx, zz, yy);
 			if (drawWithXYBillboard)
 			{
-				mat.Rotate(-sin(angleRad), 0, cos(angleRad), -HWAngles.Pitch.Degrees());
+				mat.Rotate(-float_fastsindeg(angleDeg), 0, float_fastcosdeg(angleDeg), -HWAngles.Pitch.Degrees());
 			}
-			mat.Rotate(cos(angleRad), 0, sin(angleRad), rollDegrees);
+			mat.Rotate(float_fastcosdeg(angleDeg), 0, float_fastsindeg(angleDeg), rollDegrees);
 			if (useOffsets) mat.Translate(-xx, -zz, -yy);
 		}
 		else if (drawWithXYBillboard)
@@ -507,7 +505,7 @@ bool HWSprite::CalculateVertices(HWDrawInfo* di, FVector3* v, DVector3* vp)
 			// Rotate the sprite about the vector starting at the center of the sprite
 			// triangle strip and with direction orthogonal to where the player is looking
 			// in the x/y plane.
-			mat.Rotate(-sin(angleRad), 0, cos(angleRad), -HWAngles.Pitch.Degrees());
+			mat.Rotate(-float_fastsindeg(angleDeg), 0, float_fastcosdeg(angleDeg), -HWAngles.Pitch.Degrees());
 		}
 
 		mat.Scale(1.0, pixelstretch, 1.0);	// stretch sprite by level aspect ratio
@@ -530,7 +528,7 @@ bool HWSprite::CalculateVertices(HWDrawInfo* di, FVector3* v, DVector3* vp)
 			if (doRoll)
 			{
 				// Compute center of sprite
-				float angleRad = (FAngle::fromDeg(270.) - HWAngles.Yaw).Radians();
+				float angleDeg = (FAngle::fromDeg(270.) - HWAngles.Yaw).Degrees();
 				float rollDegrees = Angles.Roll.Degrees();
 				float pitchDegrees = 0.0;
 
@@ -538,14 +536,13 @@ bool HWSprite::CalculateVertices(HWDrawInfo* di, FVector3* v, DVector3* vp)
 				{
 					rollDegrees = fmodf(rollDegrees, 360.0f);
 					DAngle ang = di->Viewpoint.Angles.Yaw + actor->Angles.Yaw + actor->AngledRollOffset - DAngle::fromDeg(90.0);
-					angleRad = ang.Radians();
 					FVector3 relPos = center - FVector3(di->Viewpoint.Pos);
 					if (useOffsets) relPos += FVector3(xx, yy, zz);
 
 					Matrix3x4 rolltilt;
 					rolltilt.MakeIdentity();
 					ang = actor->Angles.Yaw + actor->AngledRollOffset;
-					rolltilt.Rotate(ang.Cos(), ang.Sin(), 0.0, -rollDegrees);
+					rolltilt.Rotate(float_fastcosdeg(ang.Degrees()), float_fastsindeg(ang.Degrees()), 0.0, -rollDegrees);
 					pitchDegrees = 270.0 - DVector3(rolltilt * relPos).Angle().Degrees();
 				}
 
@@ -553,7 +550,7 @@ bool HWSprite::CalculateVertices(HWDrawInfo* di, FVector3* v, DVector3* vp)
 				if (useOffsets) mat.Translate(xx, zz, yy);
 				mat.Scale(1.0, 1.0/pixelstretch, 1.0);	// unstretch sprite by level aspect ratio
 				if (AngledRoll) mat.Rotate(0.0, 1.0, 0.0, -HWAngles.Yaw.Degrees()); // Cancel regular Y-billboarding
-				mat.Rotate(cos(angleRad), 0, sin(angleRad), rollDegrees);
+				mat.Rotate(float_fastcosdeg(angleDeg), 0, float_fastsindeg(angleDeg), rollDegrees);
 				if (AngledRoll) mat.Rotate(0.0, 1.0, 0.0, pitchDegrees); // New Y-billboarding about rolled z-axis
 				mat.Scale(1.0, pixelstretch, 1.0);	// stretch sprite by level aspect ratio
 				if (useOffsets) mat.Translate(-xx, -zz, -yy);
@@ -562,10 +559,10 @@ bool HWSprite::CalculateVertices(HWDrawInfo* di, FVector3* v, DVector3* vp)
 
 			if (actor && (actor->renderflags2 & RF2_ISOMETRICSPRITES) && di->Viewpoint.bDoOrtho)
 			{
-				float angleRad = (FAngle::fromDeg(270.) - HWAngles.Yaw).Radians();
+				float angleDeg = (FAngle::fromDeg(270.) - HWAngles.Yaw).Degrees();
 				mat.Translate(center.X, center.Z, center.Y);
 				mat.Translate(0.0, z2 - center.Z, 0.0);
-				mat.Rotate(-sin(angleRad), 0, cos(angleRad), -actor->isotheta);
+				mat.Rotate(-float_fastsindeg(angleDeg), 0, float_fastcosdeg(angleDeg), -actor->isotheta);
 				mat.Translate(0.0, center.Z - z2, 0.0);
 				mat.Translate(-center.X, -center.Z, -center.Y);
 			}
