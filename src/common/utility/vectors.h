@@ -617,6 +617,11 @@ struct TVector3
 		return X*X + Y*Y + Z*Z;
 	}
 
+	constexpr float LengthSquaredF() const
+	{
+		return X*X + Y*Y + Z*Z;
+	}
+
 	double Sum() const
 	{
 		return abs(X) + abs(Y) + abs(Z);
