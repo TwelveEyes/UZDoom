@@ -1748,9 +1748,9 @@ void OpenALSoundRenderer::UpdateListener(SoundListener *listener)
 	float angle = listener->angle;
 	ALfloat orient[6];
 	// forward
-	orient[0] = cosf(angle);
+	orient[0] = float_fastcosdeg(angle);
 	orient[1] = 0.f;
-	orient[2] = -sinf(angle);
+	orient[2] = -float_fastsindeg(angle);
 	// up
 	orient[3] = 0.f;
 	orient[4] = 1.f;

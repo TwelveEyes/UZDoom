@@ -89,19 +89,19 @@ VSMatrix FSpriteModelFrame::ObjectToWorldMatrix(AActor * actor, float x, float y
 	// [BB] Workaround for the missing pitch information.
 	if ((smf_flags & MDL_PITCHFROMMOMENTUM))
 	{
-		const double x = actor->Vel.X;
-		const double y = actor->Vel.Y;
-		const double z = actor->Vel.Z;
+		const float x = (float)actor->Vel.X;
+		const float y = (float)actor->Vel.Y;
+		const float z = (float)actor->Vel.Z;
+		const float sq = (float)actor->Vel.LengthSquared();
 
-		if (actor->Vel.LengthSquared() > EQUAL_EPSILON)
+		if (sq > EQUAL_EPSILON)
 		{
-			// [BB] Calculate the pitch using spherical coordinates.
-			if (z || x || y) pitch = float(atan(z / sqrt(x*x + y*y)) / M_PI * 180);
+			if (z || x || y) pitch = atanf(z / sq) * 57.295779513f;
 
 			// Correcting pitch if model is moving backwards
 			if (fabs(x) > EQUAL_EPSILON || fabs(y) > EQUAL_EPSILON)
 			{
-				if ((x * cos(angle * M_PI / 180) + y * sin(angle * M_PI / 180)) / sqrt(x * x + y * y) < 0) pitch *= -1;
+				if ((x * float_fastcosdeg(angle) + y * float_fastsindeg(angle)) < EQUAL_EPSILON) pitch *= -1;
 			}
 			else pitch = fabs(pitch);
 		}
