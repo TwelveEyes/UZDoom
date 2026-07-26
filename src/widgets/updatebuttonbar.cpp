@@ -1552,6 +1552,7 @@ void UpdateButtonBar::CheckForUpdate(bool force)
 		VersionInfo skippedVer(USHRT_MAX, USHRT_MAX, USHRT_MAX);
 		skippedVer.prerelease[0] = skippedVer.build[0] = '\0';
 
+
 		if(updater_skipped_update->Length() > 0)
 		{
 			VersionInfo skippedVerTmp = VersionInfo((const char *)updater_skipped_update);
