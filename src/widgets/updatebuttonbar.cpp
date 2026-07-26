@@ -1549,7 +1549,7 @@ void UpdateButtonBar::CheckForUpdate(bool force)
 			}
 		}
 
-		VersionInfo skippedVer;
+		VersionInfo skippedVer(USHRT_MAX, USHRT_MAX, USHRT_MAX);
 
 		if(updater_skipped_update->Length() > 0)
 		{
