@@ -168,9 +168,9 @@ public:
 
 		FVector3 axis(ax, ay, az);
 		axis.MakeUnit();
-		double c = cos(angle * pi::pi()/180.), s = sin(angle * pi::pi()/180.), t = 1 - c;
-		double sx = s*axis.X, sy = s*axis.Y, sz = s*axis.Z;
-		double tx, ty, txx, tyy, u, v;
+		float c = float_fastcosdeg(angle), s = float_fastsindeg(angle), t = 1 - c;
+		float sx = s*axis.X, sy = s*axis.Y, sz = s*axis.Z;
+		float tx, ty, txx, tyy, u, v;
 
 		tx = t*axis.X;
 		m1.m[0][0] = float( (txx=tx*axis.X) + c );
