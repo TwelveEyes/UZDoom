@@ -263,6 +263,7 @@ struct FDynamicLight
 
 	void Tick();
 	void UpdateLocation();
+	void UpdateLightGrid();
 	void AddLightNode(FSection *section, side_t *sidedef);
 	void LinkLight();
 	void UnlinkLight();
@@ -307,4 +308,6 @@ public:
 	double lightDefIntensity;
 
 	FDynamicLightTouchLists touchlists;
+
+	TArray<uint64_t> cellKeys;
 };
