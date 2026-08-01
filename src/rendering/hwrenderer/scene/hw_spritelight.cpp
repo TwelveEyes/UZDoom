@@ -119,18 +119,12 @@ void HWDrawInfo::GetDynSpriteLight(AActor *self, float x, float y, float z, FSec
 		out[2] = probe->Blue;
 	}
 
-	// Go through both light lists
-	if (Level->lightlists.flat_dlist.SSize() > sec->Index())
+	FLightGridCell *cell = Level->lightgrid.GetCellAtXY(x, y);
+	if (cell)
 	{
-		TMap<FDynamicLight *, std::unique_ptr<FLightNode>>::Iterator it(Level->lightlists.flat_dlist[sec->Index()]);
-		TMap<FDynamicLight *, std::unique_ptr<FLightNode>>::Pair *pair;
-		while (it.NextPair(pair))
+		for (auto light : cell->lights)
 		{
-			auto node = pair->Value.get();
-			if (!node) continue;
-
-			light=node->lightsource;
-			if (light->ShouldLightActor(self))
+			if (light && light->ShouldLightActor(self))
 			{
 				FVector3 L;
 
@@ -231,20 +225,12 @@ void HWDrawInfo::GetDynSpriteLight(AActor *thing, particle_t *particle, float *o
 	}
 }
 
-// static so that we build up a reserve (memory allocations stop)
-// For multithread processing each worker thread needs its own copy, though.
-static thread_local TArray<FDynamicLight*> addedLightsArray;
-
 void hw_GetDynModelLight(AActor *self, FDynLightData &modellightdata)
 {
 	modellightdata.Clear();
 
 	if (self)
 	{
-		auto &addedLights = addedLightsArray;	// avoid going through the thread local storage for each use.
-
-		addedLights.Clear();
-
 		float x = (float)self->X();
 		float y = (float)self->Y();
 		float z = (float)self->Center();
@@ -252,40 +238,26 @@ void hw_GetDynModelLight(AActor *self, FDynLightData &modellightdata)
 		float radiusSquared = actorradius * actorradius;
 		dl_validcount++;
 
-		BSPWalkCircle(self->Level, x, y, radiusSquared, [&](subsector_t *subsector) // Iterate through all subsectors potentially touched by actor
+		FLightGridCell *cell = self->Level->lightgrid.GetCellAtXY(x, y);
+		if (cell)
 		{
-			auto section = subsector->section;
-			if (section->validcount == dl_validcount) return;	// already done from a previous subsector.
-
-			if (self->Level->lightlists.flat_dlist.SSize() > subsector->section->Index())
+			for (auto light : cell->lights)
 			{
-				TMap<FDynamicLight *, std::unique_ptr<FLightNode>>::Iterator it(self->Level->lightlists.flat_dlist[subsector->section->Index()]);
-				TMap<FDynamicLight *, std::unique_ptr<FLightNode>>::Pair *pair;
-				while (it.NextPair(pair))
-				{ // check all lights touching a subsector
-					auto node = pair->Value.get();
-					if (!node) continue;
-					FDynamicLight *light = node->lightsource;
-					if (light->ShouldLightActor(self))
+				if (light && light->ShouldLightActor(self))
+				{
+					int group = self->subsector->sector->PortalGroup;
+					DVector3 pos = light->PosRelative(group);
+					float radius = (float)(light->GetRadius() + actorradius);
+					double dx = pos.X - x;
+					double dy = pos.Y - y;
+					double dz = pos.Z - z;
+					double distSquared = dx * dx + dy * dy + dz * dz;
+					if (distSquared < radius * radius) // Light and actor touches
 					{
-						int group = subsector->sector->PortalGroup;
-						DVector3 pos = light->PosRelative(group);
-						float radius = (float)(light->GetRadius() + actorradius);
-						double dx = pos.X - x;
-						double dy = pos.Y - y;
-						double dz = pos.Z - z;
-						double distSquared = dx * dx + dy * dy + dz * dz;
-						if (distSquared < radius * radius) // Light and actor touches
-						{
-							if (std::find(addedLights.begin(), addedLights.end(), light) == addedLights.end()) // Check if we already added this light from a different subsector
-							{
-								AddLightToList(modellightdata, group, light, true);
-								addedLights.Push(light);
-							}
-						}
+						AddLightToList(modellightdata, group, light, true);
 					}
 				}
 			}
-		});
+		}
 	}
 }

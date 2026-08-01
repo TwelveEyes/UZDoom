@@ -176,6 +176,10 @@ DEFINE_ACTION_FUNCTION_NATIVE(ADynamicLight, SetOffset, SetOffset)
 
 void FDynamicLight::ReleaseLight()
 {
+	for (auto key : cellKeys)
+	{
+		Level->lightgrid.RemoveLightFromCell(key, this);
+	}
 	assert(prev != nullptr || this == Level->lights);
 	if (prev != nullptr) prev->next = next;
 	else Level->lights = next;
@@ -393,6 +397,7 @@ void FDynamicLight::UpdateLocation()
 		{
 			//Update the light lists
 			LinkLight();
+			UpdateLightGrid();
 		}
 	}
 }
@@ -611,6 +616,70 @@ void FDynamicLight::CollectWithinRadius(const DVector3 &opos, FSection *section,
 		}
 	}
 	shadowmapped = hitonesidedback && !DontShadowmap();
+}
+
+//==========================================================================
+//
+// Update the world light grid
+//
+//==========================================================================
+
+void FDynamicLight::UpdateLightGrid()
+{
+	TArray<uint64_t> newCellKeys;
+
+	float radius = GetRadius();
+
+	int minX = FLightGrid::WorldToCell(Pos.X - radius);
+    int maxX = FLightGrid::WorldToCell(Pos.X + radius);
+    int minY = FLightGrid::WorldToCell(Pos.Y - radius);
+    int maxY = FLightGrid::WorldToCell(Pos.Y + radius);
+
+	for (int x = minX; x <= maxX; x++)
+    {
+        for (int y = minY; y <= maxY; y++)
+        {
+            newCellKeys.Push(FLightGrid::MakeCellKey(x, y));
+        }
+    }
+
+	FLightGrid *grid = &Level->lightgrid;
+
+	unsigned oldIndex = 0;
+	unsigned newIndex = 0;
+
+	while (oldIndex < cellKeys.Size() && newIndex < newCellKeys.Size())
+	{
+		uint64_t oldKey = cellKeys[oldIndex];
+		uint64_t newKey = newCellKeys[newIndex];
+
+		if (oldKey == newKey)
+		{
+			// Cell exists in both sets.
+			oldIndex++;
+			newIndex++;
+		}
+		else if (oldKey < newKey)
+		{
+			// Present only in old keys: remove.
+			grid->RemoveLightFromCell(oldKey, this);
+			oldIndex++;
+		}
+		else
+		{
+			// Present only in new keys: add.
+			grid->AddLightToCell(newKey, this);
+			newIndex++;
+		}
+	}
+
+	while (oldIndex < cellKeys.Size())
+		grid->RemoveLightFromCell(cellKeys[oldIndex++], this);
+
+	while (newIndex < newCellKeys.Size())
+		grid->AddLightToCell(newCellKeys[newIndex++], this);
+
+	cellKeys.Swap(newCellKeys);
 }
 
 //==========================================================================
