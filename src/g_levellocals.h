@@ -98,7 +98,7 @@ struct FLightGrid
 
 	static int WorldToCell(double coord)
 	{
-		return static_cast<int>(std::floor(coord / CELL_SIZE));
+		return static_cast<int32_t>(std::floor(coord / CELL_SIZE));
 	}
 
 	static uint64_t MakeCellKey(int x, int y)
