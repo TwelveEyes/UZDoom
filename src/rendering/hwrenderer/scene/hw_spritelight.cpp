@@ -145,7 +145,7 @@ void HWDrawInfo::GetDynSpriteLight(AActor *self, float x, float y, float z, FSec
 					L = FVector3(x - (float)light->X(), y - (float)light->Y(), z - (float)light->Z());
 				}
 
-				float dist = L.LengthSquaredF();
+				float dist = (float)L.LengthSquared();
 				radius = light->GetRadius();
 				radius *= radius;
 
