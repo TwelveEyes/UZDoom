@@ -60,7 +60,7 @@ struct FGlobalDLightLists
 // Light grid stuff
 constexpr double CELL_SIZE = 256;
 constexpr int MAX_CELL_LIGHTS = 50;
-constexpr int RESERVE_CELLS = 32;
+constexpr int RESERVE_CELLS = 64; // The average Doom map is ~4000x4000 DU. Reserve about double.
 
 struct FLightGridCell
 {
@@ -93,7 +93,7 @@ struct FLightGrid
 
 	FLightGrid()
 	{
-		cells.reserve(RESERVE_CELLS * CELL_SIZE);
+		cells.reserve(RESERVE_CELLS);
 	}
 
 	static int WorldToCell(double coord)
