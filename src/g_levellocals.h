@@ -57,6 +57,121 @@ struct FGlobalDLightLists
 	TArray<TMap<FDynamicLight*, std::unique_ptr<FLightNode>>> wall_dlist;
 };
 
+// Light grid stuff
+constexpr double CELL_SIZE = 256;
+constexpr int MAX_CELL_LIGHTS = 50;
+constexpr int RESERVE_CELLS = 32;
+
+struct FLightGridCell
+{
+	TArray<FDynamicLight*> lights;
+
+	void AddLight(FDynamicLight *light)
+	{
+		if (!light || lights.Size() >= MAX_CELL_LIGHTS)
+			return;
+
+		lights.AddUnique(light);
+	}
+
+	void RemoveLight(FDynamicLight *light)
+	{
+		if (!light)
+			return;
+
+		unsigned index = lights.Find(light);
+		if (index != lights.Size())
+		{
+			lights.Delete(index);
+		}
+	}
+};
+
+struct FLightGrid
+{
+	absl::flat_hash_map<uint64_t, FLightGridCell> cells;
+
+	FLightGrid()
+	{
+		cells.reserve(RESERVE_CELLS * CELL_SIZE);
+	}
+
+	static int WorldToCell(double coord)
+	{
+		return static_cast<int>(std::floor(coord / CELL_SIZE));
+	}
+
+	static uint64_t MakeCellKey(int x, int y)
+	{
+		return (uint64_t(uint32_t(x)) << 32) | uint32_t(y);
+	}
+
+
+	FLightGridCell* GetCellAtXY(double x, double y)
+	{
+		int cellX = WorldToCell(x);
+		int cellY = WorldToCell(y);
+
+		auto it = cells.find(MakeCellKey(cellX, cellY));
+		if (it == cells.end())
+			return nullptr;
+
+		return &it->second;
+	}
+	FLightGridCell* GetOrCreateCellAtXY(double x, double y)
+	{
+		int cellX = WorldToCell(x);
+		int cellY = WorldToCell(y);
+
+		auto [it, inserted] =
+			cells.try_emplace(MakeCellKey(cellX, cellY));
+
+		return &it->second;
+	}
+
+
+	FLightGridCell* GetCellFromKey(uint64_t cellKey)
+	{
+		auto it = cells.find(cellKey);
+		if (it == cells.end())
+			return nullptr;
+
+		return &it->second;
+	}
+	FLightGridCell* GetOrCreateCellFromKey(uint64_t cellKey)
+	{
+		auto [it, inserted] =
+			cells.try_emplace(cellKey);
+
+		return &it->second;
+	}
+
+
+	void AddLightToCell(uint64_t cellKey, FDynamicLight *light)
+	{
+		FLightGridCell *cell = GetOrCreateCellFromKey(cellKey);
+
+		if (cell)
+		{
+			cell->AddLight(light);
+		}
+	}
+	void RemoveLightFromCell(uint64_t cellKey, FDynamicLight *light)
+	{
+		FLightGridCell *cell = GetCellFromKey(cellKey);
+
+		if (cell)
+		{
+			cell->RemoveLight(light);
+
+			if (!cell->lights.Size())
+			{
+				cells.erase(cellKey);
+			}
+		}
+	}
+};
+
 //============================================================================
 //
 // This is used to mark processed portals for some collection functions.
@@ -779,6 +894,7 @@ public:
 	int                LocalWorldTimer = 0;	// For client-sided actions that are still bound to world processing.
 	int                LocalTimer = 0;		// For client-sided actions independent of any world state.
 	FGlobalDLightLists lightlists;
+	FLightGrid         lightgrid;
 
 	FDynamicLight *lights;
 	DVisualThinker* VisualThinkerHead = nullptr;
