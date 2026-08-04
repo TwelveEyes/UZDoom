@@ -64,7 +64,8 @@ struct FWriter
 	typedef rapidjson::Writer<rapidjson::StringBuffer, rapidjson::UTF8<> > Writer;
 	typedef rapidjson::PrettyWriter<rapidjson::StringBuffer, rapidjson::UTF8<> > PrettyWriter;
 
-	Writer *mWriter;
+	Writer *mWriter = nullptr;
+	PrettyWriter *mPrettyWriter = nullptr;
 	TArray<bool> mInObject;
 	rapidjson::StringBuffer mOutString;
 	TArray<DObject *> mDObjects;
@@ -80,7 +81,7 @@ struct FWriter
 		}
 		else
 		{
-			mWriter = new PrettyWriter(mOutString);
+			mPrettyWriter = new PrettyWriter(mOutString);
 		}
 	}
 	FWriter(bool pretty) : FWriter(pretty, FWriterBuffer(rapidjson::StringBuffer {})) {}
@@ -88,6 +89,7 @@ struct FWriter
 	~FWriter()
 	{
 		if (mWriter) delete mWriter;
+		if (mPrettyWriter) delete mPrettyWriter;
 	}
 
 	FWriterBuffer MoveBufferOut() {
@@ -102,81 +104,96 @@ struct FWriter
 
 	void StartObject()
 	{
-		mWriter->StartObject();
+		if (mWriter) mWriter->StartObject();
+		else if (mPrettyWriter) mPrettyWriter->StartObject();
 	}
 
 	void EndObject()
 	{
-		mWriter->EndObject();
+		if (mWriter) mWriter->EndObject();
+		else if (mPrettyWriter) mPrettyWriter->EndObject();
 	}
 
 	void StartArray()
 	{
-		mWriter->StartArray();
+		if (mWriter) mWriter->StartArray();
+		else if (mPrettyWriter) mPrettyWriter->StartArray();
 	}
 
 	void EndArray()
 	{
-		mWriter->EndArray();
+		if (mWriter) mWriter->EndArray();
+		else if (mPrettyWriter) mPrettyWriter->EndArray();
 	}
 
 	void Key(const char *k)
 	{
-		mWriter->Key(k);
+		if (mWriter) mWriter->Key(k);
+		else if (mPrettyWriter) mPrettyWriter->Key(k);
 	}
 
 	void Null()
 	{
-		mWriter->Null();
+		if (mWriter) mWriter->Null();
+		else if (mPrettyWriter) mPrettyWriter->Null();
 	}
 
 	template<bool encode>
 	void StringU(const char *k)
 	{
 		if constexpr (encode) k = StringToUnicode(k);
-		mWriter->String(k);
+		if (mWriter) mWriter->String(k);
+		else if (mPrettyWriter) mPrettyWriter->String(k);
 	}
 
 	void String(const char *k)
 	{
 		k = StringToUnicode(k);
-		mWriter->String(k);
+		if (mWriter) mWriter->String(k);
+		else if (mPrettyWriter) mPrettyWriter->String(k);
 	}
 
 	void String(const char *k, int size)
 	{
 		k = StringToUnicode(k, size);
-		mWriter->String(k);
+		if (mWriter) mWriter->String(k);
+		else if (mPrettyWriter) mPrettyWriter->String(k);
 	}
 
 	void Bool(bool k)
 	{
-		mWriter->Bool(k);
+		if (mWriter) mWriter->Bool(k);
+		else if (mPrettyWriter) mPrettyWriter->Bool(k);
 	}
 
 	void Int(int32_t k)
 	{
-		mWriter->Int(k);
+		if (mWriter) mWriter->Int(k);
+		else if (mPrettyWriter) mPrettyWriter->Int(k);
 	}
 
 	void Int64(int64_t k)
 	{
-		mWriter->Int64(k);
+		if (mWriter) mWriter->Int64(k);
+		else if (mPrettyWriter) mPrettyWriter->Int64(k);
 	}
 
 	void Uint(uint32_t k)
 	{
-		mWriter->Uint(k);
+		if (mWriter) mWriter->Uint(k);
+		else if (mPrettyWriter) mPrettyWriter->Uint(k);
 	}
 
 	void Uint64(int64_t k)
 	{
-		mWriter->Uint64(k);
+		if (mWriter) mWriter->Uint64(k);
+		else if (mPrettyWriter) mPrettyWriter->Uint64(k);
 	}
 
 	void Double(double k)
 	{
-		mWriter->Double(k);
+		if (mWriter) mWriter->Double(k);
+		else if (mPrettyWriter) mPrettyWriter->Double(k);
 	}
 
 };
