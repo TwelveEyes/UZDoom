@@ -631,17 +631,17 @@ void FDynamicLight::UpdateLightGrid()
 	float radius = GetRadius();
 
 	int minX = FLightGrid::WorldToCell(Pos.X - radius);
-    int maxX = FLightGrid::WorldToCell(Pos.X + radius);
-    int minY = FLightGrid::WorldToCell(Pos.Y - radius);
-    int maxY = FLightGrid::WorldToCell(Pos.Y + radius);
+	int maxX = FLightGrid::WorldToCell(Pos.X + radius);
+	int minY = FLightGrid::WorldToCell(Pos.Y - radius);
+	int maxY = FLightGrid::WorldToCell(Pos.Y + radius);
 
 	for (int x = minX; x <= maxX; x++)
-    {
-        for (int y = minY; y <= maxY; y++)
-        {
-            newCellKeys.Push(FLightGrid::MakeCellKey(x, y));
-        }
-    }
+	{
+		for (int y = minY; y <= maxY; y++)
+		{
+			newCellKeys.Push(FLightGrid::MakeCellKey(x, y));
+		}
+	}
 
 	FLightGrid *grid = &Level->lightgrid;
 
