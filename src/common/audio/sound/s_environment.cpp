@@ -629,7 +629,7 @@ void S_UnloadReverbDef ()
 		if (!probe->Builtin)
 		{
 			if (pNext != NULL) *pNext = probe->Next;
-			free(const_cast<char *>(probe->Name));
+			delete[] const_cast<char *>(probe->Name);
 			delete probe;
 		}
 		else
