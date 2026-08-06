@@ -121,6 +121,7 @@ private:
 
 	int8_t _statNum = -1;
 	DThinker *NextThinker = nullptr, *PrevThinker = nullptr;
+	FThinkerIterator *IteratorList = nullptr;
 
 public:
 	FLevelLocals *Level;
@@ -135,7 +136,8 @@ protected:
 private:
 	FLevelLocals *Level;
 	FThinkerCollection* m_ThinkerPool;
-	DThinker *m_CurrThinker;
+	DThinker *m_CurrThinker = nullptr;
+	FThinkerIterator *m_NextIterator = nullptr, *m_PrevIterator = nullptr;
 	uint8_t m_Stat;
 	bool m_SearchStats;
 	bool m_SearchingFresh;
@@ -143,8 +145,21 @@ private:
 public:
 	FThinkerIterator (FLevelLocals *Level, const PClass *type, int statnum=MAX_STATNUM+1, bool clientside = false);
 	FThinkerIterator (FLevelLocals *Level, const PClass *type, int statnum, DThinker *prev, bool clientside = false);
+	~FThinkerIterator ();
+
+	FThinkerIterator (const FThinkerIterator &);
+	FThinkerIterator &operator=(const FThinkerIterator &);
+
+	FThinkerIterator (FThinkerIterator &&other) noexcept;
+	FThinkerIterator &operator=(FThinkerIterator &&other) noexcept;
+
 	DThinker *Next (bool exact = false);
 	void Reinit ();
+
+	void LinkToThinker (DThinker *thinker);
+	void UnlinkFromThinker ();
+	void SetCurrentThinker (DThinker *thinker);
+	void OnThinkerRemove ();
 };
 
 template <class T> class TThinkerIterator : public FThinkerIterator
