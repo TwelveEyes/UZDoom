@@ -915,6 +915,10 @@ void DThinker::OnDestroy()
 {
 	assert((NextThinker != nullptr && PrevThinker != nullptr) ||
 		   (NextThinker == nullptr && PrevThinker == nullptr));
+	while (IteratorList != nullptr)
+	{	// Repair any iterators currently pointing at this thinker.
+		IteratorList->OnThinkerRemove();
+	}
 	if (NextThinker != nullptr)
 	{
 		Remove();
@@ -1338,7 +1342,7 @@ FThinkerIterator::FThinkerIterator (FLevelLocals *l, const PClass *type, int sta
 	}
 	else
 	{
-		m_CurrThinker = prev->NextThinker;
+		SetCurrentThinker(prev->NextThinker);
 		m_SearchingFresh = false;
 	}
 }
@@ -1349,9 +1353,93 @@ FThinkerIterator::FThinkerIterator (FLevelLocals *l, const PClass *type, int sta
 //
 //==========================================================================
 
+FThinkerIterator::~FThinkerIterator()
+{
+	UnlinkFromThinker();
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+FThinkerIterator::FThinkerIterator(const FThinkerIterator &other)
+{
+	m_CurrThinker = nullptr;
+	m_NextIterator = nullptr;
+	m_PrevIterator = nullptr;
+
+	SetCurrentThinker(other.m_CurrThinker);
+}
+FThinkerIterator &FThinkerIterator::operator=(const FThinkerIterator &other)
+{
+	if (this == &other)
+		return *this;
+
+	SetCurrentThinker(other.m_CurrThinker);
+
+	return *this;
+}
+
+FThinkerIterator::FThinkerIterator(FThinkerIterator &&other) noexcept
+	: m_CurrThinker(other.m_CurrThinker),
+	  m_NextIterator(other.m_NextIterator),
+	  m_PrevIterator(other.m_PrevIterator)
+{
+	if (m_CurrThinker != nullptr)
+	{
+		if (m_PrevIterator != nullptr)
+			m_PrevIterator->m_NextIterator = this;
+		else
+			m_CurrThinker->IteratorList = this;
+
+		if (m_NextIterator != nullptr)
+			m_NextIterator->m_PrevIterator = this;
+	}
+
+	other.m_CurrThinker = nullptr;
+	other.m_NextIterator = nullptr;
+	other.m_PrevIterator = nullptr;
+}
+FThinkerIterator &FThinkerIterator::operator=(FThinkerIterator &&other) noexcept
+{
+	if (this == &other)
+		return *this;
+
+	UnlinkFromThinker();
+
+	m_CurrThinker = other.m_CurrThinker;
+	m_NextIterator = other.m_NextIterator;
+	m_PrevIterator = other.m_PrevIterator;
+
+	if (m_CurrThinker != nullptr)
+	{
+		if (m_PrevIterator != nullptr)
+			m_PrevIterator->m_NextIterator = this;
+		else
+			m_CurrThinker->IteratorList = this;
+
+		if (m_NextIterator != nullptr)
+			m_NextIterator->m_PrevIterator = this;
+	}
+
+	other.m_CurrThinker = nullptr;
+	other.m_NextIterator = nullptr;
+	other.m_PrevIterator = nullptr;
+
+	return *this;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
 void FThinkerIterator::Reinit ()
 {
-	m_CurrThinker = m_ThinkerPool->Thinkers[m_Stat].GetHead();
+	SetCurrentThinker(m_ThinkerPool->Thinkers[m_Stat].GetHead());
 	m_SearchingFresh = false;
 }
 
@@ -1376,7 +1464,7 @@ DThinker *FThinkerIterator::Next (bool exact)
 				while (!(m_CurrThinker->ObjectFlags & OF_Sentinel))
 				{
 					DThinker *thinker = m_CurrThinker;
-					m_CurrThinker = thinker->NextThinker;
+					SetCurrentThinker(thinker->NextThinker);
 					if (exact)
 					{
 						if (thinker->IsA(m_ParentType)) return thinker;
@@ -1392,7 +1480,7 @@ DThinker *FThinkerIterator::Next (bool exact)
 			}
 			if ((m_SearchingFresh = !m_SearchingFresh))
 			{
-				m_CurrThinker = m_ThinkerPool->FreshThinkers[m_Stat].GetHead();
+				SetCurrentThinker(m_ThinkerPool->FreshThinkers[m_Stat].GetHead());
 			}
 		} while (m_SearchingFresh);
 		if (m_SearchStats)
@@ -1403,10 +1491,58 @@ DThinker *FThinkerIterator::Next (bool exact)
 				m_Stat = STAT_FIRST_THINKING;
 			}
 		}
-		m_CurrThinker = m_ThinkerPool->Thinkers[m_Stat].GetHead();
+		SetCurrentThinker(m_ThinkerPool->Thinkers[m_Stat].GetHead());
 		m_SearchingFresh = false;
 	} while (m_SearchStats && m_Stat != STAT_FIRST_THINKING);
 	return nullptr;
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void FThinkerIterator::LinkToThinker(DThinker *thinker)
+{
+	if (thinker == nullptr)
+		return;
+
+	m_PrevIterator = nullptr;
+	m_NextIterator = thinker->IteratorList;
+
+	if (m_NextIterator != nullptr)
+		m_NextIterator->m_PrevIterator = this;
+
+	thinker->IteratorList = this;
+}
+
+void FThinkerIterator::UnlinkFromThinker()
+{
+	if (m_PrevIterator != nullptr)
+		m_PrevIterator->m_NextIterator = m_NextIterator;
+	else if (m_CurrThinker != nullptr)
+		m_CurrThinker->IteratorList = m_NextIterator;
+
+	if (m_NextIterator != nullptr)
+		m_NextIterator->m_PrevIterator = m_PrevIterator;
+
+	m_NextIterator = nullptr;
+	m_PrevIterator = nullptr;
+}
+
+void FThinkerIterator::SetCurrentThinker(DThinker *thinker)
+{
+	UnlinkFromThinker();
+	m_CurrThinker = thinker;
+	LinkToThinker(thinker);
+}
+
+void FThinkerIterator::OnThinkerRemove()
+{
+	assert(m_CurrThinker != nullptr);
+	DThinker *next = m_CurrThinker->NextThinker;
+	SetCurrentThinker(next);
 }
 
 //==========================================================================
