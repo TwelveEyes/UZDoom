@@ -492,16 +492,6 @@ if( NOT CMAKE_CROSSCOMPILING )
 	endif()
 endif()
 
-# Install the entire docs directory in the distributed zip package
-if( WIN32 )
-	set( INSTALL_DOCS_PATH docs CACHE STRING "Directory where the documentation will be placed during install." )
-else()
-	set( INSTALL_DOCS_PATH share/doc/${ZDOOM_EXE_NAME} CACHE STRING "Directory where the zdoom documentation will be placed during install." )
-endif()
-install(DIRECTORY docs/
-		DESTINATION ${INSTALL_DOCS_PATH}
-		COMPONENT "Documentation")
-
 option( DYN_OPENAL "Dynamically load OpenAL" ON )
 option( BUILD_NONFREE "Build non-free assets used by commercial games" ON )
 
