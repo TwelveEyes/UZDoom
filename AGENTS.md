@@ -28,7 +28,7 @@ The script JIT (asmjit) is x86_64-only (`HAVE_VM_JIT` is set only for x86_64).
 
 ## Code style / whitespace (enforced)
 
-- **Tabs**, not spaces, for indentation. The tree was converted to tabs (see `.git-blame-ignore-revs`); do not reintroduce leading spaces. `tools/format-spaces.sh` checks/fixes this for `c cpp h mm hpp zs fp re lemon y cmake xml`, `CMakeLists.txt`, and `*defs.*` files: run `tools/format-spaces.sh -c` to check, no flags to fix, `-g` for files in the last commit. Also enforces LF endings, final newline, no trailing whitespace.
+- **Tabs**, not spaces, for indentation. The tree was converted to tabs (see `.git-blame-ignore-revs`); do not reintroduce leading spaces. Style: LF endings, final newline, no trailing whitespace — keep new/edited code consistent with the surrounding code by hand. **Do not run `tools/format-spaces.sh` as a verification step** (check rule removed 2026-10-01): it rewrites files in place even with `-c` (only `-d` is a true dry-run) and the tree carries pre-existing violations, so a "check" mutates the working tree.
 - `.clang-format`: `BasedOnStyle: Microsoft`, `UseTab: AlignWithSpaces`. Use `// clang-format off/on` sparingly where needed.
 - New source files should follow the header template in `CONTRIBUTING.md` (GPLv3+ boilerplate + section banner comments: HEADER FILES, MACROS, TYPES, CODE, etc.).
 - `.editorconfig` matches: UTF-8, LF, tab indent, final newline, trimmed trailing whitespace.
