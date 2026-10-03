@@ -5631,7 +5631,7 @@ void R_OffsetView(FRenderViewpoint& viewPoint, const DVector3& dir, const double
 {
 	const DAngle baseYaw = dir.Angle();
 	FTraceResults trace = {};
-	if (viewPoint.IsAllowedOoB() && V_IsHardwareRenderer())
+	if (viewPoint.IsAllowedOoB())
 	{
 		viewPoint.Pos += dir * distance;
 		viewPoint.sector = viewPoint.ViewLevel->PointInRenderSubsector(viewPoint.Pos)->sector;
@@ -5650,7 +5650,7 @@ void R_OffsetView(FRenderViewpoint& viewPoint, const DVector3& dir, const double
 	}
 
 	// TODO: Why does this even need to be done? Please fix tracers already.
-	if (!viewPoint.IsAllowedOoB() || !V_IsHardwareRenderer())
+	if (!viewPoint.IsAllowedOoB())
 	{
 		if (dir.Z < 0.0)
 		{

@@ -43,7 +43,6 @@ class VkHardwareDataBuffer;
 class VkHardwareTexture;
 class VkRenderBuffers;
 class VkPostprocess;
-class SWSceneDrawer;
 
 class VulkanRenderDevice : public SystemBaseFrameBuffer
 {

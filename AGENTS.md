@@ -22,7 +22,7 @@ cmake --install build --prefix <pfx>                     # optional
 - Cross-compiling: `FORCE_CROSSCOMPILE=ON` plus `IMPORT_EXECUTABLES=<path>/ImportExecutables.cmake` from a prior native build.
 
 Frequently relevant CMake options (root + `src/CMakeLists.txt`):
-`HAVE_VULKAN=ON`, `HAVE_GLES2=ON` (OFF on Apple), `ZDOOM_ENABLE_SWR=ON` (software renderer; OFF defines `NO_SWRENDERER`), `DYN_OPENAL=ON`, `BUILD_NONFREE=ON` (commercial-game assets in `wadsrc_extra/nonfree`), `USE_PCH=ON`, `ENABLE_IWYU=ON`, `SEND_ANON_STATS=ON`, `USE_UPDATER=ON` (Windows MSVC only, builds `updater.exe`), `OSX_COCOA_BACKEND=ON` (native Cocoa vs SDL), `NO_STRIP`, `NO_OPENMP`, `PROFILE` (gprof), `WITH_ASAN` (MSVC), `FORCE_INTERNAL_BZIP2` / `FORCE_INTERNAL_CPPDAP`.
+`HAVE_VULKAN=ON`, `DYN_OPENAL=ON`, `BUILD_NONFREE=ON` (commercial-game assets in `wadsrc_extra/nonfree`), `USE_PCH=ON`, `ENABLE_IWYU=ON`, `SEND_ANON_STATS=ON`, `USE_UPDATER=ON` (Windows MSVC only, builds `updater.exe`), `OSX_COCOA_BACKEND=ON` (native Cocoa vs SDL), `NO_STRIP`, `NO_OPENMP`, `PROFILE` (gprof), `WITH_ASAN` (MSVC), `FORCE_INTERNAL_BZIP2` / `FORCE_INTERNAL_CPPDAP`.
 
 The script JIT (asmjit) is x86_64-only (`HAVE_VM_JIT` is set only for x86_64).
 

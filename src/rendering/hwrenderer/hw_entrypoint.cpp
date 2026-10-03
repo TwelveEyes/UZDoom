@@ -23,8 +23,6 @@
 #include "r_utility.h"
 #include "d_player.h"
 #include "i_time.h"
-#include "swrenderer/r_swscene.h"
-#include "swrenderer/r_renderer.h"
 #include "hw_dynlightdata.h"
 #include "hw_clock.h"
 #include "flatvertices.h"
@@ -44,14 +42,6 @@
 
 EXTERN_CVAR(Bool, cl_capfps)
 extern bool NoInterpolateView;
-
-static SWSceneDrawer *swdrawer;
-
-void CleanSWDrawer()
-{
-	if (swdrawer) delete swdrawer;
-	swdrawer = nullptr;
-}
 
 #include "g_levellocals.h"
 #include "a_dynlight.h"
@@ -248,11 +238,6 @@ void DoWriteSavePic(FileWriter* file, ESSType ssformat, uint8_t* scr, int width,
 
 void WriteSavePic(player_t* player, FileWriter* file, int width, int height)
 {
-	if (!V_IsHardwareRenderer())
-	{
-		SWRenderer->WriteSavePic(player, file, width, height);
-	}
-	else
 	{
 		IntRect bounds;
 		bounds.left = 0;
@@ -321,14 +306,6 @@ sector_t* RenderView(player_t* player)
 	}
 
 	sector_t* retsec;
-	if (!V_IsHardwareRenderer())
-	{
-		screen->SetActiveRenderTarget();	// only relevant for Vulkan
-
-		if (!swdrawer) swdrawer = new SWSceneDrawer;
-		retsec = swdrawer->RenderView(player);
-	}
-	else
 	{
 		hw_ClearFakeFlat();
 

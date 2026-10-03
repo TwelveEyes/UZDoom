@@ -105,7 +105,6 @@
 #include "st_start.h"
 #include "st_stuff.h"
 #include "startscreen.h"
-#include "swrenderer/r_swcolormaps.h"
 #include "teaminfo.h"
 #include "texturemanager.h"
 #include "types.h"
@@ -348,7 +347,6 @@ extern void SetupPlayerClasses ();
 void DeinitMenus();
 void P_Shutdown();
 void M_SaveDefaultsFinal();
-void R_Shutdown();
 void I_ShutdownInput();
 void SetConsoleNotifyBuffer();
 bool M_SetSpecialMenu(FName& menu, int param);	// game specific checks
@@ -422,29 +420,6 @@ CUSTOM_CVAR(Float, i_timescale, 1.0f, CVAR_NOINITCALL | CVAR_VIRTUAL)
 }
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
-
-#ifndef NO_SWRENDERER
-CUSTOM_CVAR(Int, vid_rendermode, 4, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
-{
-	if (self < 0 || self > 4)
-	{
-		self = 4;
-	}
-	else if (self == 2 || self == 3)
-	{
-		self = self - 2; // softpoly to software
-	}
-
-	if (usergame)
-	{
-		// [SP] Update pitch limits to the netgame/gamesim.
-		players[consoleplayer].SendPitchLimits();
-	}
-	screen->SetTextureFilterMode();
-
-	// No further checks needed. All this changes now is which scene drawer the render backend calls.
-}
-#endif
 
 CUSTOM_CVAR (Int, fraglimit, 0, CVAR_SERVERINFO)
 {
@@ -946,26 +921,12 @@ EXTERN_CVAR(Bool, am_match_statusbar)
 
 static uint32_t GetCaps()
 {
-	ActorRenderFeatureFlags FlagSet;
-	if (!V_IsHardwareRenderer())
-	{
-		FlagSet = RFF_UNCLIPPEDTEX;
+	// describe our basic feature set
+	ActorRenderFeatureFlags FlagSet = RFF_FLATSPRITES | RFF_MODELS | RFF_SLOPE3DFLOORS |
+		RFF_TILTPITCH | RFF_ROLLSPRITES | RFF_POLYGONAL | RFF_MATSHADER | RFF_POSTSHADER | RFF_BRIGHTMAP;
 
-		if (V_IsTrueColor())
-			FlagSet |= RFF_TRUECOLOR;
-		else
-			FlagSet |= RFF_COLORMAP;
-
-	}
-	else
-	{
-		// describe our basic feature set
-		FlagSet = RFF_FLATSPRITES | RFF_MODELS | RFF_SLOPE3DFLOORS |
-			RFF_TILTPITCH | RFF_ROLLSPRITES | RFF_POLYGONAL | RFF_MATSHADER | RFF_POSTSHADER | RFF_BRIGHTMAP;
-
-		if (gl_tonemap != 5) // not running palette tonemap shader
-			FlagSet |= RFF_TRUECOLOR;
-	}
+	if (gl_tonemap != 5) // not running palette tonemap shader
+		FlagSet |= RFF_TRUECOLOR;
 
 	if (r_drawvoxels)
 		FlagSet |= RFF_VOXELS;
@@ -1322,7 +1283,7 @@ void D_Display ()
 	// No wipes when in a stereo3D VR mode
 	else if (gamestate != wipegamestate && gamestate != GS_FULLCONSOLE && gamestate != GS_TITLELEVEL)
 	{
-		if (vr_mode == 0 || vid_rendermode != 4)
+		if (vr_mode == 0)
 		{
 			// save the current screen if about to wipe
 			wipestart = screen->WipeStartScreen();
@@ -3216,7 +3177,7 @@ static bool System_IsSpecialUI()
 
 static bool System_DisableTextureFilter()
 {
-	return !V_IsHardwareRenderer();
+	return false;
 }
 
 static bool System_DisableAnisotropicFiltering()
@@ -4420,7 +4381,6 @@ int GameMain()
 	GC::DelSoftRootHead();	// the soft root head will not be collected by a GC so we have to do it explicitly
 	C_DeinitConsole();
 	R_DeinitColormaps();
-	R_Shutdown();
 	I_ShutdownGraphics();
 	I_ShutdownInput();
 	M_SaveDefaultsFinal();
@@ -4461,7 +4421,6 @@ void D_Cleanup()
 
 	M_ClearMenus();					// close menu if open
 	AM_ClearColorsets();
-	DeinitSWColorMaps();
 	FreeSBarInfoScript();
 	DeleteScreenJob();
 
@@ -4472,7 +4431,6 @@ void D_Cleanup()
 	M_SaveDefaults(NULL);			// save config before the restart
 
 	// delete all data that cannot be left until reinitialization
-	CleanSWDrawer();
 	V_ClearFonts();					// must clear global font pointers
 	ColorSets.Clear();
 	PainFlashes.Clear();

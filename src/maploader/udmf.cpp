@@ -441,7 +441,6 @@ class UDMFParser : public UDMFParserBase
 	TArray<UDMFScroll> UDMFWallScrollers;
 	TArray<UDMFScroll> UDMFThrusters;
 
-	FDynamicColormap	*fogMap = nullptr, *normMap = nullptr;
 	FMissingTextureTracker &missingTex;
 
 public:

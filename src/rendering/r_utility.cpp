@@ -49,7 +49,6 @@
 #include "r_utility.h"
 #include "sbar.h"
 #include "serializer.h"
-#include "swrenderer/r_renderer.h"
 #include "v_draw.h"
 #include "v_video.h"
 #include "vm.h"
@@ -148,6 +147,30 @@ CUSTOM_CVARD(Bool, r_cull_fps, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "Boolean
 		r_distance_cull_type = 3;
 	}
 }
+CUSTOM_CVARD(Int, r_distance_cull_type, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "Distance culling type. 0 : Don't cull. 1 : Cull to r_line_distance_cull (without fog). 2 : Cull to r_line_distance_cull (with fog). 4 : Dynamic cull to maintain fps to r_cull_fps_target (with fog). Fog only in hardware renderer.")
+{
+	if (self > 3)
+	{
+		self= 3;
+	}
+	else if (self < 0)
+	{
+		self= 0;
+	}
+	r_cull_fps = (self == 3);
+	r_cull_distance = (self > 0) && (self < 3);
+}
+
+CUSTOM_CVARD(Int, r_cull_fps_target, 90, CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "Target fps for dynamic distance culling. Active only when r_distance_cull_type == 3.")
+{
+	if (self < 1)
+	{
+		self = 1;
+	}
+}
+
+CVARD(Float, r_line_distance_cull, 4000.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "Fixed culling distance. Active only when r_distance_cull_type == 1 or 2.")
+
 CUSTOM_CVARD(Color, gl_cullcolor, Color::str("#888888"), CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "Fog color when r_distance_cull_type > 1. Does not override map fade colors. Hardware renderer only.")
 {
 	primaryLevel->cullcolor = gl_cullcolor;
@@ -457,9 +480,6 @@ CUSTOM_CVAR (Int, screenblocks, 10, CVAR_ARCHIVE)
 //
 //==========================================================================
 
-FRenderer *CreateSWRenderer();
-FRenderer* SWRenderer;
-
 //==========================================================================
 //
 // R_Init
@@ -470,25 +490,6 @@ void R_Init ()
 {
 	R_InitTranslationTables ();
 	R_SetViewSize (screenblocks);
-
-	if (SWRenderer == NULL)
-	{
-		SWRenderer = CreateSWRenderer();
-	}
-
-	SWRenderer->Init();
-}
-
-//==========================================================================
-//
-// R_Shutdown
-//
-//==========================================================================
-
-void R_Shutdown ()
-{
-	if (SWRenderer != nullptr) delete SWRenderer;
-	SWRenderer = nullptr;
 }
 
 //==========================================================================
@@ -614,7 +615,7 @@ void R_InterpolateView(FRenderViewpoint& viewPoint, const player_t* const player
 
 	// Due to interpolation this is not necessarily the same as the sector the camera is in.
 	viewPoint.sector = viewLvl->PointInRenderSubsector(viewPoint.Pos)->sector;
-	if (!viewPoint.bDoOob || !V_IsHardwareRenderer())
+	if (!viewPoint.bDoOob)
 	{
 		bool moved = false;
 		while (!viewPoint.sector->PortalBlocksMovement(sector_t::ceiling))
@@ -1194,15 +1195,15 @@ void R_SetupFrame(FRenderViewpoint& viewPoint, const FViewWindow& viewWindow, AA
 	viewPoint.SetViewAngle(viewWindow);
 
 	// Keep the view within the sector's floor and ceiling
-	// But allow VPSF_ALLOWOUTOFBOUNDS camera viewpoints to go out of bounds when using hardware renderer
-	if (viewPoint.sector->PortalBlocksMovement(sector_t::ceiling) && (!viewPoint.bDoOob || !V_IsHardwareRenderer()))
+	// But allow VPSF_ALLOWOUTOFBOUNDS camera viewpoints to go out of bounds
+	if (viewPoint.sector->PortalBlocksMovement(sector_t::ceiling) && !viewPoint.bDoOob)
 	{
 		const double z = viewPoint.sector->ceilingplane.ZatPoint(viewPoint.Pos) - 4.0;
 		if (viewPoint.Pos.Z > z)
 			viewPoint.Pos.Z = z;
 	}
 
-	if (viewPoint.sector->PortalBlocksMovement(sector_t::floor) && (!viewPoint.bDoOob || !V_IsHardwareRenderer()))
+	if (viewPoint.sector->PortalBlocksMovement(sector_t::floor) && !viewPoint.bDoOob)
 	{
 		const double z = viewPoint.sector->floorplane.ZatPoint(viewPoint.Pos) + 4.0;
 		if (viewPoint.Pos.Z < z)
@@ -1281,7 +1282,6 @@ void R_SetupFrame(FRenderViewpoint& viewPoint, const FViewWindow& viewWindow, AA
 			color = pr_hom();
 
 		screen->SetClearColor(color);
-		SWRenderer->SetClearColor(color);
 	}
 	else
 	{
@@ -1293,7 +1293,6 @@ void R_SetupFrame(FRenderViewpoint& viewPoint, const FViewWindow& viewWindow, AA
 		{
 			if (actor->Level->cullcolor == 0) actor->Level->cullcolor = PalEntry(gl_cullcolor);
 			screen->SetClearColorPal(actor->Level->cullcolor);
-			SWRenderer->SetClearColor(actor->Level->cullcolor);
 		}
     }
 	

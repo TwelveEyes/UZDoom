@@ -2089,7 +2089,7 @@ void DAutomap::drawSubsectors()
 	mpoint_t originpt;
 
 	auto lm = getRealLightmode(Level, false);
-	bool softlightramp = !V_IsHardwareRenderer() || lm == ELightMode::Doom || lm == ELightMode::DoomDark;
+	bool softlightramp = lm == ELightMode::Doom || lm == ELightMode::DoomDark;
 
 	auto &subsectors = Level->subsectors;
 	for (unsigned i = 0; i < subsectors.Size(); ++i)

@@ -395,7 +395,6 @@ static void M_Quit()
 	DeleteScreenJob();
 	S_StopAllChannels();
 	S_StopMusic(true);
-	CleanSWDrawer();
 	ST_Endoom();
 }
 

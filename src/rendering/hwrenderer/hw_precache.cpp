@@ -277,14 +277,14 @@ void hw_PrecacheTexture(uint8_t *texhitlist, TMap<PClassActor*, bool> &actorhitl
 					int flags = shouldUpscale(gtex, UF_Texture);
 					if (tex->GetImage() && tex->GetHardwareTexture(0, flags) == nullptr)
 					{
-						FImageSource::RegisterForPrecache(tex->GetImage(), V_IsTrueColor());
+						FImageSource::RegisterForPrecache(tex->GetImage(), true);
 					}
 				}
 
 				// Only register untranslated sprite images. Translated ones are very unlikely to require data that can be reused so they can just be created on demand.
 				if (spritehitlist[i] != nullptr && (*spritehitlist[i]).CheckKey(0))
 				{
-					FImageSource::RegisterForPrecache(tex->GetImage(), V_IsTrueColor());
+					FImageSource::RegisterForPrecache(tex->GetImage(), true);
 				}
 			}
 		}
