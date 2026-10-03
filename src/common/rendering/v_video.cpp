@@ -127,8 +127,6 @@ CUSTOM_CVAR(Int, uiscale, 0, CVAR_ARCHIVE | CVAR_NOINITCALL)
 	setsizeneeded = true;
 }
 
-EXTERN_CVAR(Bool, r_blendmethod);
-
 FARG(width, "Configuration", "Sets " GAMENAME "'s horizontal resolution.", "x",
 	"Specifies the desired resolution of the screen. If only one of -width or -height is"
 	" specified, " GAMENAME " will try to guess the other one based on a standard aspect ratio. If"

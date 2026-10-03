@@ -86,7 +86,7 @@ public:
 	void SetVSync(bool vsync) override;
 
 	void Draw2D() override;
-	void PostProcessScene(bool swscene, int fixedcm, float flash, const std::function<void()> &afterBloomDrawEndScene2D) override;
+	void PostProcessScene(int fixedcm, float flash, const std::function<void()> &afterBloomDrawEndScene2D) override;
 
 	bool HWGammaActive = false;			// Are we using hardware or software gamma?
 	std::unique_ptr<FGLDebug> mDebug;	// Debug API

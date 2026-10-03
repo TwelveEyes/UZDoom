@@ -137,7 +137,6 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
 		auto cm = di->SetFullbrightFlags(mainview ? vp.camera->player : nullptr);
 		float flash = 1.f;
 
-		// Only used by the GLES2 renderer
 		RenderState.SetSpecialColormap(cm, flash);
 
 		di->Viewpoint.FieldOfView = DAngle::fromDeg(fov);	// Set the real FOV for the current scene (it's not necessarily the same as the global setting in r_viewpoint)
@@ -166,7 +165,7 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
 				RenderState.EnableDrawBuffers(1);
 			}
 
-			screen->PostProcessScene(false, cm, flash, [&]() { di->DrawEndScene2D(mainvp.sector, RenderState); });
+			screen->PostProcessScene(cm, flash, [&]() { di->DrawEndScene2D(mainvp.sector, RenderState); });
 			PostProcess.Unclock();
 		}
 		// Reset colormap so 2D drawing isn't affected
