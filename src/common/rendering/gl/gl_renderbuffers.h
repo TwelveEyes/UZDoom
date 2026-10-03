@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "gl_load.h"
 #include "hwrenderer/postprocessing/hw_postprocess.h"
 
 namespace OpenGLRenderer

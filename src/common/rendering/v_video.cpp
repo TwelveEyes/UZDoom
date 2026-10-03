@@ -98,11 +98,6 @@ CUSTOM_CVAR(Int, vid_preferbackend, BACKEND_DEFAULT, CVAR_ARCHIVE | CVAR_GLOBALC
 		else if (prev > self || prev <= 0) self = self-1;
 		else if (prev < self || prev >= NUM_BACKEND-1) self = self+1;
 		return;
-#ifdef HAVE_GLES2
-	case BACKEND_OPENGLES:
-		Printf("Selecting OpenGLES 2.0 backend...\n");
-		break;
-#endif
 #ifdef HAVE_VULKAN
 	case BACKEND_VULKAN:
 		Printf("Selecting Vulkan backend...\n");
@@ -113,7 +108,7 @@ CUSTOM_CVAR(Int, vid_preferbackend, BACKEND_DEFAULT, CVAR_ARCHIVE | CVAR_GLOBALC
 		break;
 	}
 
-	vid_shadersupport = self != BACKEND_OPENGLES;
+	vid_shadersupport = true;
 
 	static bool notice = false;
 	if (notice) Printf("Changing the video backend requires a restart for " GAMENAME ".\n");

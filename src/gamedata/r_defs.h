@@ -530,9 +530,6 @@ enum
 	PL_SKYFLAT = 0x40000000
 };
 
-struct FDynamicColormap;
-
-
 struct FLinkedSector
 {
 	sector_t *Sector = nullptr;

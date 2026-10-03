@@ -43,7 +43,6 @@ class FLightBuffer;
 class DPSprite;
 class FGLRenderBuffers;
 class FGL2DDrawer;
-class SWSceneDrawer;
 class HWViewpointBuffer;
 struct FRenderViewpoint;
 

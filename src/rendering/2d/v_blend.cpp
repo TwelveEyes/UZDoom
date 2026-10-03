@@ -270,7 +270,7 @@ FVector4 V_CalcBlend(sector_t* viewsector, PalEntry* modulateColor)
 			}
 		}
 
-		if (blendv.a == 0 && V_IsTrueColor())	// The paletted software renderer uses the original colormap as this frame's palette, but in true color that isn't doable.
+		if (blendv.a == 0)
 		{
 			blendv = R_BlendForColormap(blendv);
 		}
@@ -309,9 +309,7 @@ FVector4 V_CalcBlend(sector_t* viewsector, PalEntry* modulateColor)
 		{
 			if (fbmode == FBMODE_TORCH)
 			{
-				// The software renderer already bakes the torch flickering into its output, so this must be omitted
-				// here.
-				float r = vid_rendermode < 4 ? 1.f : (0.8f + (7 - player->fixedlightlevel) / 70.0f);
+				float r = (0.8f + (7 - player->fixedlightlevel) / 70.0f);
 				if (r > 1.0f)
 					r = 1.0f;
 				int rr = (int)(r * 255);

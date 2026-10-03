@@ -261,13 +261,7 @@ static bool CheckSkipOptionBlock(FScanner &sc)
 				filter = true;
 			#endif
 		}
-		else if (sc.Compare("SWRender"))
-		{
-#ifndef NO_SWRENDERER
-			filter = true;
-#endif
 		}
-	}
 	while (sc.CheckString(","));
 	sc.MustGetStringName(")");
 	if (!filter)

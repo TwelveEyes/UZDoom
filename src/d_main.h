@@ -169,16 +169,6 @@ public:
 };
 
 EXTERN_CVAR(Int, gl_texture_filter)
-#ifndef NO_SWRENDERER
-EXTERN_CVAR(Int, vid_rendermode)
-#else
-constexpr int vid_rendermode = 4;
-#endif
-
-inline bool V_IsHardwareRenderer()
-{
-	return vid_rendermode == 4;
-}
 
 // Unfortunately Intel forces on filtering if mipmapping is enabled, so None modes of filtering
 // need to outright disable it.
@@ -186,11 +176,6 @@ inline bool V_DisableIntelMipmap()
 {
 	constexpr char Intel[] = "Intel";
 	return !stricmp(screen->vendorstring, Intel) && (gl_texture_filter == 1 || gl_texture_filter == 5 || gl_texture_filter == 6);
-}
-
-inline bool V_IsTrueColor()
-{
-	return vid_rendermode == 1 || vid_rendermode == 4;
 }
 
 bool CheckCheatmode(bool printmsg = true, bool sponly = false);

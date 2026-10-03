@@ -34,8 +34,6 @@
 // Use multiple threads when drawing
 EXTERN_CVAR(Int, r_multithreaded)
 
-namespace swrenderer { class WallColumnDrawerArgs; }
-
 // Worker data for each thread executing drawer commands
 class DrawerThread
 {

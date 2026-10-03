@@ -46,7 +46,6 @@
 #include "i_time.h"
 #include "m_argv.h"
 #include "fragglescript/t_fs.h"
-#include "swrenderer/r_swrenderer.h"
 #include "flatvertices.h"
 #include "xlat/xlat.h"
 #include "vm.h"
@@ -3240,7 +3239,6 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 		P_Recalculate3DFloors(&sec);
 	}
 
-	SWRenderer->SetColormap(Level);	//The SW renderer needs to do some special setup for the level's default colormap.
 	InitPortalGroups(Level);
 	P_InitHealthGroups(Level);
 
