@@ -84,3 +84,17 @@ Two-layer layout: the classic ZDoom top level in `src/` plus a newer platform-ne
 - `CONTRIBUTING.md` prohibits AI-generated code contributions to upstream (commit/PR messages included). Flag this to the user before preparing any commit or PR.
 - There is no test runner; at minimum verify with a full build (`cmake --build build`) and note that in-game verification is the project's standard.
 - `libraries/`, `bin/`, `*/thirdparty/`, `tools/re2c`, `tools/lemon` are exempt from whitespace/formatting enforcement.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as markdown files under `.scratch/<feature>/` in this repo. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
