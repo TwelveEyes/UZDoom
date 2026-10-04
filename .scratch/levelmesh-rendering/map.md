@@ -35,8 +35,9 @@ A/B rendering acceptance tool. Implementation is a separate, later effort that p
   space.
 - Tracker files are currently uncommitted in git; the user reviews the map before committing.
 - Research phase complete (2026-10-03): tickets 01, 02, 03 resolved; findings in
-  `.scratch/levelmesh-rendering/research/`. The frontier is now ticket 04 (HITL grilling). One new ticket
-  (11) graduated from ticket 02's findings.
+  `.scratch/levelmesh-rendering/research/`. Ticket 04 (geometry data model) resolved 2026-10-03 — the
+  frontier is now 05 (sector state), 06 (portal regions), and 07 (lighting); 08/11 remain blocked on
+  05/06/07. One new ticket (11) graduated from ticket 02's findings.
 
 ## Decisions so far
 
@@ -52,18 +53,16 @@ A/B rendering acceptance tool. Implementation is a separate, later effort that p
 - **01 — Helion levelmesh deep-dive (resolved, research).** Helion bakes two per-texture VBOs at load, split by a per-plane `SectorDynamic` bitmask: a static VBO updated in place via sub-uploads, and a dynamic VBO carrying current *and* previous-frame Z/UV that the GPU interpolates by tick fraction; light changes never touch vertices — they write a per-sector GPU light buffer sampled per-vertex; sprites are one GL point expanded to a billboard by a geometry shader (distance+FOV cull, no LOS ray); portals/sector_link are a flood-fill + fake-wall + stencil system; draws batch per texture, so per-frame CPU scales with moving sectors + visible sprites, not level size. Findings: `research/01-helion-levelmesh.md` (every claim cited to a Helion source file).
 - **02 — Consumer inventory (resolved, research).** The "renderer traversal is render-only" assumption is **broken** in two places: (a) per-frame flags `ML_MAPPED`/`SSECMF_DRAWN` are read by the automap and serialized into savegames — the levelmesh path needs a per-frame exposure pass; (b) dither transparency is a per-frame feedback loop (visible actors → `P_CheckSight` → `WALLF_DITHERTRANS` traces) — the levelmesh needs a visible-actor hook. Everything else (walls/flats/sprites/fake flats/glow/lightmaps/sky/job pool) replaces cleanly; VkRaytrace is purely a data-model constraint; the portal pipeline (stencil + `SSRF_SEEN` coverage) is a hook feeding 06. Graduated into ticket 11. Findings: `research/02-consumer-inventory.md` (22-row table, file:line verified).
 - **03 — Classic portal flow (resolved, research).** No geometry is ever transformed or re-meshed: a portal re-runs the identical traversal in a child drawinfo with a **remapped viewpoint** (line portals: rotation+translation+angle diff+z rebase; sector_link: displacement add), rendered LIFO after the opaque pass with a stencil as the only pixel-level region separator over shared depth (cleared/restored per portal polygon). Hardest parity items: the sector_link coverage handshake (`SSRF_SEEN`/`UnclipSubsector`), the full stencil/depth contract, per-frame portal registration. Design consequence: target one shared mechanism — per-region meshes + view transforms — not per-portal mesh baking. Findings: `research/03-portal-flow.md` (139 file:line citations).
+- **04 — Levelmesh geometry data model (resolved, grilling).** Locked: 32-byte uniform vertex (x,y, dual-purpose 8-byte slot — static `(z,v)` / dynamic `(vparam,0)` — u, lightmap UVs, uint32 surface index); one whole-level vertex pool ordered per region then per piece; per-region index buffers holding per-texture sub-ranges; 48-byte surface records in a CPU-writable SSBO (mutable texture index + dynamic flag; static plane refs incl. 3D-floor model sectors, light ref, region, opening/unpegged/window params). Warp: static surfaces draw baked z; only dynamic-flagged surfaces evaluate z from the sector state buffer in the VS; unpegged/middle/lower windows computed in-shader from the four evaluated planes — no per-frame vertex upload exists. Dynamic lifecycle: flag flip on first movement; re-bake to static at rest when all referenced planes have settled. Fake flats = extra static surfaces referencing `heightsec` model sectors — no second pass. VkRaytrace: unchanged, fed by a small adapter with the same load-time frozen geometry as today's builder (`IsControlSector` is disabled — no control-sector skip). 3D-floor structure is static (line special 160 = `LS_NOP`), so sector movement never rebuilds the pool. 32-bit indexing ruled sufficient (137 GB ceiling vs ~100-160 MB slaughter pool). Region record carries 06's transform + front-face (mirrored regions invert winding) + 08's per-texture sub-range table. Spec-ready layouts in `issues/04-geometry-data-model.md`.
 
 ## Not yet specified
 
-- **VkRaytrace adaptation**: purely a data-model constraint (02 confirmed zero per-frame visibility coupling;
-  it rebuilds only on mesh-pointer change, `vk_raytrace.cpp:49-60`) — graduates from "Levelmesh geometry
-  data model" (04).
-- **Slaughter-scale memory/perf**: vertex counts on huge levels, 32-bit indexing, buffer streaming budgets —
-  graduates from 04 / "Draw organization" (08); Helion's per-texture VBO batching is the reference layout (01).
-- **Fake flats in the mesh world**: extra flat surface in the mesh vs a second pass — graduates from 04 / 06 /
-  07 (classic contract documented in 03; Helion's flood-fill approach in 01).
+- **Slaughter-scale perf bar**: frame-time budget and buffer streaming budgets at true scale — graduates from
+  08 / 09 (vertex/index/surface memory layout already locked by 04; Helion's per-texture batching is the
+  reference layout, 01).
 - **Sky and sky portals in the mesh world** (`hw_sky.cpp`, `hw_skyportal.cpp`) — graduates from 06 or 07
-  (classic stencil/depth contract documented in 03).
+  (classic stencil/depth contract documented in 03; sky surfaces are geometrically ordinary per 04 — the
+  `sky` flag is a texturing hint).
 - **Selection mechanism UI**: cvar vs ZWidget settings entry for switching paths — part of 08.
 - **Region model for portals** — 03 shows the classic path never transforms geometry: portals re-traverse with
   a remapped viewpoint in a child drawinfo (LIFO, stencil-separated). The design space for 06 is per-region

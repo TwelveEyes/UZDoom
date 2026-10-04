@@ -41,3 +41,41 @@ _Avoid_: feature-complete, equivalent
 The state in which the levelmesh path has passed the acceptance bar (parity on the acceptance map list,
 the frame-time bar, and the deterministic A/B tool). It is the gate for making levelmesh the default.
 _Avoid_: stable, done
+
+**Level vertex pool**:
+The single whole-level 32-byte vertex store built once at map load, ordered per region then per piece
+(subsector fan, line quad). Write-once except for re-bake patches; the first-movement flag flip rewrites
+the in-vertex dual-purpose slot.
+_Avoid_: VBO (backend-specific), mesh buffer
+
+**Dual-purpose slot**:
+The 8-byte `(slotA, slotB)` pair in every vertex: `(baked z, baked v)` for static surfaces,
+`(vparam, 0)` for dynamic surfaces. The surface record's dynamic flag selects the interpretation.
+_Avoid_: generic slot, variant data
+
+**Surface record**:
+The 48-byte CPU-writable SSBO record per wall quad / per subsector fan: mutable texture index and
+dynamic flag; static plane refs, light ref, region index, and opening/unpegged/window parameters.
+Reached from vertices through a per-vertex uint32 surface index.
+_Avoid_: surface struct (too generic), surface attributes
+
+**Plane ref**:
+A `(sector index, floor|ceiling)` pointer into the sector state buffer. Includes refs to control /
+3D-floor model sectors — that is how fake-flat surfaces move.
+_Avoid_: plane pointer, height reference
+
+**Re-bake**:
+Restoring a dynamic surface's static vertices to the new resting height and clearing its dynamic flag
+once movement completes. A surface is re-bake-eligible only when every plane it references has settled.
+_Avoid_: static bake, geometry update
+
+**Fake-flat surface**:
+An extra static flat surface in the vertex pool referencing a 3D-floor model sector's (`heightsec`)
+plane — the levelmesh's expression of `hw_FakeFlat`. No second pass, no runtime copies.
+_Avoid_: fake flat (the classic `hw_FakeFlat` runtime mechanism), 3D-floor plane
+
+**Portal region**:
+A self-contained vertex + index block drawn under a region view transform, front-face flag, and
+scissor/stencil — the levelmesh's unit of portal rendering. Ticket 06 defines the semantics; 04 locked
+the storage container (transform, front-face, and per-texture IBO sub-range slots).
+_Avoid_: portal mesh, region chunk
