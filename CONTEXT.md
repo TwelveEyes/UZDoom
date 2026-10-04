@@ -88,8 +88,31 @@ An extra static flat surface in the vertex pool referencing a 3D-floor model sec
 plane — the levelmesh's expression of `hw_FakeFlat`. No second pass, no runtime copies.
 _Avoid_: fake flat (the classic `hw_FakeFlat` runtime mechanism), 3D-floor plane
 
+**Main region**:
+The level region containing the player's start. The only region the main view draws — portal regions are
+reachable only through portals, so they are never directly visible in the main view.
+_Avoid_: main level, base region
+
 **Portal region**:
 A self-contained vertex + index block drawn under a region view transform, front-face flag, and
-scissor/stencil — the levelmesh's unit of portal rendering. Ticket 06 defines the semantics; 04 locked
-the storage container (transform, front-face, and per-texture IBO sub-range slots).
+scissor/stencil — the levelmesh's unit of portal rendering. The level partitions into regions by a global
+flood-fill over the sector graph: adjacency = two sectors sharing a two-sided *non-portal* line (portal
+lines are barriers; one-sided lines never connect); each connected component is a region. A portal's
+target is the region behind its destination line (line portals) or its destination sector (sector_link).
+04 locked the storage container; 06 locked the semantics.
 _Avoid_: portal mesh, region chunk
+
+**Portal view**:
+A region-scoped view that draws exactly one portal region (its target) plus any nested sub-views, under the
+portal's own view transform + view clip, stencil-masked. Not per-portal mesh baking — the target region's
+per-texture IBO sub-ranges (04) are drawn under a per-portal transform. Sky/skybox are instances of the
+same mechanism.
+_Avoid_: portal mesh, secondary viewport
+
+**Portal visibility query**:
+The GPU occlusion query that decides whether a portal is drawn: a depth-only draw of the portal's window
+polygon (under the main view) with a depth-pass test. Issued one frame ahead for the *predicted candidate
+set* (portals inside the predicted frustum — N+1 camera = current + measured velocity × dt, generous
+margin), so the result is one frame stale; a prediction miss is a bounded 1–2 frame delay. The result gates
+both the portal draw and its depth clear (no spurious un-occlude).
+_Avoid_: LOS ray, P_CheckSight (that is gameplay sight, not portal visibility)
