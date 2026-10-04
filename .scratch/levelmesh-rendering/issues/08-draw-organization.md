@@ -288,6 +288,42 @@ path's frame, never deleted from the tree.
 - **Glossary (CONTEXT.md):** new terms — "Render worker (levelmesh)", "Handoff slot", "Window polygon"
   (following the 05/06/07 pattern).
 
+### Amendments (post-resolution, ticket 11 — 2026-10-04)
+
+- **A1 — Suplex-pitch-window cull for OOB non-radar views.** OOB views without `r_radarclipper` (or
+  `LEVEL3_NOFOGOFWAR`) must cull with the classic's expanded vertical window — pitch ± (20 + ½FOV),
+  capped at 179° (classic `hw_drawinfo.cpp:490-496`) — not the exact frustum. Their culled lists are the
+  exposure candidate sets (11), so the expanded bounds apply to the list itself, not a side pass.
+- **A2 — OOB radar views: per-subsector radar gate in the cull walk.** When `r_radarclipper &&
+  !LEVEL3_NOFOGOFWAR && bDoOob`, each candidate subsector fails the walk unless its radar gate passes
+  (classic `hw_bsp.cpp:800-868`): already-exposed subsectors pass in non-deathmatch; otherwise the
+  subsector is radar-ray-tested (11's BSP raycast, radar solidness, origin = `Viewpoint.OffPos`). A
+  failing subsector is **not drawn** (radar-gated rendering, not just exposure). Deathmatch: every
+  subsector re-tested per frame.
+- **A3 — Ortho no-fog views: viewbox cull.** `bDoOrtho && (!r_radarclipper || LEVEL3_NOFOGOFWAR)`: the
+  walk tests subsector bboxes against the 2D viewbox (`ext = 3 · offset · tan(½FOV)`, classic
+  `RenderOrthoNoFog`, `hw_bsp.cpp:1057-1075`) instead of the frustum.
+- **A4 — Secret render gate.** OOB views without `r_radarclipper` exclude undiscovered-secret sectors'
+  subsectors from the culled list (`hw_bsp.cpp:797`) and things inside them from the visible-sprite
+  list (`hw_bsp.cpp:637`). Normal views are un-gated (the automap's secret display gating is shared `am_`
+  code).
+- **A5 — Static line→sub-range table.** At build, per line (and per flat plane / 3D-floor plane): the
+  sub-range(s) containing it, the index range per sub-range, and the per-line **segCount within each
+  sub-range** (the dither `dithertranscount` decrement unit, 11). Plus per-seg `map-exempt` bit (same-
+  sector 2s line with an invalid mid texture) and per-subsector `hasSidedefSegs` bit.
+- **A6 — `DITHERTRANS` pipeline-variant dimension.** The levelmesh pipeline key set gains the dither
+  bit: dither fragments (11) draw the same sub-range index range with the `EFF_DITHERTRANS` / `main.fp
+  #define DITHERTRANS` shader (adapted per 07's promoted-uniform variant).
+- **A7 — Dither target source.** The per-view visible-sprite list is the dither target source: filter
+  by `CurrentMapSections` + the A4 secret gate + eligibility `(MF3_ISMONSTER && !MF_CORPSE) ||
+  MF_MISSILE` + per-frame dedup; sort by `thing->subsector` index (classic traversal order — exact in
+  OOB mode, no pruning); cap 20.
+- **A8 — Frame-build order per view** (game thread, interpolation window): sprite gather → **dither
+  tail** (11: `P_CheckSight` + `SetDitherTransFlags`, OOB non-portal views) → cull walk (dither fragment
+  splitting + exposure marking + `cullcolor`, 11) → slot handoff. The tail precedes the walk (same-frame
+  dither consumption, classic tail → RenderScene order) and is the last playsim-mutating step; the
+  worker never touches `validcount`-keyed memos.
+
 ### Decision provenance
 
 - Round 1: threading — single-threaded (the recommendation, matching Helion master per primary-source check:

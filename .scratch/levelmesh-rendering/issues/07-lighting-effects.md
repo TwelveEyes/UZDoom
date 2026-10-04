@@ -247,12 +247,17 @@ offset × 360/65536, y offset, mirror flag; resolved by `HWSkyInfo::init`, hw_sk
   numShades.
 - **Global per-frame:** the dynamic-light buffer (the classic lightbuffer — unchanged).
 - **Per level (static):** lightmode (ELightMode int); outsidefog, outsidefogdensity, sector fogdensity
-  (Level->fogdensity), cullcolor, skyfog. (The level *flags* — HASFADETABLE, SMOOTHLIGHTING,
-  FORCEFAKECONTRAST, DOUBLESKY, SWAPSKIES — are baked at build, not uniforms.)
+  (Level->fogdensity), skyfog. (The level *flags* — HASFADETABLE, SMOOTHLIGHTING, FORCEFAKECONTRAST,
+  DOUBLESKY, SWAPSKIES — are baked at build, not uniforms.)
 - **Per view (dynamic):** r_visibility (→ MAXDIST = 32*r_visibility), r_distance_cull_type, gl_fogmode,
   r_fakecontrast (mode selector), r_extralight, gl_weaponlight, r_viewpoint.extralight, culldist,
   fullbright-scene flag, inkybox flag (skybox views).
-- **Per level (dynamic):** levelSkyPos (3 f32); the 3D-light state buffer (12 B × light count).
+- **Per level (dynamic):** levelSkyPos (3 f32); the 3D-light state buffer (12 B × light count);
+  **cullcolor** (1 value) — the fog/clear-color latch written per frame per view by 11's exposure pass
+  (classic `hw_bsp.cpp:378-392`: `r_distance_cull_type > 0` && `IsDistanceCulled` && nonzero fade color
+  → `Level->cullcolor = FadeColor`; `gl_cullcolor`-initialized, latching, never reset per frame). Fog-
+  color selection rule to reproduce (`hw_setcolor.cpp:108`): `gl_distance_cull_type > 1` → fog color =
+  `Level->cullcolor`.
 - **Per surface:** everything else, from the records above.
 
 ### Parity checklist (A/B, zero tolerance)
@@ -272,6 +277,13 @@ Runtime: strobe/pulse/fire/glow/damage thinkers active during the diff runs (fra
 - **09/10 (scale/perf):** validate the per-vertex sector-record fetch (all surfaces) and the band IBO
   repetition at slaughter scale.
 - **02 (A/B tool):** the checklist above is the acceptance input.
+
+### Amendments (post-resolution, ticket 11 — 2026-10-04)
+
+- **cullcolor is per-level per-frame dynamic**, not static (corrected in the uniform set above).
+  Written by 11's exposure pass from the culled draw list (frustum-only gate — documented delta vs the
+  classic's occlusion gate, D6). Consumers unchanged: view clear color (`r_utility.cpp:1294-1295`) and
+  fog color (`hw_setcolor.cpp:108`).
 
 ### Decision provenance
 
