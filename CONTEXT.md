@@ -54,8 +54,13 @@ sky portals, dynamic lights, and all sector effects. It is the acceptance bar, n
 _Avoid_: feature-complete, equivalent
 
 **Proven**:
-The state in which the levelmesh path has passed the acceptance bar (parity on the acceptance map list,
-the frame-time bar, and the deterministic A/B tool). It is the gate for making levelmesh the default.
+The state in which the levelmesh path has passed the acceptance bar: A/B pass (every acceptance
+map × mode × both backends, zero tolerance outside the frozen known-diff allowlist) ∧ perf pass (≤
+classic × 1.05 on every map + `SOS_Boom` ≤ 50% of classic median frame time) ∧ soak pass (the
+in-game checklist) ∧ no open levelmesh-only bug of severity ≥ S2 (S1 crash/hang/memory growth, S2
+visible artifact or broken behavior on an acceptance map, S3 cosmetic/rare). Declared by the map
+owner after the implementer runs the tool and posts results; the `gl_uselevelmesh` default flip
+ships with that declaration. It is the gate for making levelmesh the default.
 _Avoid_: stable, done
 
 **Level vertex pool**:
@@ -187,3 +192,34 @@ the levelmesh's expression of the classic's dither-transparency feedback loop (v
 during the cull walk, reading flags written by that frame's dither tail plus last frame's residue; flags
 are cleared on consumption, with `dithertranscount` decremented by the line's seg count in the sub-range.
 _Avoid_: dither pass, transparency variant
+
+**A/B capture mode**:
+The always-compiled, cvar-gated (default off) engine mode that makes rendering deterministic for the A/B
+tool: a synthetic clock (exactly one tick per rendered frame, real-time paced; interpolation fraction
+pinned, sky scroll / texture animation / FOV computed from tick time — `I_GetTimeFrac()` is wall-clock
+even under `-timedemo`/`cl_capfps`, so determinism cannot be emulated externally) plus tick-list PNG
+capture of the final composed framebuffer, reusing the `M_ScreenShot` writer.
+_Avoid_: screenshot mode, frame grab
+
+**Acceptance matrix**:
+The A/B tool's run space: the acceptance map list (doom1 + doom2 + Hexen + Heretic + classic ports +
+`SOS_Boom`, per ticket 09) × modes {static tick lists, demo replay} × backends {GL33, Vulkan — both must
+pass, same-backend pairs only} × resolutions {1080p head, 320×200 clean, stress widescreen}, plus the
+cvar sweep (gamma × glow) on the stress maps. Every combination must pass parity for the levelmesh.
+_Avoid_: test suite (there is no unit test suite — this is the deterministic half of acceptance),
+matrix (too generic)
+
+**Known-diff allowlist**:
+The per-map(+mode+resolution) frozen list of pixel-diff clusters tolerated by the A/B tool, recorded at
+first bring-up and human-reviewed — only z-fighting clusters (classic's normalized per-view depth range
+vs the levelmesh's true z; either winner legitimate) are allowlisted; real bugs get fixed. Committed to
+the repo; any NEW diff fails; entries can only be removed. Zero tolerance applies everywhere else.
+_Avoid_: tolerance budget (that would be a numeric allowance), whitelist
+
+**Soak**:
+The human-driven in-game checklist (ticket 09: two full campaigns + Heretic E1, portal/3D-floor mod
+tours, the `SOS_Boom` fast-camera fly, the scripted save/load/automap/secret walk, a deathmatch session,
+the light-thinker/fog/fake-contrast tour, and a stability watch incl. one 1 h+ session) run with the
+levelmesh path on — the project standard's verification, since there is no unit test suite. A clause of
+the PROVEN gate.
+_Avoid_: stress test, playtesting (too generic)
