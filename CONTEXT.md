@@ -28,10 +28,12 @@ lifts, 3D floor models. Topology is static in Doom: no runtime re-triangulation 
 _Avoid_: moving sector, animated sector, dynamic geometry
 
 **Sector state buffer**:
-The per-sector dynamic attribute buffer (tilted floor/ceiling planes, scroll offsets, per-plane light,
-colormap, glow, transdoor/sky flags). One 96-byte record per sector, full-copied to the GPU **every
-frame** into a ring of `HW_MAX_PIPELINE_BUFFERS` slots; each record carries the single *current*
-CPU-interpolated plane values. Evaluated in the vertex shader to warp dynamic surfaces.
+The per-sector dynamic attribute buffer: tilted floor/ceiling planes, scroll offsets, **lighting
+ingredients** (raw lightlevel, per-plane light offsets, the 9-byte `FColormap`), glow color/height, and
+the transdoor flag — one 96-byte record per sector, full-copied to the GPU **every frame** into a ring of
+`HW_MAX_PIPELINE_BUFFERS` slots; each record carries the single *current* CPU-interpolated plane values.
+Evaluated in the vertex shader to warp dynamic surfaces **and** to shade every surface (07 locked
+fetch-by-all).
 _Avoid_: instance buffer, dynamic buffer (too generic)
 
 **Snapshot pass**:
@@ -68,10 +70,36 @@ The 8-byte `(slotA, slotB)` pair in every vertex: `(baked z, baked v)` for stati
 _Avoid_: generic slot, variant data
 
 **Surface record**:
-The 48-byte CPU-writable SSBO record per wall quad / per subsector fan: mutable texture index and
-dynamic flag; static plane refs, light ref, region index, and opening/unpegged/window parameters.
-Reached from vertices through a per-vertex uint32 surface index.
+The 64-byte CPU-writable SSBO record per wall quad / per subsector fan: mutable texture index and
+dynamic flag; static plane refs, light ref, region index, opening/unpegged/window parameters; and the
+per-wall shading statics (side tier + Light/tierLight, baked fake-contrast rel pair, side light flags,
+lightmap num, 3D-light ref, 3D band range). The wall-shading/sky block (16 B) came with 07; the record
+was 48 B under 04. Reached from vertices through a per-vertex uint32 surface index.
 _Avoid_: surface struct (too generic), surface attributes
+
+**Light chain**:
+The classic per-surface CPU light computation (effective light → rescale → rel light → lightmode
+transform → colormap → vColor, plus fog/desaturation/glow setup). The levelmesh runs it **in the
+vertex shader** as a formula-for-formula bit-exact port (C++ stays the source of truth; int32 on
+integer paths, C++ op order in float32 on float paths; fake-contrast `rel` baked at build — no GPU
+atan); its per-draw results ride to the fragment as per-vertex varyings, so `main.fp` is reused
+unchanged (promoted uniforms `#define`d to varyings).
+_Avoid_: shading, lighting pass (too generic)
+
+**3D light band**:
+The sub-draw of a wall that lies inside a 3D-floor volume, clipped to one layer's z-band — the
+levelmesh's expression of the classic's split-plane draws (hw_walls.cpp). Band records (per-level
+static table: light ref + split top/bottom plane refs) give IBO sub-ranges a third dimension:
+(region, texture, **band**). Band planes are read from sector records at draw time, so they track
+moving 3D floors.
+_Avoid_: light slice, lightlist (that is the per-level 3D-light state buffer)
+
+**levelSkyPos**:
+The per-level per-frame sky scroll triple (`hw_sky1pos`, `hw_sky2pos`, `hw_skymistpos`), the only
+dynamic sky state. Sky surfaces carry a static `skyScrollKind` (which scroll drives them, incl.
+doublesky's second layer); all other sky properties (texture, angle, MBF line-texture transfer) are
+resolved at build — so scrolling skies write zero sector-record bytes per frame.
+_Avoid_: sky offset (05's reserved record slot), sky portal (that is 06's portal-view mechanism)
 
 **Plane ref**:
 A `(sector index, floor|ceiling)` pointer into the sector state buffer. Includes refs to control /
