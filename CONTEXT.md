@@ -144,3 +144,46 @@ set* (portals inside the predicted frustum — N+1 camera = current + measured v
 margin), so the result is one frame stale; a prediction miss is a bounded 1–2 frame delay. The result gates
 both the portal draw and its depth clear (no spurious un-occlude).
 _Avoid_: LOS ray, P_CheckSight (that is gameplay sight, not portal visibility)
+
+**Render worker (levelmesh)**:
+The async render thread the levelmesh path runs on (Vulkan only): it owns the 3D world pass only —
+per-frame uploads, the full levelmesh 3D issue, and per-slot completion fences. The game thread keeps the
+sim, the frame build (inside the interpolation window), the 2D stack, and presentation; the worker consumes
+frozen handoff-slot contents and never touches playsim state. An explicit deviation from both Helion and
+UZDoom's current synchronous behavior.
+_Avoid_: render thread (the classic `r_thread.*` is the software renderer's span drawer — different thing),
+async renderer
+
+**Handoff slot**:
+One entry of the 05 sector-state ring, extended to be the per-frame record the game thread builds and the
+worker consumes: sector-state records, 3D-light state, levelSkyPos, per-viewpoint values, the portal-view
+list, the culled draw list, sprite/model vertex slot references, and the query results to apply. In-order,
+fence-gated, no frame skipping — the game thread 2D-composes per frame in order, so every built frame's 3D
+pass must complete.
+_Avoid_: frame buffer, command queue
+
+**Window polygon**:
+The per-portal 2D quad (portal-adjacent endpoints × current portal-adjacent sector heights) drawn
+depth-only under the main view to feed the portal visibility query. A small dynamic buffer, one quad per
+portal, updated per frame during the portal-transform step.
+_Avoid_: portal frustum, view frustum
+
+**Exposure pass**:
+The per-frame per-view levelmesh pass that reproduces the classic's automap fog-of-war writes (per-
+subsector `SSECMF_DRAWN`, per-line `ML_MAPPED`) and the `cullcolor` latch. Candidates = the subsectors in
+the view's culled draw list; each not-yet-exposed candidate is tested with 2.5D occlusion rays from the
+camera to its static fan-vertex test points (BSP raycast under the classic's solidness rules — standard or
+radar mode); any unoccluded ray exposes the subsector. Marks are monotonic. View-mode rules replicate the
+classic exactly: normal views test; OOB non-radar views mark from the suplex-pitch-window culled list;
+OOB radar views (dev cvar `r_radarclipper`) radar-gate per subsector (the gate also culls the draw); ortho
+no-fog views use the viewbox; undiscovered secret sectors are gated in OOB views for both draw and
+exposure.
+_Avoid_: fog-of-war pass, culling pass (that is 08's cull walk)
+
+**Dither fragment**:
+The per-frame draw-list entry that re-issues a normal sub-range with the `DITHERTRANS` shader variant —
+the levelmesh's expression of the classic's dither-transparency feedback loop (visible actor →
+`P_CheckSight` → `SetDitherTransFlags` traces → tier flags → dithered draws). Fragments are appended
+during the cull walk, reading flags written by that frame's dither tail plus last frame's residue; flags
+are cleared on consumption, with `dithertranscount` decremented by the line's seg count in the sub-range.
+_Avoid_: dither pass, transparency variant
