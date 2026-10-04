@@ -28,9 +28,23 @@ lifts, 3D floor models. Topology is static in Doom: no runtime re-triangulation 
 _Avoid_: moving sector, animated sector, dynamic geometry
 
 **Sector state buffer**:
-The small per-sector dynamic attribute buffer (planes, light, texture/state indices) streamed to the GPU on
-change and evaluated in the vertex shader to warp static geometry.
+The per-sector dynamic attribute buffer (tilted floor/ceiling planes, scroll offsets, per-plane light,
+colormap, glow, transdoor/sky flags). One 96-byte record per sector, full-copied to the GPU **every
+frame** into a ring of `HW_MAX_PIPELINE_BUFFERS` slots; each record carries the single *current*
+CPU-interpolated plane values. Evaluated in the vertex shader to warp dynamic surfaces.
 _Avoid_: instance buffer, dynamic buffer (too generic)
+
+**Snapshot pass**:
+The per-frame CPU pass, run inside levelmesh frame setup after `DoInterpolations`, that packs every
+sector's state record into the current ring slot and diffs each record against last frame to drive the
+static↔dynamic lifecycle (first movement → flip dynamic; N=2 unchanged frames → settled → re-bake).
+_Avoid_: dirty check, update pass (too generic)
+
+**Dynamic surface**:
+A surface whose plane is evaluated in the vertex shader from the sector state buffer (via its plane
+refs) instead of drawing baked z. The complement is a *static surface*, which draws its baked z
+untouched. Selection is the surface record's dynamic flag, driven by the snapshot pass.
+_Avoid_: animated surface, moving surface
 
 **Full parity**:
 The levelmesh path reproduces every visual behavior of the classic path: portals/sector_link, fake flats,
