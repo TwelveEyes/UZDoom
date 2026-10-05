@@ -76,11 +76,14 @@ decision) and the map sets:
 
 - **doom2.wad**: MAP01 (baseline), MAP07 (3D floors + lift), MAP21 (killfloor scale + 3D floors), MAP23
   (light thinkers), MAP27 (fog), MAP30 (3D floors + scale), MAP31 (dense scale).
-- **hexen.wad**: 2–3 maps covering vanilla BEHA-format specials (teleport lines 80, lifts, sector
-  special bits). **No feature pins** — scanner-verified: zero line portals, sector_links, 3D floors,
-  skyboxes, fog, fake contrast. (Original category lock re-categorized 2026-10-04, user decision.)
-- **heretic.wad**: 1–2 maps, vanilla DOOM-format coverage (door/lift density, sector specials).
-  **No feature pins** — scanner-verified: zero features.
+- **hexen.wad**: MAP01, MAP10, MAP27 (pinned 2026-10-04, phase 1) covering vanilla BEHA-format
+  specials (teleport lines 80, lifts, sector special bits). **No category pins** — scanner-verified:
+  zero line portals, sector_links, 3D floors, skyboxes, fog, fake contrast. (Original category lock
+  re-categorized 2026-10-04, user decision.) Note: vanilla Hexen DOES carry 170 polyobject lines
+  (special 1 = Polyobj_StartLine, playsim/actionspecials.h:25) across all 31 maps — format coverage,
+  not a category pin.
+- **heretic.wad**: E1M2, E5M6 (pinned 2026-10-04, phase 1), vanilla DOOM-format coverage
+  (door/lift density, sector specials). **No feature pins** — scanner-verified: zero features.
 - **myhouse.pk3** (user-provided; UDMF, ns=zdoom): **MAP01** — portals (508, incl. 98×
   Sector_SetPortal), 3D floors (1065), polyobjects (1693), plane equations (960), smoothlighting,
   fake contrast (4804 nofakecontrast sides), **skybox** (5 TID-less SkyViewpoints + 50 SkyPickers);
@@ -117,7 +120,7 @@ never maps 57).
 | WAD | maps | layout | features verified |
 | --- | --- | --- | --- |
 | DOOM2.WAD | 32 | doom14 | none (vanilla, as expected) |
-| HEXEN.WAD | 31 | beha16 | **zero** portals/link/3df/poly… classic specials only (80× teleports); MAPINFO has only classic sky1/2/3 designators — **cannot satisfy the hexen category locks** |
+| HEXEN.WAD | 31 | beha16 | **zero** portals/link/3df/sky/fog/fakec… classic specials (80× teleports) + **170 polyobject lines** (special 1, all maps) — polyobj is format coverage, not a category pin; MAPINFO has only classic sky1/2/3 designators — **cannot satisfy the hexen category locks** |
 | HERETIC.WAD | 48 (27+21 dev) | doom14 | none |
 | STRIFE1.WAD | 34 (22+12 dev) | doom14 (no BEHA → DOOM format + xlat) | none |
 | SOS_Boom.wad (user-provided) | 36 | doom14 (UMAPINFO, 36 sections) | **none of the five** (zero portals/link/sky/fog/fakec); slaughter scale: **MAP32 = 61,623 lines / 9,907 sectors / 76,458 verts** (MAP12 19,529, MAP45 19,005, MAP46 14,659 lines); UMAPINFO: `skytexture` MAP04/46, music, secret flow (MAP15→43); 4-digit specials (12184–25688, packed `K*1024+off`) are custom — outside the xlat table → **zeroed on load** |

@@ -20,8 +20,8 @@ logs stay local (`logs/`, `runs/` are gitignored).
 - **`scan_maps.py`** — static WAD feature scanner (stdlib only) for the
   verify-first map pinning.
 - **`parse_perflog.py`** — perflog → median/p95 table (stdlib only).
-- **`manifest.md`** — the map/resolution/machine manifest (pins fill in
-  during bring-up).
+- **`manifest.md`** — the map/resolution/machine manifest (all pins
+  locked + reference machine recorded 2026-10-04, bring-up phase 0/1 done).
 
 ## Protocol (from ticket 09)
 
@@ -59,8 +59,10 @@ logs stay local (`logs/`, `runs/` are gitignored).
 python3 tools/abtest/scan_maps.py build/wads/*.wad   # run from the build dir
 ```
 
-I propose the Hexen/Heretic/TNT/Ritual/Rampage/Spectre pins from the
-scan; the user approves; the pins are written into `manifest.md`.
+DONE (2026-10-04, phase 1): proposed from the `scan_maps.py` v7 output,
+user-approved, written into `manifest.md` — hexen MAP01/MAP10/MAP27, heretic
+E1M2/E5M6. The classic-ports row (TNT/Ritual/Rampage/Spectre) was dropped
+from the matrix the same day (see manifest.md).
 
 ### 2 — Record demos (human, once per map, classic path)
 
@@ -79,17 +81,18 @@ demo into the repo:
 cp tools/abtest/runs/<map>/<map>.lmp tools/abtest/demos/<map>.lmp
 ```
 
-### 3 — Perf runs (human; 3 backends×resolutions = 6 per map)
+### 3 — Perf runs (human; 2 backends × 3 resolutions = 6 per map)
 
 ```bash
 ./uzdoom -iwad <iwadfile> -file <pwads...> -exec tools/abtest/baseline.cfg \
-    +set vid_width <W> +set vid_height <H> +set gl_backend <N> \
+    +set vid_width <W> +set vid_height <H> +set vid_preferbackend <N> \
     +set r_perflog tools/abtest/logs/<map>_<backend>_<res>.perflog \
     +timedemo tools/abtest/demos/<map>.lmp
 ```
 
-- `<backend>`: `gl33` / `vk` — `gl_backend` values to be confirmed at
-  bring-up (GL 3.3 core vs Vulkan).
+- `<backend>`: `0` = GL 3.3 core, `1` = Vulkan. The cvar is
+  `vid_preferbackend` (v_video.cpp:85; BACKEND_OPENGL=0 / BACKEND_VULKAN=1,
+  v_video.h:70). There is no `gl_backend` cvar in the engine.
 - `<res>`: `1080p` (1920×1080), `320x200`, `21x9` (3440×1440).
 
 ### 4 — Parse + verify (agent)

@@ -15,8 +15,8 @@ is the WADs in `tools/abtest/wads/` below.
 | slot | file | maps used |
 |---|---|---|
 | doom2 | `DOOM2.WAD` | MAP01 MAP07 MAP21 MAP23 MAP27 MAP30 MAP31 |
-| hexen | `HEXEN.WAD` (vanilla; scanner-verified: no feature pins) | 2–3 maps, TBD at bring-up (vanilla BEHA coverage) |
-| heretic | `HERETIC.WAD` (vanilla; scanner-verified: no feature pins) | 1–2 maps, TBD at bring-up |
+| hexen | `HEXEN.WAD` (vanilla; scanner-verified: no feature pins; note the 170 vanilla polyobject lines) | MAP01 MAP10 MAP27 |
+| heretic | `HERETIC.WAD` (vanilla; scanner-verified: no feature pins) | E1M2 E5M6 |
 | myhouse | `myhouse.pk3` (user-provided; UDMF ns=zdoom; 14 nested WADs, 2 live blocks) | MAP01 20PAM |
 | pirates | `Pirates!.wad` (BEHA + ZMAPINFO) | MAP50 MAP51 MAP57 (fog); MAP43 MAP49 MAP54 MAP58 (polyobjects + 3D floors) |
 | sos_boom | `SOS_Boom.wad` (user-provided; Summer of Slaughter by TH1RT3EN) | MAP32 (slaughter pin); MAP12 MAP45 MAP46 (secondary scale) |
@@ -30,9 +30,13 @@ is the WADs in `tools/abtest/wads/` below.
 - **myhouse**: MAP01, 20PAM
 - **Pirates!**: MAP50, MAP51, MAP57, MAP43, MAP49, MAP54, MAP58
 - **planisf2**: MAP01
-- **hexen/heretic**: picks at bring-up from the scanned maps (vanilla
-  coverage, no feature pins; the original category locks are re-categorized
-  onto myhouse + Pirates!)
+- **hexen**: MAP01 (1,770 lines / 400 sec; densest 80-teleports 80×42,
+  polyobj 1×12), MAP10 (2,030 lines / 337 sec; mixed special family), MAP27
+  (2,180 lines / 368 sec — largest of the three; 80×38, 62×9) — vanilla
+  BEHA-format coverage (pinned 2026-10-04, phase 1, from scan data)
+- **heretic**: E1M2 (1,128 lines / 247 sec; door density), E5M6 (1,975 lines
+  / 416 sec — most sectors in the WAD; plat density) — vanilla DOOM-format
+  coverage (pinned 2026-10-04, phase 1, from scan data)
 
 ## Category pins (lock resolution 2026-10-04, user: re-categorize)
 
@@ -44,9 +48,13 @@ is the WADs in `tools/abtest/wads/` below.
 - **fog** → Pirates! MAP50/51/57 (`fogdensity`)
 
 The classic-format WADs (DOOM2/HEXEN/HERETIC/STRIFE/SOS_Boom/planisf2) carry
-**no feature pins** by construction (line portals/sector_link/polyobjects need
-BEHA layout; skybox/fog/fake-contrast need MAPINFO/UMAPINFO or UDMF) —
-scanner-verified. Per-WAD feature table: ticket 09 "WAD inventory".
+**no category pins** by construction (line portals/sector_link need BEHA
+layout; skybox/fog/fake-contrast need MAPINFO/UMAPINFO or UDMF) —
+scanner-verified. Per-WAD feature table: ticket 09 "WAD inventory". One
+exception to "no polyobjects": vanilla HEXEN carries 170 polyobject lines
+(special 1 = Polyobj_StartLine, playsim/actionspecials.h:25) spread over all
+31 maps — that is format coverage for the L-line cross-check, not a category
+pin.
 
 Verification at runtime: each perflog's `L` line (portal groups, line
 portals, 3D floors, polyobjs) is cross-checked against this table and the
@@ -113,12 +121,23 @@ static scan; mismatches block the results.
 
 ## Reference machine
 
-TBD at bring-up: OS/kernel, CPU, GPU + driver, build type.
-Recorded facts from 2026-10-04 (dev box, likely the reference machine):
-Ryzen 9 5900X-class, Radeon RX 7900 XT-class, 32 GB RAM, Linux
-7.2.9-arch1-1 (arch), UZDoom build RelWithDebInfo.
+Confirmed 2026-10-04 (bring-up ran on the dev box — it IS the reference machine):
+- OS: Void Linux, kernel 7.2.9_1, Wayland session (wayland-1) — display is
+  available in-session, so the engine can be launched from the agent
+- CPU: AMD Ryzen 9 5900X, 12C/24T, max ~4.95 GHz
+- GPU: AMD Navi 31 (PCI 1002:744c, RX 7900 class), amdgpu kernel driver,
+  Mesa userspace (libvulkan_radeon)
+- RAM: 31 GiB
+- Build: RelWithDebInfo (this tree)
 
-## gl_backend values
+## Backend cvar (resolved 2026-10-04, from source)
 
-TBD at bring-up: the exact `gl_backend` cvar values for GL 3.3 core and
-Vulkan (confirm with `stat`/console at first launch).
+The cvar is **`vid_preferbackend`** (v_video.cpp:85) — NOT `gl_backend`
+(that name does not exist anywhere in `src/`):
+
+- `0` = OpenGL 3.3 (`BACKEND_OPENGL`)
+- `1` = Vulkan (`BACKEND_VULKAN`)
+
+Enum at v_video.h:70-73; the cvar handler prints "Selecting Vulkan
+backend..." / "Selecting OpenGL backend...". Switching backends requires a
+fresh launch (all perf runs are fresh launches anyway).
