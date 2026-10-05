@@ -1,7 +1,7 @@
 # Classic-path baseline profile on acceptance maps
 
 Type: task
-Status: open
+Status: claimed
 Blocked by: 09
 
 ## Question

@@ -46,6 +46,7 @@ extern int vertexcount, flatvertices, flatprimitives;
 void ResetProfilingData();
 void CheckBench();
 void  checkBenchActive();
+void PerfLogUpdate();
 
 extern int doBench;
 

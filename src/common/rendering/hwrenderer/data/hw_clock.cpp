@@ -29,6 +29,8 @@
 #include "i_time.h"
 #include "i_interface.h"
 #include "printf.h"
+#include "doomstat.h"
+#include "g_levellocals.h"
 
 glcycle_t RenderWall,SetupWall,ClipWall;
 glcycle_t RenderFlat,SetupFlat;
@@ -207,4 +209,122 @@ int doBench = 0;
 void  checkBenchActive()
 {
 	glcycle_t::active = (doBench || printstats);
+}
+
+//==========================================================================
+//
+// Per-frame performance log (r_perflog)
+//
+// Exposes the per-frame profiling timers above to a file: one line per
+// frame plus one summary line per loaded level. Used by the levelmesh
+// verification tooling (tools/abtest) to collect the classic baseline and
+// the later levelmesh comparison runs. Enable with: r_perflog <path>
+// Disable by setting it back to "". The file is flushed per frame so the
+// data survives the I_FatalError exit that ends a timedemo.
+//
+//==========================================================================
+
+CVAR(String, r_perflog, "", CVAR_NOSAVE)
+
+extern cycle_t FrameCycles;
+
+static FILE *PerfLogFile = nullptr;
+static FString PerfLogOpenPath;
+static FLevelLocals *PerfLogLevel = nullptr;
+static uint64_t PerfLogFrame = 0;
+
+static void PerfLogHeader(FILE *f)
+{
+	fprintf(f, "# r_perflog v1\n");
+	fprintf(f, "# F <frame> tic=<gametic> total=<D_Display ms> r=<RenderView window ms> "
+		"bsp=<traversal ms, incl clip> clip=<wall clip ms> wr=<wall render ms> ws=<wall setup ms> "
+		"fr=<flat render ms> fs=<flat setup ms> sr=<sprite render ms> ss=<sprite setup ms> "
+		"2d=<2D ms> f3d=<3D flush ms> fin=<finish/present ms> pg=<portal ms> pr=<job processing ms> "
+		"dcms=<drawcall submission ms> wl=<wall count> wsp=<wall vertex splits> wv=<wall vertices> "
+		"fl=<flat count> fp=<flat primitives> fv=<flat vertices> sp=<sprite count> "
+		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count>\n");
+	fprintf(f, "# L map=<name> sectors=<n> lines=<n> subsectors=<n> sprites=<n> polyobjs=<n> "
+		"lineportals=<n> portalgroups=<n> ffloors=<n>\n");
+}
+
+static void PerfLogClose()
+{
+	if (PerfLogFile != nullptr)
+	{
+		fclose(PerfLogFile);
+		PerfLogFile = nullptr;
+		doBench--;
+	}
+}
+
+static void PerfLogWriteLevel(FLevelLocals *Level)
+{
+	int ffloors = 0;
+	for (auto &sec : Level->sectors)
+	{
+		ffloors += sec.e->XFloor.ffloors.Size();
+	}
+	int sprites = 0;
+	for (auto &sub : Level->subsectors)
+	{
+		sprites += sub.sprites.Size();
+	}
+	fprintf(PerfLogFile, "L map=%s sectors=%d lines=%d subsectors=%d sprites=%d polyobjs=%d "
+		"lineportals=%d portalgroups=%d ffloors=%d\n",
+		Level->MapName.GetChars(), Level->sectors.Size(), Level->lines.Size(),
+		Level->subsectors.Size(), sprites, Level->Polyobjects.Size(),
+		Level->linePortals.Size(), Level->portalGroups.Size(), ffloors);
+}
+
+void PerfLogUpdate()
+{
+	// Sync the open file with the cvar (set / changed / cleared).
+	const char *want = r_perflog;
+	if (PerfLogFile == nullptr)
+	{
+		if (want[0] == 0)
+		{
+			return;
+		}
+		PerfLogFile = fopen(want, "wt");
+		if (PerfLogFile == nullptr)
+		{
+			Printf("r_perflog: cannot open '%s' for writing\n", want);
+			r_perflog = "";
+			return;
+		}
+		PerfLogOpenPath = FString(want);
+		PerfLogLevel = nullptr;
+		PerfLogFrame = 0;
+		doBench++;
+		PerfLogHeader(PerfLogFile);
+	}
+	else if (strcmp(want, PerfLogOpenPath.GetChars()) != 0)
+	{
+		PerfLogClose();
+		PerfLogUpdate();
+		return;
+	}
+
+	FLevelLocals *Level = primaryLevel;
+	if (Level == nullptr)
+	{
+		return;
+	}
+	if (Level != PerfLogLevel)
+	{
+		PerfLogLevel = Level;
+		PerfLogWriteLevel(Level);
+	}
+	fprintf(PerfLogFile, "F %llu tic=%d total=%.3f r=%.3f bsp=%.3f clip=%.3f wr=%.3f ws=%.3f "
+		"fr=%.3f fs=%.3f sr=%.3f ss=%.3f 2d=%.3f f3d=%.3f fin=%.3f pg=%.3f pr=%.3f dcms=%.3f "
+		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d\n",
+		(unsigned long long)PerfLogFrame++, gametic, FrameCycles.TimeMS(), All.TimeMS(),
+		Bsp.TimeMS(), ClipWall.TimeMS(), RenderWall.TimeMS(), SetupWall.TimeMS(),
+		RenderFlat.TimeMS(), SetupFlat.TimeMS(), RenderSprite.TimeMS(), SetupSprite.TimeMS(),
+		twoD.TimeMS(), Flush3D.TimeMS(), Finish.TimeMS(), PortalAll.TimeMS(),
+		ProcessAll.TimeMS(), drawcalls.TimeMS(), rendered_lines, render_vertexsplit,
+		vertexcount, rendered_flats, flatprimitives, flatvertices, rendered_sprites,
+		rendered_decals, rendered_portals, rendered_commandbuffers);
+	fflush(PerfLogFile);
 }
