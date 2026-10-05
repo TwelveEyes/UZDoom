@@ -29,6 +29,8 @@ R1:
    emulated from the driver.
 2. **WADs**: `SOS_Boom` (the slaughter-scale map) + **the full set** (DOOM II, Hexen, Heretic, classic
    ports — TNT/Ritual/Rampage/Spectre class). `doom1.wad` (shareware) is the vanilla baseline regardless.
+   **Amended 2026-10-04 (user)**: the classic-ports row and `doom1.wad` are dropped from the matrix;
+   the acceptance set is the WADs actually present in `tools/abtest/wads/`.
 3. **Tolerance**: **zero tolerance outside a frozen per-map known-diff allowlist** — recorded at first
    bring-up, human-reviewed (only z-fighting clusters are allowlisted; real bugs get fixed), committed to
    the repo, frozen (any NEW diff fails), shrink-only.
@@ -69,20 +71,16 @@ R3:
 
 ### Acceptance map list
 
-WADs (availability user-confirmed 2026-10-04) and the map sets:
+WADs (availability user-confirmed 2026-10-04; classic-ports row + doom1 dropped 2026-10-04, user
+decision) and the map sets:
 
-- **doom1.wad** (shareware baseline): E1M2 (3D floors + doors/lifts), E1M8 (dense small), E2M2 (door
-  density), E3M7 (geometry density, sky), E4M1 (scale + door density).
 - **doom2.wad**: MAP01 (baseline), MAP07 (3D floors + lift), MAP21 (killfloor scale + 3D floors), MAP23
   (light thinkers), MAP27 (fog), MAP30 (3D floors + scale), MAP31 (dense scale).
 - **hexen.wad**: 2–3 maps covering vanilla BEHA-format specials (teleport lines 80, lifts, sector
   special bits). **No feature pins** — scanner-verified: zero line portals, sector_links, 3D floors,
-  skyboxes, fog, fake contrast. (Original category lock re-categorized 2026-10-05, user decision.)
+  skyboxes, fog, fake contrast. (Original category lock re-categorized 2026-10-04, user decision.)
 - **heretic.wad**: 1–2 maps, vanilla DOOM-format coverage (door/lift density, sector specials).
   **No feature pins** — scanner-verified: zero features.
-- **Classic ports** (TNT.EXE, Ritual, Rampage, Spectre class): 1–2 maps per port chosen for 3D-floor
-  density and MAPINFO coverage; Spectre = fake-contrast reference (`forcefakecontrast` in its
-  MAPINFO). **No portal pins** — line portals are BEHA/UDMF-only. Manifest-pinned at bring-up.
 - **myhouse.pk3** (user-provided; UDMF, ns=zdoom): **MAP01** — portals (508, incl. 98×
   Sector_SetPortal), 3D floors (1065), polyobjects (1693), plane equations (960), smoothlighting,
   fake contrast (4804 nofakecontrast sides), **skybox** (5 TID-less SkyViewpoints + 50 SkyPickers);
@@ -98,7 +96,7 @@ WADs (availability user-confirmed 2026-10-04) and the map sets:
 - **planisf2.wad**: single map, 37,265 lines / 6,287 sectors / 32,162 vertices; DOOM format + xlat,
   no MAPINFO. Scale + geometry coverage, no feature pins.
 
-#### WAD inventory — scanner-verified (2026-10-05)
+#### WAD inventory — scanner-verified (2026-10-04)
 
 Scanner: `tools/abtest/scan_maps.py` (source-verified model: BEHA gating + xlat DOOM-format numbers,
 UDMF 0-based args, UDMF namespace semantics — raw number space only for zdoom/dsda/eternity/vavoom/
@@ -127,11 +125,13 @@ never maps 57).
 | Pirates!.wad | 19 | beha16 | 3D floors near all maps (605 lines), polyobjects, **fogdensity MAP50/51/57**, **skybox viewpoints MAP50×3 + MAP58×2** |
 | myhouse.pk3 (user-provided; 14 nested WADs) | 2 live blocks, UDMF ns=zdoom | udmf | **MAP01**: 165,922 lines; 508 portals (incl. 98×57), 1065×3D floors, 1693×polyobjects, 960 plane equations, 1884×Plane_Align, 146 smoothlighting, 4804 nofakecontrast sides, **skybox: 5 SkyViewpoints (all TID-less → default skybox) + 50 SkyPickers**; **20PAM**: 60×156 portals, **7×sector_link(107)**, 42 nofakecontrast sides, 7×3D floors. MAPINFO uses `adddefaultmap` + HUSTR names (MAP02–MAP30 defined but absent from the archive — dead entries). |
 
-**Lock resolution (2026-10-05, user: re-categorize):** of the five original hexen category locks,
+**Lock resolution (2026-10-04, user: re-categorize):** of the five original hexen category locks,
 four (portals, sector_link, skybox, fake contrast) are pinned onto **myhouse.pk3** (MAP01 + 20PAM);
 **fog** is pinned onto **Pirates! MAP50/51/57**. Vanilla hexen.wad carries none of the five by
 construction and stays in the matrix as BEHA-format coverage with no feature pins (same for
-heretic.wad; classic ports lose portal pins, keep 3D-floor + Spectre fake-contrast).
+heretic.wad). The classic-ports row (TNT/Ritual/Rampage/Spectre) and doom1.wad were then dropped
+from the matrix entirely (2026-10-04, user); the acceptance set is the WADs in
+`tools/abtest/wads/`.
 
 ### A/B tool: engine capture mode
 
@@ -208,24 +208,30 @@ with that declaration.
 ### Soak checklist (human-driven, levelmesh on, ~half a day)
 
 1. Full DOOM II campaign, Normal.
-2. Full Hexen campaign (portals, sector_link, skybox, fog, fake contrast).
+2. Full Hexen campaign (vanilla BEHA coverage; the feature categories are carried by the myhouse
+   + Pirates! maps, items 4–5).
 3. Heretic E1.
-4. Ritual + Rampage tours, 10+ min each (3D-floor + portal density).
+4. myhouse MAP01 + 20PAM tours, 10+ min each (portals + 3D floors + sector_link + skybox).
 5. SOS_Boom MAP32: 15-min fast-camera fly (scale + sector-state upload budget); portal load is
    carried by myhouse MAP01 in the matrix (SOS_Boom has no portals).
 6. Scripted save/load + automap fog + secret-gating walk — ticket 11's acceptance items (flag array /
    savegame diff, automap screenshot A/B, secret gating, dither + decay + cap-20, cullcolor,
    save/restore round trip, radar/ortho behavior).
 7. 15-min deathmatch on a portal map (dither + OOB views + exposure under stress).
-8. Light-thinker / fog / fake-contrast tour (Spectre + MAP27 + an animated-light map), 10 min.
+8. Light-thinker / fog / fake-contrast tour (myhouse MAP01 + DOOM2 MAP27 + an animated-light map),
+   10 min.
 9. Stability watch throughout: no crash, no hang, no GPU memory growth; includes one 1 h+ session.
 
 ## Provenance
 
 - Grilling rounds 1–3 (2026-10-04): D1–D12 as listed. WAD availability and `SOS_Boom` are user-stated
-  (2026-10-04); its contents are now scanner-verified (2026-10-05): 36 maps, MAP32 = 61,623 lines,
+  (2026-10-04); its contents are now scanner-verified (2026-10-04): 36 maps, MAP32 = 61,623 lines,
   no feature pins, UMAPINFO only sky/music/flow, custom 4-digit specials zeroed on load. `planisf2.wad`
   added the same day. Exact map + tick-list pinning remains at first bring-up.
+- 2026-10-04 (user): classic-ports row (TNT/Ritual/Rampage/Spectre) and doom1.wad dropped from the
+  matrix (files not on hand; doom2 + the scanned WADs above cover scale/geometry; features are
+  pinned on myhouse.pk3 + Pirates! as in the lock resolution above). Soak items 2/4/8 retargeted.
+  `tools/abtest/manifest.md` synced to this decision.
 - Engine facts verified this session (file:line): no tick-precise capture exists — `I_GetTimeFrac()` is
   wall-clock even under `-timedemo`/`cl_capfps` (d_main.cpp:585, hw_entrypoint.cpp:319, r_utility.cpp:
   974-975); the `screenshot` command runs only from the delayed-command queue (startup, pre-level-load);
