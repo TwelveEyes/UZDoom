@@ -6,146 +6,102 @@ Matrix: maps × {demo replay, static tick lists} × {gl33, vulkan} ×
 This file tracks the pins; `scan_maps.py` output and the user's approval
 fill the TBD sections during bring-up.
 
+Scope note (2026-10-04, user): the classic-ports row (TNT/Ritual/Rampage/
+Spectre) and doom1.wad are **dropped** from the matrix; the acceptance set
+is the WADs in `tools/abtest/wads/` below.
+
 ## WAD set (drop into `build/wads/`)
 
-| slot | file (TBD at bring-up) | maps used |
+| slot | file | maps used |
 |---|---|---|
-| doom1 | `doom1.wad` (registered, for E3/E4) | E1M2 E1M8 E2M2 E3M7 E4M1 |
-| doom2 | `doom2.wad` | MAP01 MAP07 MAP21 MAP23 MAP27 MAP30 MAP31 |
-| hexen | `hexen.wad` (vanilla, verified: no required features) + a feature-rich WAD (TBD, user-supplied) | TBD (category-locked, see findings) |
-| heretic | `heretic.wad` | TBD |
-| tnt | `tnt.wad` | TBD |
-| ritual | `ritual.wad` | TBD |
-| rampage | `rampage.wad` | TBD |
-| spectre | `spectre.wad` | TBD (fake-contrast reference) |
-| sos_booM | user-named WAD (TBD at bring-up) | the slaughter-scale map (TBD) |
+| doom2 | `DOOM2.WAD` | MAP01 MAP07 MAP21 MAP23 MAP27 MAP30 MAP31 |
+| hexen | `HEXEN.WAD` (vanilla; scanner-verified: no feature pins) | 2–3 maps, TBD at bring-up (vanilla BEHA coverage) |
+| heretic | `HERETIC.WAD` (vanilla; scanner-verified: no feature pins) | 1–2 maps, TBD at bring-up |
+| myhouse | `myhouse.pk3` (user-provided; UDMF ns=zdoom; 14 nested WADs, 2 live blocks) | MAP01 20PAM |
+| pirates | `Pirates!.wad` (BEHA + ZMAPINFO) | MAP50 MAP51 MAP57 (fog); MAP43 MAP49 MAP54 MAP58 (polyobjects + 3D floors) |
+| sos_boom | `SOS_Boom.wad` (user-provided; Summer of Slaughter by TH1RT3EN) | MAP32 (slaughter pin); MAP12 MAP45 MAP46 (secondary scale) |
+| planisf | `planisf2.wad` (user-provided; 1 map) | MAP01 (37,265 lines) |
+| strife (extra) | `STRIFE1.WAD` | not in the matrix — smoke/format coverage only |
 
 ## Fixed maps (locked by ticket 09)
 
-- **doom1**: E1M2, E1M8, E2M2, E3M7, E4M1
 - **doom2**: MAP01, MAP07, MAP21, MAP23, MAP27, MAP30, MAP31
-- **SOS_Boom**: one slaughter-scale map — name pinned at bring-up.
+- **SOS_Boom**: MAP32 (61,623 lines / 9,907 sectors / 76,458 verts) + MAP12/45/46 secondary
+- **myhouse**: MAP01, 20PAM
+- **Pirates!**: MAP50, MAP51, MAP57, MAP43, MAP49, MAP54, MAP58
+- **planisf2**: MAP01
+- **hexen/heretic**: picks at bring-up from the scanned maps (vanilla
+  coverage, no feature pins; the original category locks are re-categorized
+  onto myhouse + Pirates!)
 
-## Category-locked pins (verify-first: scan → propose → approve)
+## Category pins (lock resolution 2026-10-04, user: re-categorize)
 
-- **hexen** (4–6 maps): ≥ 2 line portals (BEHA specials 156/301), 1
-  sector_link (BEHA special 107/51), 1 skybox, 1 fog (MAPINFO
-  `fogdensity`), 1 fake contrast (MAPINFO `forcefakecontrast`).
-  **BLOCKED** — verified across every WAD on hand (scan v3, 2026-10-04):
-  none has line portals, sector_link, a 3D skybox, or `forcefakecontrast`.
-  The only locked feature present anywhere is **fog → Pirates! MAP50/51/57**
-  (a DOOM-family PWAD, not a hexen WAD — usable only if the user approves
-  re-categorizing or designating Pirates! as the feature WAD). All five
-  features require ZDoom format (BEHA layout and/or MAPINFO), so the pinning
-  WAD must be ZDoom-format; classic as-distributed WADs cannot carry them
-  (see Findings).
-- **heretic** (1–2): skybox variant, portals — **impossible in classic
-  HERETIC** (DOOM-format, no MAPI; specials translated via xlat/heretic.txt).
-  The pin must come from a user-supplied WAD.
-- **tnt** (1–2): 3D-floor density (achievable — classic WADs carry 3D floors
-  via the xlat/base.txt numbers), portals (impossible in a classic WAD —
-  see-through portals are Hexen-format-only). (file not yet on hand)
-- **ritual** (1–2): 3D-floor density (achievable), fake contrast (requires
-  MAPINFO — impossible in the as-distributed WAD). (file not on hand)
-- **rampage** (1–2): portals (impossible in a classic WAD), fake contrast
-  (requires MAPINFO). (file not yet on hand)
-- **spectre** (1–2): fake contrast (reference implementation).
-  (file not yet on hand — spectre is the fake-contrast reference, so this
-  file is a hard requirement, not just a pin; if it is the as-distributed
-  classic WAD it carries no MAPINFO and cannot demonstrate
-  `forcefakecontrast` — the reference then has to come from the
-  user-supplied ZDoom-format WAD)
-- **Consequence for the ticket-09 category locks**: the *portals* category
-  on rampage and *fake contrast* on ritual/rampage/spectre (and *skybox*
-  + *portals* on heretic) cannot be satisfied by classic as-distributed
-  WADs by construction. Flagged for re-confirmation at pin approval.
+- **portals** → myhouse MAP01 (508, incl. 98× Sector_SetPortal) + 20PAM (60× Line_SetPortal)
+- **sector_link** → myhouse 20PAM (7× special 107)
+- **skybox** → myhouse MAP01 (5× TID-less SkyViewpoint = default skybox + 50 SkyPickers);
+  Pirates! MAP50/58 also carry SkyViewpoints
+- **fake contrast** → myhouse MAP01 (4804 nofakecontrast sides) + 20PAM (42)
+- **fog** → Pirates! MAP50/51/57 (`fogdensity`)
+
+The classic-format WADs (DOOM2/HEXEN/HERETIC/STRIFE/SOS_Boom/planisf2) carry
+**no feature pins** by construction (line portals/sector_link/polyobjects need
+BEHA layout; skybox/fog/fake-contrast need MAPINFO/UMAPINFO or UDMF) —
+scanner-verified. Per-WAD feature table: ticket 09 "WAD inventory".
 
 Verification at runtime: each perflog's `L` line (portal groups, line
 portals, 3D floors, polyobjs) is cross-checked against this table and the
 static scan; mismatches block the results.
 
-## Findings (2026-10-04, `scan_maps.py` validated against engine + real WADs)
+## Findings (2026-10-04, `scan_maps.py` v7, validated against engine + real WADs)
 
-- `scan_maps.py` v4 is engine-verified, not heuristic:
-  - WAD header 12 B; dir entry 16 B = `pos u32, size u32, name[8]` —
-    **names are the full up-to-8 chars** (e.g. `BEHAVIOR`, `LINEDEFS`,
-    `MAP45`, `MAPINFO`); earlier "4-char truncated" notes were wrong.
-    Magic `IWAD`/`WAD\x1a`/`PWAD`. Maps = marker lump (full `MAP\d+` or
-    `E#M#`) + generic lumps, ending at `ENDMAP` if present.
-  - Linedef layout is chosen **per map block exactly like the engine**
-    (`p_openmap.cpp` `P_OpenMapData`): a lump whose name starts with
-    `BEHA` (the check is `strnicmp(name,"BEHA",4)`; the actual name is
-    `BEHAVIOR`) in the block → `maplinedef2_t` 16 B (special `u8@6`,
-    sides @12/14), else `maplinedef_t` 14 B (special `u16@6`, sides
-    @10/12). Validated 100% clean (0 bad vertex/side refs) over all 176
-    blocks of the six WADs on hand (DOOM2 32×14B, HEXEN 31×16B, HERETIC
-    48×14B, STRIFE 34×14B, Pirates! 19×16B, antarc 12×UDMF).
-  - **UDMF**: `TEXTMAP` in the block → UDMF inventory (object counts, line
-    specials, sector-special bits, floor/ceiling plane equations,
-    `portal_*` sector props, `smoothlighting`, `nofakecontrast`).
-    Namespace matters: zdoom/hexen/mbf/boom/(default) = modern number
-    space; classic = xlat numbers. `MAP03` appears twice in antarc —
-    flagged; the engine loads the first occurrence (`CheckNumForName` is
-    a first-match lookup).
-  - MAPINFO: first `MAPINFO` else `ZMAPINFO` lump; new syntax
-    (`map MAP41 "title"`, `defaultmap {}`) and old syntax (`map <N> {}`,
-    N = position in the WAD's map list) both parse; `defaultmap` keywords
-    apply to every map.
-  - Map names are the full marker names (no reconstruction),
-    cross-checked against the MAPINFO section names when present.
-  - **Feature signals are line specials + MAPINFO keywords only.** UZDoom
-    has no `FF*` (3D-floor) or `POLYOBJ` lump readers anywhere in `src/`
-    (verified by grep). Special numbers are format-dependent (see below):
-    BEHA maps — 3D floors 160/50, polyobjects 1–9/59/86–93/283, portals
-    156/301/57, sector_link 107/51 (`playsim/actionspecials.h`); DOOM
-    format — 3D floors 281/289/300–306/332/400–417 (`xlat/base.txt`).
-- **How line specials are interpreted** (verified in source 2026-10-04;
-  `MapLoader::LoadLevel` maploader.cpp:2928+, `FLevelLocals::TranslateLineDef`
-  gamedata/p_xlat.cpp, `wadsrc/static/xlat/*`, FARG(xlat) d_main.cpp:248):
-  - BEHA/BEHAVIOR lump in the map block → MAPTYPE_HEXEN, **no translator**:
-    raw special numbers are the ZDoom/Hexen numbers.
-  - No BEHA → MAPTYPE_DOOM, raw specials are **classic numbers run through
-    the game's xlat translator** (doom.txt: Doom/Chex/Urban Brawl/Harmony;
-    heretic.txt: Heretic — Hexen needs none since it's BEHA; strife.txt:
-    Strife). Unmapped specials are **zeroed, never passed through**.
-    So the same raw number means different things per format (301 =
-    Line_QuickPortal in BEHA but Sector_Set3DFloor in DOOM format; Heretic
-    107 = Stairs_BuildUpDoom, not Line_SetPortalTarget — the “portals” in
-    Heretic/Hexen gameplay are classic teleport-style lines, not see-through
-    portals). STRIFE is NOT a distinct format: no BEHA in STRIFE1.WAD → it
-    loads as DOOM format with the strife.txt translator.
-  - Consequence: line portals, sector_link and polyobjects can exist **only
-    in BEHA maps**; 3D floors in both formats; skybox/fog/fake-contrast
-    require MAPINFO, which no as-distributed classic WAD has. The scanner
-    reports n/a for feature columns it cannot interpret per format.
-- **Feature status of the WADs on hand** (scan v3, 2026-10-04):
-  - HEXEN (31 maps, all BEHA): MAPI sky1/sky2(/3) keywords only — classic
-    sky *texture designators*, not a 3D skybox. No line portals, no
-    sector_link, no 3D floors, no polyobjects, no fog, no fakecontrast.
-  - Pirates! (19 maps, all BEHA, ZMAPINFO): 3D floors (160/50) in all 19
-    maps (605 lines), polyobjects in many, `fogdensity` in MAP50/51/57,
-    `sky1` in all maps. No line portals, no sector_link, no fakecontrast.
-  - DOOM2 (32), HERETIC (48 = 27 + 21 dev), STRIFE (34 = 22 + 12 dev):
-    all DOOM-format (no BEHA, no MAPI) → cannot carry line portals,
-    sector_link, polyobjects, skybox, fog or fake-contrast; also zero
-    3D-floor hits via the base.txt numbers. The earlier scan-v2
-    “findings” (STRIFE “2 line portals”, HERETIC E3M8/DOOM2 MAP31
-    “sector_link”, STRIFE 3D-floors/polyobjects) were misreads of classic
-    specials and are **retracted**.
-  - antarc (11 live UDMF maps, `namespace = "zdoom"` → modern number
-    space, + 1 trailing duplicate MAP03 block = dead data): zero pinned
-    features — no line portals, no sector_link, no 3D floors, no
-    polyobjects, no plane equations, no `nofakecontrast`; MAPINFO only
-    has classic `sky1`/`sky2` designators. Usable as a plain UDMF smoke
-    map, not as a feature WAD.
-- **Still missing for the locked pins: line portals (≥2), sector_link, a 3D
-  skybox, and `forcefakecontrast`** — absent from every WAD on hand and
-  unreachable in classic as-distributed WADs by construction. They must
-  come from user-supplied **ZDoom-format (BEHA + MAPINFO)** WADs (decision
-  2026-10-04 held; see the category-lock consequence above). When they
-  arrive, run `scan_maps.py` first; it flags blocks that fail the BEHA
-  rule (size non-divisible / bad refs) and duplicate map names.
-- DOOM2 verified: 32 contiguous maps (MAP01–32).
+- WAD header 12 B; dir entry 16 B = `pos u32, size u32, name[8]` — **names
+  are the full up-to-8 chars** (e.g. `BEHAVIOR`, `LINEDEFS`, `MAP45`);
+  magics `IWAD`/`WAD\x1a`/`PWAD`. A map block = marker lump (full `MAP\d+`
+  or `E#M#`; UDMF custom names via a zero-size lump immediately before a
+  TEXTMAP) + map-data lumps, ending at `ENDMAP` if present. Phantom markers
+  (no map data) are dropped; duplicate map names are flagged — the engine
+  loads the first occurrence (`CheckNumForName` first-match).
+- PK3 = zip; the engine auto-mounts nested `.wad`/`.pk3` entries (mount
+  order = entry order), so the scanner recurses into them. myhouse.pk3:
+  14 nested WADs, 2 live map blocks (MAP01, 20PAM).
+- Linedef layout is chosen **per map block exactly like the engine**
+  (`p_openmap.cpp` `P_OpenMapData`): a lump whose name starts with `BEHA`
+  (the actual name is `BEHAVIOR`) → `maplinedef2_t` 16 B (special `u8@6`,
+  sides @12/14); else `maplinedef_t` 14 B (special `u16@6`, sides @10/12).
+- **UDMF namespace semantics (udmf.cpp:2492-2560)**: the raw number space
+  is `zdoom/dsda/eternity/vavoom/hexen` only; everything else
+  (`doom`/`heretic`/`strife`, `zdoom_translated`, unknown or missing,
+  **including `boom`/`mbf`/`hexen1`**) falls back to the game's base
+  namespace and IS xlat-translated (in a Doom-family game that is the
+  classic DOOM number space). Label dicts are dual: BEHA names vs xlat
+  names, selected per map's effective namespace (xlat names verified
+  against `wadsrc/static/xlat/base.txt` — e.g. 1 = Door_Raise, 181 =
+  Plat_PerpetualRaiseLip in the DOOM space).
+- MAPINFO/ZMAPINFO/UMAPINFO: the first `MAPINFO` else `ZMAPINFO` else
+  `UMAPINFO` lump of every mounted file is parsed (g_mapinfo.cpp:2764);
+  sections merge in mount order, later map sections win per name,
+  `defaultmap` REPLACES the defaults, `adddefaultmap` ADDS to them.
+  Feature keywords include `skytexture` (UMAPINFO sky key → SkyPic1,
+  umapinfo.cpp:215), `fogdensity`, `outsidefogdensity`,
+  `forcefakecontrast`.
+- Line specials are format-dependent (engine-verified): BEHA maps — no
+  translator, raw numbers are the ZDoom/Hexen numbers (3D floors 160/50,
+  polyobjects 1–9/59/86–93/283, portals 156/301/57, sector_link 107/51);
+  DOOM format — raw numbers run through the game's xlat translator
+  (`xlat/base.txt`; 3D floors 281/289/300–306/332/400–417). Specials
+  outside the table are **zeroed on load** (p_xlat.cpp:123-126) — SOS_Boom's
+  custom 4-digit specials (12184–25688, packed `K*1024+offset`) are all
+  of that kind. STRIFE has no BEHA → loads as DOOM format with the
+  strife.txt translator.
+- **Skybox signal** (wadsrc/.../actors/shared/skies.zs + `SpawnSkybox`):
+  SkyViewpoint (9080; ZDoom 4434) **with no TID becomes the default 3D
+  skybox**; SkyPicker (9081/4435) references one by TID; EE-style skybox =
+  SkyCamCompat (9082/4436) + a `Sector_SetPortal` (57) line with
+  `args[1]==2` in its sector. Binary skybox requires BEHA layout (the xlat
+  never maps 57).
+- UZDoom has no `FF*` (3D-floor) or `POLYOBJ` lump readers anywhere in
+  `src/` (verified by grep) — 3D floors/polyobjects exist only via line
+  specials.
 
 ## Resolutions
 
