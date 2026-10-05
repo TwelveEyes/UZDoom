@@ -1,0 +1,8 @@
+# Per-run outputs: perf logs (tens of MB per full matrix) and the demo
+# recording save dirs. Demos (.lmp), manifests, scripts, and results stay
+# committed.
+/logs/
+/runs/
+# Game assets (commercial IWADs / user mods) are never committed.
+/wads/
+__pycache__/

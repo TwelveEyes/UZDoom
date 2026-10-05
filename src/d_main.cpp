@@ -1505,6 +1505,7 @@ void D_Display ()
 	}
 	cycles.Unclock();
 	FrameCycles = cycles;
+	PerfLogUpdate();
 }
 
 //==========================================================================
