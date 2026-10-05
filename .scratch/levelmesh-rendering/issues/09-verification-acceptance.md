@@ -75,14 +75,63 @@ WADs (availability user-confirmed 2026-10-04) and the map sets:
   density), E3M7 (geometry density, sky), E4M1 (scale + door density).
 - **doom2.wad**: MAP01 (baseline), MAP07 (3D floors + lift), MAP21 (killfloor scale + 3D floors), MAP23
   (light thinkers), MAP27 (fog), MAP30 (3D floors + scale), MAP31 (dense scale).
-- **hexen.wad**: 4–6 hand-picked maps covering at least: 2 line-portal maps, 1 sector_link map, 1 skybox
-  map, 1 fog map, 1 fake-contrast map. (Category-locked; exact map numbers pinned in the committed
-  manifest at first bring-up and reviewed then.)
-- **heretic.wad**: 1–2 maps (skybox variant, portals).
+- **hexen.wad**: 2–3 maps covering vanilla BEHA-format specials (teleport lines 80, lifts, sector
+  special bits). **No feature pins** — scanner-verified: zero line portals, sector_links, 3D floors,
+  skyboxes, fog, fake contrast. (Original category lock re-categorized 2026-10-05, user decision.)
+- **heretic.wad**: 1–2 maps, vanilla DOOM-format coverage (door/lift density, sector specials).
+  **No feature pins** — scanner-verified: zero features.
 - **Classic ports** (TNT.EXE, Ritual, Rampage, Spectre class): 1–2 maps per port chosen for 3D-floor
-  density, portals, fake contrast (Spectre is the fake-contrast reference). Manifest-pinned at bring-up.
-- **SOS_Boom**: the slaughter-scale map (the 200k-line class from ticket 04). 1 map; the scale payoff
-  bar (decision 10) applies to it.
+  density and MAPINFO coverage; Spectre = fake-contrast reference (`forcefakecontrast` in its
+  MAPINFO). **No portal pins** — line portals are BEHA/UDMF-only. Manifest-pinned at bring-up.
+- **myhouse.pk3** (user-provided; UDMF, ns=zdoom): **MAP01** — portals (508, incl. 98×
+  Sector_SetPortal), 3D floors (1065), polyobjects (1693), plane equations (960), smoothlighting,
+  fake contrast (4804 nofakecontrast sides), **skybox** (5 TID-less SkyViewpoints + 50 SkyPickers);
+  **20PAM** — portal pairs (60×156), **sector_link (7×107)**, fake contrast, 3D floors. Covers
+  four of the five original hexen categories in one archive.
+- **Pirates!.wad** (BEHA): **MAP50/51/57** — `fogdensity` + 3D floors; MAP43/49/54/58 —
+  polyobjects + 3D floors (MAP50/58 also carry SkyViewpoints). Covers the remaining category (fog).
+- **SOS_Boom.wad** (Summer of Slaughter by TH1RT3EN; 36 maps, DOOM format + xlat, UMAPINFO):
+  **MAP32** — slaughter scale (61,623 lines / 9,907 sectors / 76,458 vertices); MAP12 (19,529),
+  MAP45 (19,005), MAP46 (14,659) as secondary scale entries. The scale payoff bar (decision 10)
+  applies to MAP32. No feature pins — scanner-verified: zero portals/link/skybox/fog/fake-contrast;
+  UMAPINFO carries only sky textures (MAP04/46), music, and map flow (incl. MAP15→43 secret exit).
+- **planisf2.wad**: single map, 37,265 lines / 6,287 sectors / 32,162 vertices; DOOM format + xlat,
+  no MAPINFO. Scale + geometry coverage, no feature pins.
+
+#### WAD inventory — scanner-verified (2026-10-05)
+
+Scanner: `tools/abtest/scan_maps.py` (source-verified model: BEHA gating + xlat DOOM-format numbers,
+UDMF 0-based args, UDMF namespace semantics — raw number space only for zdoom/dsda/eternity/vavoom/
+hexen, everything else incl. boom/mbf/missing is xlat-translated (udmf.cpp:2492-2560), dual
+special-number label space (BEHA vs xlat names), 8-char full lump names, ENDMAP terminators,
+phantom-marker rejection, duplicate-map first-wins flagging, PK3/nested-WAD mounting, UMAPINFO/
+ZMAPINFO with engine per-WAD priority MAPINFO>ZMAPINFO>UMAPINFO (g_mapinfo.cpp:2764), `skytexture`
+UMAPINFO sky key (umapinfo.cpp:215 → SkyPic1)). Feature columns: `port` (57/156/301),
+`link` (107/51), `3df`, `poly`, `plane` (full floor/ceiling plane equations), `sky` (skybox), `smth`
+(smoothlighting), `fakec` (nofakecontrast sides, UDMF-only).
+
+Verified signal for `sky` (UZDoom `wadsrc/static/zscript/actors/shared/skies.zs` + `SpawnSkybox` in
+`maploader/specials.cpp`): SkyViewpoint thing (9080; ZDoom 4434) **with no TID becomes the default 3D
+skybox**; SkyPicker (9081/4435) references one by TID; EE-style skybox = SkyCamCompat (9082/4436) + a
+`Sector_SetPortal` (57) line with `arg1==2` in its sector. Binary skybox requires BEHA layout (the xlat
+never maps 57).
+
+| WAD | maps | layout | features verified |
+| --- | --- | --- | --- |
+| DOOM2.WAD | 32 | doom14 | none (vanilla, as expected) |
+| HEXEN.WAD | 31 | beha16 | **zero** portals/link/3df/poly… classic specials only (80× teleports); MAPINFO has only classic sky1/2/3 designators — **cannot satisfy the hexen category locks** |
+| HERETIC.WAD | 48 (27+21 dev) | doom14 | none |
+| STRIFE1.WAD | 34 (22+12 dev) | doom14 (no BEHA → DOOM format + xlat) | none |
+| SOS_Boom.wad (user-provided) | 36 | doom14 (UMAPINFO, 36 sections) | **none of the five** (zero portals/link/sky/fog/fakec); slaughter scale: **MAP32 = 61,623 lines / 9,907 sectors / 76,458 verts** (MAP12 19,529, MAP45 19,005, MAP46 14,659 lines); UMAPINFO: `skytexture` MAP04/46, music, secret flow (MAP15→43); 4-digit specials (12184–25688, packed `K*1024+off`) are custom — outside the xlat table → **zeroed on load** |
+| planisf2.wad (user-provided) | 1 | doom14 | none; 37,265 lines / 6,287 sectors / 32,162 verts |
+| Pirates!.wad | 19 | beha16 | 3D floors near all maps (605 lines), polyobjects, **fogdensity MAP50/51/57**, **skybox viewpoints MAP50×3 + MAP58×2** |
+| myhouse.pk3 (user-provided; 14 nested WADs) | 2 live blocks, UDMF ns=zdoom | udmf | **MAP01**: 165,922 lines; 508 portals (incl. 98×57), 1065×3D floors, 1693×polyobjects, 960 plane equations, 1884×Plane_Align, 146 smoothlighting, 4804 nofakecontrast sides, **skybox: 5 SkyViewpoints (all TID-less → default skybox) + 50 SkyPickers**; **20PAM**: 60×156 portals, **7×sector_link(107)**, 42 nofakecontrast sides, 7×3D floors. MAPINFO uses `adddefaultmap` + HUSTR names (MAP02–MAP30 defined but absent from the archive — dead entries). |
+
+**Lock resolution (2026-10-05, user: re-categorize):** of the five original hexen category locks,
+four (portals, sector_link, skybox, fake contrast) are pinned onto **myhouse.pk3** (MAP01 + 20PAM);
+**fog** is pinned onto **Pirates! MAP50/51/57**. Vanilla hexen.wad carries none of the five by
+construction and stays in the matrix as BEHA-format coverage with no feature pins (same for
+heretic.wad; classic ports lose portal pins, keep 3D-floor + Spectre fake-contrast).
 
 ### A/B tool: engine capture mode
 
@@ -162,7 +211,8 @@ with that declaration.
 2. Full Hexen campaign (portals, sector_link, skybox, fog, fake contrast).
 3. Heretic E1.
 4. Ritual + Rampage tours, 10+ min each (3D-floor + portal density).
-5. SOS_Boom: 15-min fast-camera fly (portal query prefetch, scale, upload budget).
+5. SOS_Boom MAP32: 15-min fast-camera fly (scale + sector-state upload budget); portal load is
+   carried by myhouse MAP01 in the matrix (SOS_Boom has no portals).
 6. Scripted save/load + automap fog + secret-gating walk — ticket 11's acceptance items (flag array /
    savegame diff, automap screenshot A/B, secret gating, dither + decay + cap-20, cullcolor,
    save/restore round trip, radar/ortho behavior).
@@ -173,8 +223,9 @@ with that declaration.
 ## Provenance
 
 - Grilling rounds 1–3 (2026-10-04): D1–D12 as listed. WAD availability and `SOS_Boom` are user-stated
-  (2026-10-04); its contents (line count, feature coverage) are to be confirmed at bring-up and
-  recorded in the manifest.
+  (2026-10-04); its contents are now scanner-verified (2026-10-05): 36 maps, MAP32 = 61,623 lines,
+  no feature pins, UMAPINFO only sky/music/flow, custom 4-digit specials zeroed on load. `planisf2.wad`
+  added the same day. Exact map + tick-list pinning remains at first bring-up.
 - Engine facts verified this session (file:line): no tick-precise capture exists — `I_GetTimeFrac()` is
   wall-clock even under `-timedemo`/`cl_capfps` (d_main.cpp:585, hw_entrypoint.cpp:319, r_utility.cpp:
   974-975); the `screenshot` command runs only from the delayed-command queue (startup, pre-level-load);
