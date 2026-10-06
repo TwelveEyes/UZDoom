@@ -101,16 +101,29 @@ grep -E '^L |F 2600|255' /tmp/smoke.log
 ### 3 — Perf runs (human; 2 backends × 3 resolutions = 6 per map)
 
 ```bash
-./uzdoom -iwad <iwadfile> -file <pwads...> -exec tools/abtest/baseline.cfg \
-    +set vid_width <W> +set vid_height <H> +set vid_preferbackend <N> \
+./uzdoom -iwad <iwadfile> [-file <pwads...>] -nomonsters \
+    -width <W> -height <H> \
+    -exec tools/abtest/baseline.cfg \
+    +set vid_preferbackend <N> \
     +set r_perflog tools/abtest/logs/<map>_<backend>_<res>.perflog \
-    +timedemo tools/abtest/demos/<map>.lmp
+    -timedemo tools/abtest/demos/<map>.lmp
 ```
 
+- Resolution is set with the **`-width`/`-height` command-line FARGs**
+  (v_video.cpp:130-141). `vid_width`/`vid_height` are **not** cvars in this
+  engine (only the `vid_defwidth`/`vid_defheight` fallback defaults exist,
+  v_video.cpp:174) — an earlier draft of this README used a non-existent
+  `+set vid_width`, which silently did nothing.
 - `<backend>`: `0` = GL 3.3 core, `1` = Vulkan. The cvar is
   `vid_preferbackend` (v_video.cpp:85; BACKEND_OPENGL=0 / BACKEND_VULKAN=1,
-  v_video.h:70). There is no `gl_backend` cvar in the engine.
+  v_video.h:70). There is no `gl_backend` cvar in the engine. The engine
+  auto-selects a backend at startup (Vulkan when available), so set the
+  cvar explicitly in every run; stdout prints "Selecting ... backend...",
+  which each run's captured output is checked against.
 - `<res>`: `1080p` (1920×1080), `320x200`, `21x9` (3440×1440).
+- `-nomonsters` on every run: the demo set is built for it (the camera path
+  is not designed around monster combat/deaths) and it keeps the render
+  workload deterministic.
 - timedemo exits with code **255** (an `I_FatalError`-style shutdown) on
   success — do not treat 255 as a failure; the perflog is complete because
   `r_perflog` flushes per frame.
