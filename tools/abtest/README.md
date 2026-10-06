@@ -19,14 +19,22 @@ logs stay local (`logs/`, `runs/` are gitignored).
 - **`baseline.cfg`** — the fixed cvar pins for all baseline/perf runs.
 - **`scan_maps.py`** — static WAD feature scanner (stdlib only) for the
   verify-first map pinning.
+- **`make_demo.py`** — synthetic demo generator (stdlib only): computes a
+  seeded travel-to-spiral camera path from the map's real geometry + the
+  engine's exact tic movement model, and packs a valid UZDoom `.lmp`
+  (demo_version 114, `demo_compression`, `-nomonsters`-compatible).
 - **`parse_perflog.py`** — perflog → median/p95 table (stdlib only).
 - **`manifest.md`** — the map/resolution/machine manifest (all pins
-  locked + reference machine recorded 2026-10-04, bring-up phase 0/1 done).
+  locked + reference machine recorded 2026-10-04, bring-up phase 0/1 done;
+  demo set + scanner v8 corrections recorded 2026-10-05).
+- **`demos/*.lmp`** — the 26 generated baseline demos (see the manifest's
+  "Demo set" section).
 
 ## Protocol (from ticket 09)
 
-- Demo replay: one ~70-80 s demo per acceptance map, **recorded once on
-  the classic path**. 10 s warmup + 60 s measurement window
+- Demo replay: one ~70-80 s demo per acceptance map, **generated once from
+  the map's geometry** (`make_demo.py`; deterministic, seeded, replays
+  identically across code changes). 10 s warmup + 60 s measurement window
   (350 + 2100 tics).
 - Per map × backend × resolution: `timedemo` replay at uncapped speed with
   `r_perflog` writing to `logs/<map>_<backend>_<res>.perflog`.
@@ -64,21 +72,30 @@ user-approved, written into `manifest.md` — hexen MAP01/MAP10/MAP27, heretic
 E1M2/E5M6. The classic-ports row (TNT/Ritual/Rampage/Spectre) was dropped
 from the matrix the same day (see manifest.md).
 
-### 2 — Record demos (human, once per map, classic path)
+### 2 — Generate demos (agent/human, once per map; already done 2026-10-05)
 
-From the build directory:
+The demos in `demos/` are synthesized (no human recording): each is a
+seeded camera flight over the map computed from its real geometry — the
+same movement math the engine uses, so replay is exact. Generate one:
 
 ```bash
-./uzdoom -iwad <iwadfile> -file <pwads...> -exec tools/abtest/baseline.cfg \
-    -savedir tools/abtest/runs/<map> -warp <map> -record <map>
+python3 tools/abtest/make_demo.py --iwad build/wads/HEXEN.WAD --map MAP10 \
+    --out tools/abtest/demos/HEXEN_MAP10.lmp --tics 2600
 ```
 
-Play ~80 s of normal traversal (the parser slices warmup+window by tic, so
-a slight overshoot is fine), then type `stop` in the console. Copy the
-demo into the repo:
+`--map` is the engine's map name (Heretic: `E1M2`); for PK3s pass the PK3
+itself as `--iwad`. A warning in the output means the map's geometry or
+player start was not found — regenerate after fixing the WAD, don't ship a
+fall-back demo. `--dry-run` prints the plan without writing. Naming:
+`<WAD>_<MAP>.lmp` (see the manifest's "Demo set" section).
+
+Smoke-test a demo before relying on it (exit 255 = normal timedemo end):
 
 ```bash
-cp tools/abtest/runs/<map>/<map>.lmp tools/abtest/demos/<map>.lmp
+cd build && printf 'r_perflog /tmp/smoke.log\n' > /tmp/smoke.cfg
+./uzdoom -iwad <iwadfile> [-file <pwads...>] -nomonsters -devparm \
+    -width 640 -height 400 -exec /tmp/smoke.cfg -timedemo ../tools/abtest/demos/<demo>.lmp
+grep -E '^L |F 2600|255' /tmp/smoke.log
 ```
 
 ### 3 — Perf runs (human; 2 backends × 3 resolutions = 6 per map)
@@ -94,6 +111,9 @@ cp tools/abtest/runs/<map>/<map>.lmp tools/abtest/demos/<map>.lmp
   `vid_preferbackend` (v_video.cpp:85; BACKEND_OPENGL=0 / BACKEND_VULKAN=1,
   v_video.h:70). There is no `gl_backend` cvar in the engine.
 - `<res>`: `1080p` (1920×1080), `320x200`, `21x9` (3440×1440).
+- timedemo exits with code **255** (an `I_FatalError`-style shutdown) on
+  success — do not treat 255 as a failure; the perflog is complete because
+  `r_perflog` flushes per frame.
 
 ### 4 — Parse + verify (agent)
 
