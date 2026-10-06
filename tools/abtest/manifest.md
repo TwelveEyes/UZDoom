@@ -1,8 +1,9 @@
 # A/B + baseline manifest (levelmesh)
 
 Protocol: `.scratch/levelmesh-rendering/issues/09-verification-acceptance.md`.
-Matrix: maps × {demo replay, static tick lists} × {gl33, vulkan} ×
-{1080p, 320×200 clean, 21:9 stress} (+ gamma×glow sweep for tick lists).
+Matrix: maps × {demo replay, static tick lists} × {gl33, vulkan} @ 2560×1440
+host-native (+ gamma×glow sweep for tick lists). The resolution axis was
+dropped 2026-10-05 (user decision; see Resolutions below).
 This file tracks the pins; `scan_maps.py` output and the user's approval
 fill the TBD sections during bring-up.
 
@@ -159,13 +160,20 @@ the pins above); MYHOUSE_MAP01 `L` line = lines 165,922 / sectors 35,853
 portal split 410+89 vs the static 508 is a cross-check item for
 phase 4).
 
-## Resolutions
+## Resolutions (axis dropped 2026-10-05, user decision)
 
 | name | size | notes |
 |---|---|---|
-| 1080p | 1920×1080 | vsync off (baseline.cfg) |
-| 320x200 | 320×200 | clean aspect |
-| 21x9 | 3440×1440 | stress widescreen |
+| host-native | 2560×1440 | reference machine's DP-1 panel (vsync off per baseline.cfg); a 1920×1080 panel is also connected (virtual desktop 4480×1440). Every run pins `-width 2560 -height 1440`.
+
+Rationale: the calibration run on DOOM2_MAP01 (GL33, 2600 tics, window
+tics 350–2450) showed per-frame cost identical at 320×200, 1920×1080, and
+3440×1440 — med ≈ 0.235 ms, p95 ≈ 0.26 ms, max ≈ 6.6 ms; a 2.4× pixel
+difference with zero cost difference. Hypothesis: timedemo is
+CPU-bound (scene graph / draw-call side) at that scene size, so GPU
+fill-rate differences are hidden; the axis was dropped rather than
+verified on the large maps (myhouse MAP01 / planisf2 MAP01), since the
+user preferred a single fixed host-native resolution for the baseline.
 
 ## Reference machine
 

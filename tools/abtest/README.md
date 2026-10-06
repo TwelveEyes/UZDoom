@@ -36,11 +36,17 @@ logs stay local (`logs/`, `runs/` are gitignored).
   the map's geometry** (`make_demo.py`; deterministic, seeded, replays
   identically across code changes). 10 s warmup + 60 s measurement window
   (350 + 2100 tics).
-- Per map × backend × resolution: `timedemo` replay at uncapped speed with
-  `r_perflog` writing to `logs/<map>_<backend>_<res>.perflog`.
+- Per map × backend: `timedemo` replay at uncapped speed with
+  `r_perflog` writing to `logs/<map>_<backend>.perflog`.
 - Backends: **both** GL 3.3 and Vulkan must be measured.
-- Resolutions: 1920×1080 (vsync off), 320×200 clean, 3440×1440 (21:9
-  stress widescreen).
+- Resolution: **host-native 2560×1440** (vsync off). The resolution axis
+  was dropped 2026-10-05 (user decision): a calibration run on
+  DOOM2_MAP01 (GL33, 2600 tics) showed per-frame cost identical at
+  320×200, 1920×1080, and 3440×1440 (med ≈ 0.235 ms, p95 ≈ 0.26 ms,
+  max ≈ 6.6 ms — a 2.4× pixel difference with zero cost difference).
+  Timedemo is CPU-bound (scene graph / draw-call side) at that scene
+  size, so the axis measured nothing; every run pins the host-native
+  panel instead.
 - Gamma 1.0 / default cvars (pinned in `baseline.cfg`).
 - Stats read: median + p95 of total frame, CPU render window
   (`r` = RenderView), GPU 3D window (`fin` = finish/present) — the full
@@ -92,22 +98,31 @@ fall-back demo. `--dry-run` prints the plan without writing. Naming:
 Smoke-test a demo before relying on it (exit 255 = normal timedemo end):
 
 ```bash
-cd build && printf 'r_perflog /tmp/smoke.log\n' > /tmp/smoke.cfg
+cd build && printf 'r_perflog ../tools/abtest/logs/smoke.log\n' > ../tools/abtest/logs/smoke.cfg
 ./uzdoom -iwad <iwadfile> [-file <pwads...>] -nomonsters -devparm \
-    -width 640 -height 400 -exec /tmp/smoke.cfg -timedemo ../tools/abtest/demos/<demo>.lmp
-grep -E '^L |F 2600|255' /tmp/smoke.log
+    -width 640 -height 400 -exec ../tools/abtest/logs/smoke.cfg -timedemo ../tools/abtest/demos/<demo>.lmp
+grep -E '^L |F 2600' ../tools/abtest/logs/smoke.log
 ```
 
-### 3 — Perf runs (human; 2 backends × 3 resolutions = 6 per map)
+- The perflog must live **inside the workspace** (`tools/abtest/logs/`):
+  sandboxed shells block the engine's writes to `/tmp`, and `r_perflog`
+  then fails **silently** — exit 255 does not prove the log was written.
+  After every run, assert the log exists and contains the `F 2600`
+  summary line before accepting the run.
+
+### 3 — Perf runs (agent; 2 backends × 1 resolution = 2 per map, 52 total)
 
 ```bash
 ./uzdoom -iwad <iwadfile> [-file <pwads...>] -nomonsters \
-    -width <W> -height <H> \
+    -width 2560 -height 1440 \
     -exec tools/abtest/baseline.cfg \
     +set vid_preferbackend <N> \
-    +set r_perflog tools/abtest/logs/<map>_<backend>_<res>.perflog \
+    +set r_perflog tools/abtest/logs/<map>_<backend>.perflog \
     -timedemo tools/abtest/demos/<map>.lmp
 ```
+
+(Use absolute paths for `-exec`, `r_perflog`, and `-timedemo` when the
+engine's cwd differs from the repo root, as in `run_matrix.sh`.)
 
 - Resolution is set with the **`-width`/`-height` command-line FARGs**
   (v_video.cpp:130-141). `vid_width`/`vid_height` are **not** cvars in this
@@ -120,13 +135,23 @@ grep -E '^L |F 2600|255' /tmp/smoke.log
   auto-selects a backend at startup (Vulkan when available), so set the
   cvar explicitly in every run; stdout prints "Selecting ... backend...",
   which each run's captured output is checked against.
-- `<res>`: `1080p` (1920×1080), `320x200`, `21x9` (3440×1440).
+- Resolution is pinned at **2560×1440** — the host-native panel of the
+  reference machine (DP-1; a 1920×1080 panel is also connected, virtual
+  desktop 4480×1440). The 3-resolution axis (1080p / 320×200 / 21:9) was
+  dropped 2026-10-05, see the protocol section above.
 - `-nomonsters` on every run: the demo set is built for it (the camera path
   is not designed around monster combat/deaths) and it keeps the render
   workload deterministic.
 - timedemo exits with code **255** (an `I_FatalError`-style shutdown) on
   success — do not treat 255 as a failure; the perflog is complete because
   `r_perflog` flushes per frame.
+- Runs must have real GPU access. A sandboxed shell blocks `/dev/dri`, and
+  the engine then **silently** renders with llvmpipe (software GL) — the
+  Vulkan backend included, which finds no ICD and falls back to GL. Such
+  runs still exit 255 with a full perflog, but the numbers are software
+  numbers, not GPU numbers. `run_matrix.sh` rejects any run whose stdout
+  shows `llvmpipe` or a failed Vulkan init; run the matrix unsandboxed
+  (or from a normal shell).
 
 ### 4 — Parse + verify (agent)
 
