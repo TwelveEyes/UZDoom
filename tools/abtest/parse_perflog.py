@@ -35,7 +35,8 @@ def parse_file(path):
                 if not parts:
                     continue
                 if parts[0] == "F":
-                    kv = dict(p.split("=", 1) for p in parts[1:])
+                    # parts[1] is the bare frame number; the rest is k=v
+                    kv = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
                     try:
                         rec = {"tic": float(kv["tic"])}
                         for k in TIME_FIELDS + COUNT_FIELDS:
