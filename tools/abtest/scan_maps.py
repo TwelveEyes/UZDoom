@@ -553,23 +553,36 @@ def udmf(data):
 
 def skybox(file, blk, beha):
     """Skybox signals in a BINARY map block: SkyViewpoint/SkyPicker/
-    SkyCamCompat things (10 B records, type u16@4) and, in BEHA-layout
-    blocks only, Sector_SetPortal (57, u8@6) lines with args[1]==2 (u8@8).
-    DOOM-format (14 B) maps cannot carry skyboxes — the xlat never maps 57.
+    SkyCamCompat things and, in BEHA-layout blocks only, Sector_SetPortal
+    (57, u8@6) lines with args[1]==2 (u8@8). Thing records are read exactly
+    like the engine (maploader.cpp:3014-3018 branches on HasBehavior):
+    BEHA blocks -> mapthinghexen_t 20 B (type i16@10); classic ->
+    mapthing_t 10 B (type i16@6). DOOM-format (14 B) maps cannot carry
+    skyboxes — the xlat never maps 57.
     Returns (view, pick, cam, sky_lines) or None when no THINGS/LINEDEFS."""
     if blk.get("THINGS") is None and blk.get("LINEDEFS") is None:
         return None
     view = pick = cam = sky = 0
     if blk.get("THINGS") is not None:
         d = lump_bytes(file, blk["THINGS"])
-        for i in range(len(d) // 10):
-            t = struct.unpack_from("<H", d, i * 10 + 4)[0]
-            if t in SKY_VIEW:
-                view += 1
-            elif t in SKY_PICK:
-                pick += 1
-            elif t in SKY_CAM:
-                cam += 1
+        if beha:
+            for i in range(len(d) // 20):
+                t = struct.unpack_from("<h", d, i * 20 + 10)[0]
+                if t in SKY_VIEW:
+                    view += 1
+                elif t in SKY_PICK:
+                    pick += 1
+                elif t in SKY_CAM:
+                    cam += 1
+        else:
+            for i in range(len(d) // 10):
+                t = struct.unpack_from("<h", d, i * 10 + 6)[0]
+                if t in SKY_VIEW:
+                    view += 1
+                elif t in SKY_PICK:
+                    pick += 1
+                elif t in SKY_CAM:
+                    cam += 1
     if beha and blk.get("LINEDEFS") is not None:
         d = lump_bytes(file, blk["LINEDEFS"])
         for i in range(len(d) // 16):
@@ -719,7 +732,10 @@ def scan_file(file, sections, defaults, syntax, has_old, name_sections,
                           "BLOCKMAP"):
                     if blk.get(n) is not None and blk[n] is None:
                         notes.append(f"duplicate {n}")
-                nt = blk["THINGS"][1] // 10 if blk.get("THINGS") else 0
+                # BEHA blocks: 20 B mapthinghexen_t (engine LoadThings2);
+                # classic: 10 B mapthing_t (LoadThings).
+                tstride = 20 if beha else 10
+                nt = blk["THINGS"][1] // tstride if blk.get("THINGS") else 0
                 ns = blk["SECTORS"][1] // 26 if blk.get("SECTORS") else 0
                 nsi = blk["SIDEDEFS"][1] // 30 if blk.get("SIDEDEFS") else 0
                 nv = blk["VERTEXES"][1] // 4 if blk.get("VERTEXES") else 0
