@@ -230,7 +230,7 @@ extern cycle_t FrameCycles;
 
 static FILE *PerfLogFile = nullptr;
 static FString PerfLogOpenPath;
-static FLevelLocals *PerfLogLevel = nullptr;
+static FString PerfLogLastMap;
 static uint64_t PerfLogFrame = 0;
 
 static void PerfLogHeader(FILE *f)
@@ -294,7 +294,7 @@ void PerfLogUpdate()
 			return;
 		}
 		PerfLogOpenPath = FString(want);
-		PerfLogLevel = nullptr;
+		PerfLogLastMap.Truncate(0);
 		PerfLogFrame = 0;
 		doBench++;
 		PerfLogHeader(PerfLogFile);
@@ -311,9 +311,11 @@ void PerfLogUpdate()
 	{
 		return;
 	}
-	if (Level != PerfLogLevel)
+	// The level object is a global that gets refilled in place, so a pointer
+	// comparison would miss re-loads. Key on the map name instead.
+	if (Level->MapName != PerfLogLastMap)
 	{
-		PerfLogLevel = Level;
+		PerfLogLastMap = Level->MapName;
 		PerfLogWriteLevel(Level);
 	}
 	fprintf(PerfLogFile, "F %llu tic=%d total=%.3f r=%.3f bsp=%.3f clip=%.3f wr=%.3f ws=%.3f "
