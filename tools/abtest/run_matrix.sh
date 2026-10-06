@@ -11,14 +11,20 @@
 #   - stdout   tools/abtest/logs/<demo>_<backend>.out
 #   - config   tools/abtest/logs/.cfg_<demo>_<backend>.cfg
 # A run is PASS only if: exit 255 (normal timedemo end), the perflog
-# exists and contains the "F 2600" summary line, and stdout carries the
-# backend-selection line matching the requested backend. Exit 255 alone
-# proves nothing about the log (r_perflog fails silently if the path is
-# not writable — e.g. /tmp under a sandboxed shell).
+# exists and shows the demo played through (last F-line tic >= 2599), and
+# stdout carries the backend-selection line matching the requested
+# backend. Notes: timedemos play back at the game tic rate (~35 tics/s)
+# while rendering runs uncapped, so each run takes ~80s regardless of map
+# size and the perflog holds 40k-150k per-frame lines; "F 2600" is just
+# frame #2600 mid-file, NOT a completion marker (grep '^F 2600' also
+# matches F 2600x and is a false-positive trap). Exit 255 alone proves
+# nothing about the log (r_perflog fails silently if the path is not
+# writable — e.g. /tmp under a sandboxed shell).
 #
 # Usage:
 #   run_matrix.sh                 # full 52-run matrix, sequential
 #   run_matrix.sh --only HEXEN    # only demos whose name matches HEXEN
+#   run_matrix.sh --only A --only B   # OR-match several name patterns
 #   run_matrix.sh --only HEXEN --backend vulkan
 # Status: tools/abtest/logs/status.tsv (demo, backend, exit, verdict,
 # wall_s, lline).
@@ -36,7 +42,7 @@ BACKEND_FILTER=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-	--only) ONLY="$2"; shift 2 ;;
+	--only) ONLY="$ONLY$2 "; shift 2 ;;
 	--backend) BACKEND_FILTER="$2"; shift 2 ;;
 	*) echo "unknown arg: $1" >&2; exit 2 ;;
 	esac
@@ -51,17 +57,23 @@ mkdir -p "$LOGS"
 STATUS="$LOGS/status.tsv"
 printf 'demo\tbackend\texit\tverdict\twall_s\tlline\n' > "$STATUS"
 
-# demo name -> iwad file under build/wads/
-iwad_for() {
+# demo name -> base IWAD under build/wads/. The three commercial IWADs
+# (DOOM2/HEXEN/HERETIC) run standalone; the four non-commercial WADs are
+# PWADs that must be mounted on top of the DOOM2 base (-iwad DOOM2.WAD
+# -file <pwad>) — launched as a bare -iwad the engine aborts before the
+# demo loads. Sets BASE_IWAD and PWAD_FILE (empty for standalone IWADs).
+mount_for() {
+	BASE_IWAD=""
+	PWAD_FILE=""
 	case "$1" in
-	DOOM2_*)   echo DOOM2.WAD ;;
-	HERETIC_*) echo HERETIC.WAD ;;
-	HEXEN_*)   echo HEXEN.WAD ;;
-	MYHOUSE_*) echo myhouse.pk3 ;;
-	PIRATES_*) echo "Pirates!.wad" ;;
-	PLANISF_*) echo planisf2.wad ;;
-	SOS_*)     echo SOS_Boom.wad ;;
-	*) echo "" ;;
+	DOOM2_*)   BASE_IWAD=DOOM2.WAD ;;
+	HERETIC_*) BASE_IWAD=HERETIC.WAD ;;
+	HEXEN_*)   BASE_IWAD=HEXEN.WAD ;;
+	MYHOUSE_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE=myhouse.pk3 ;;
+	PIRATES_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE="Pirates!.wad" ;;
+	PLANISF_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE=planisf2.wad ;;
+	SOS_*)     BASE_IWAD=DOOM2.WAD; PWAD_FILE=SOS_Boom.wad ;;
+	*) ;;
 	esac
 }
 
@@ -74,7 +86,11 @@ FAIL=0
 for demo in $DEMOS; do
 	for backend in gl33 vulkan; do
 		if [ -n "$ONLY" ]; then
-			case "$demo" in *"$ONLY"*) ;; *) continue ;; esac
+			match=0
+			for pat in $ONLY; do
+				case "$demo" in *"$pat"*) match=1; break ;; esac
+			done
+			[ "$match" -eq 1 ] || continue
 		fi
 		if [ -n "$BACKEND_FILTER" ] && [ "$backend" != "$BACKEND_FILTER" ]; then
 			continue
@@ -84,19 +100,25 @@ for demo in $DEMOS; do
 			gl33) N=0; WANT='Selecting OpenGL backend' ;;
 			vulkan) N=1; WANT='Selecting Vulkan backend' ;;
 		esac
-		IWAD=$(iwad_for "$demo")
-		if [ -z "$IWAD" ]; then
+		mount_for "$demo"
+		if [ -z "$BASE_IWAD" ]; then
 			printf '%s\t%s\t-\tFAIL\t0\tunknown iwad prefix\n' "$demo" "$backend" >> "$STATUS"
 			FAIL=$((FAIL+1))
 			echo "[$TOTAL] $demo $backend FAIL (unknown iwad prefix)"
 			continue
 		fi
-		[ -f "$BUILD/wads/$IWAD" ] || {
-			printf '%s\t%s\t-\tFAIL\t0\tmissing wads/%s\n' "$demo" "$backend" "$IWAD" >> "$STATUS"
+		[ -f "$BUILD/wads/$BASE_IWAD" ] || {
+			printf '%s\t%s\t-\tFAIL\t0\tmissing wads/%s\n' "$demo" "$backend" "$BASE_IWAD" >> "$STATUS"
 			FAIL=$((FAIL+1))
-			echo "[$TOTAL] $demo $backend FAIL (missing wads/$IWAD)"
+			echo "[$TOTAL] $demo $backend FAIL (missing wads/$BASE_IWAD)"
 			continue
 		}
+		if [ -n "$PWAD_FILE" ] && [ ! -f "$BUILD/wads/$PWAD_FILE" ]; then
+			printf '%s\t%s\t-\tFAIL\t0\tmissing wads/%s\n' "$demo" "$backend" "$PWAD_FILE" >> "$STATUS"
+			FAIL=$((FAIL+1))
+			echo "[$TOTAL] $demo $backend FAIL (missing wads/$PWAD_FILE)"
+			continue
+		fi
 		[ -f "$KIT/demos/$demo.lmp" ] || {
 			printf '%s\t%s\t-\tFAIL\t0\tmissing demo\n' "$demo" "$backend" >> "$STATUS"
 			FAIL=$((FAIL+1))
@@ -111,10 +133,15 @@ for demo in $DEMOS; do
 		printf 'r_perflog %s\n' "$PLOG" > "$CFG"
 
 		t0=$(date +%s)
+		EXTRA=()
+		if [ -n "$PWAD_FILE" ]; then
+			EXTRA=(-file "wads/$PWAD_FILE")
+		fi
 		(
 			cd "$BUILD"
 			"$BUILD/uzdoom" \
-				-iwad "wads/$IWAD" \
+				-iwad "wads/$BASE_IWAD" \
+				"${EXTRA[@]}" \
 				-nomonsters \
 				-width "$W" -height "$H" \
 				-exec "$KIT/baseline.cfg" \
@@ -133,8 +160,13 @@ for demo in $DEMOS; do
 		if [ "$verdict" = PASS ]; then
 			if [ ! -s "$PLOG" ]; then
 				verdict=FAIL; detail="perflog missing/empty"
-			elif ! grep -q '^F 2600' "$PLOG"; then
-				verdict=FAIL; detail="no F 2600 summary line"
+			else
+				# completion check: the demo's last F-line must have reached
+				# tic 2599 (demo is 2600 tics from level start)
+				LASTTIC=$(awk '$1=="F"{t=$3} END{sub("tic=","",t); print t+0}' "$PLOG")
+				if [ "${LASTTIC:-0}" -lt 2599 ]; then
+					verdict=FAIL; detail="demo not fully played (last tic $LASTTIC < 2599)"
+				fi
 			fi
 		fi
 		if [ "$verdict" = PASS ] && ! grep -qF "$WANT" "$OUT"; then

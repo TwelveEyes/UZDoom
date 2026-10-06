@@ -101,16 +101,28 @@ Smoke-test a demo before relying on it (exit 255 = normal timedemo end):
 cd build && printf 'r_perflog ../tools/abtest/logs/smoke.log\n' > ../tools/abtest/logs/smoke.cfg
 ./uzdoom -iwad <iwadfile> [-file <pwads...>] -nomonsters -devparm \
     -width 640 -height 400 -exec ../tools/abtest/logs/smoke.cfg -timedemo ../tools/abtest/demos/<demo>.lmp
-grep -E '^L |F 2600' ../tools/abtest/logs/smoke.log
+grep '^L ' ../tools/abtest/logs/smoke.log
+awk '$1=="F"{t=$3} END{sub("tic=","",t); print "last tic: " t+0}' \
+    ../tools/abtest/logs/smoke.log   # demo complete if >= 2599
 ```
 
 - The perflog must live **inside the workspace** (`tools/abtest/logs/`):
   sandboxed shells block the engine's writes to `/tmp`, and `r_perflog`
   then fails **silently** — exit 255 does not prove the log was written.
-  After every run, assert the log exists and contains the `F 2600`
-  summary line before accepting the run.
+  After every run, assert the log exists and the demo played through
+  (last `F` line's `tic=` >= 2599 for the 2600-tic demos) before
+  accepting the run. There is no "F 2600 summary line": `F <frame>`
+  numbers the rendered frame (tens of thousands per run — rendering is
+  uncapped) and `tic=` carries the demo tick; `grep '^F 2600'` also
+  matches `F 2600x` and is a false-positive trap.
 
 ### 3 — Perf runs (agent; 2 backends × 1 resolution = 2 per map, 52 total)
+
+Prefer the driver: `bash tools/abtest/run_matrix.sh` (full matrix,
+sequential; `--only NAME` filters demo names, repeatable, OR-match;
+`--backend gl33|vulkan`). It writes `logs/status.tsv` (demo, backend,
+exit, verdict, wall_s, lline) and rejects llvmpipe/Vulkan-fallback runs.
+Single run, by hand:
 
 ```bash
 ./uzdoom -iwad <iwadfile> [-file <pwads...>] -nomonsters \
@@ -123,6 +135,18 @@ grep -E '^L |F 2600' ../tools/abtest/logs/smoke.log
 
 (Use absolute paths for `-exec`, `r_perflog`, and `-timedemo` when the
 engine's cwd differs from the repo root, as in `run_matrix.sh`.)
+
+- **PWAD mount:** the four non-commercial WADs (myhouse, Pirates!,
+  planisf2, SOS_Boom) are PWADs and must be mounted on the commercial
+  base: `-iwad wads/DOOM2.WAD -file wads/<pwad>`. Launched as a bare
+  `-iwad <pwad>` the engine aborts before the demo loads (exit 0, silent,
+  no stdout error; the Vulkan variant exits 255 with an empty perflog).
+  The three commercial IWADs (DOOM2/HEXEN/HERETIC) run standalone.
+  `run_matrix.sh` encodes this mapping in `mount_for`.
+- **~80–90 s per run, regardless of map size:** the timedemo plays the
+  demo back at the game's tic rate (~35 tics/s wall clock) while rendering
+  runs uncapped (40k–160k frames per 2600-tic demo). The full 52-run
+  matrix takes ~75 minutes.
 
 - Resolution is set with the **`-width`/`-height` command-line FARGs**
   (v_video.cpp:130-141). `vid_width`/`vid_height` are **not** cvars in this
