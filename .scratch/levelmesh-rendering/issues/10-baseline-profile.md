@@ -15,3 +15,28 @@ fixed resolution/settings, including the slaughter, portal, and 3D-floor stress 
 
 Deliverable: a results table (map, resolution, settings, render-CPU ms, frame ms) posted as a comment on
 this ticket — these numbers anchor the acceptance bar in the spec.
+
+## Progress
+
+- **2026-10-04** (phases 0+1, b6126b6): reference machine recorded (dev box =
+  reference: Void Linux 7.2.9_1, Ryzen 9 5900X, Navi 31 / amdgpu+Mesa,
+  31 GiB, RelWithDebInfo; Wayland available in-session). Category maps
+  pinned from `scan_maps.py` v7 (hexen MAP01/10/27, heretic E1M2/E5M6);
+  classic-ports row + doom1 dropped. Backend cvar resolved from source:
+  `vid_preferbackend` (0=GL33, 1=Vulkan) — `gl_backend` does not exist.
+- **2026-10-05** (phase 2, ad9b83e): demo capture is now **synthetic**,
+  not hand-recorded — the original "record once on the classic path" step
+  is replaced by `make_demo.py` (seeded travel-to-spiral camera from each
+  map's real geometry + the engine's exact tic model, packed as a valid
+  UZDoom `.lmp`). Deterministic → replays frame-identically across code
+  changes; no rebuild needed after every binary, except where a map's own
+  scripted events diverge the sim (detectable from the perflog `L` line).
+  All 26 demos generated + replay-verified (full 2600 tics, exit 255,
+  `L` lines match the pins). See `tools/abtest/manifest.md` "Demo set".
+- **r_perflog fix** (a06b0e2): the `L` line keyed on a `Level` pointer
+  only fired on first load; now keyed on `Level->MapName` so every reload
+  emits its stats line.
+- **Remaining (HITL, phase 3):** 6 perf runs per map (2 backends ×
+  {1080p, 320×200, 21:9}) via `tools/abtest/README.md` step 3, then phase 4
+  parse (`parse_perflog.py --warmup 350 --window 2100`) + `L`-line
+  cross-check against the manifest, then the results table posted here.
