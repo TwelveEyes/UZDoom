@@ -130,3 +130,24 @@ MAP01 (0.82/0.99 ms, portal map) and PLANISF (0.57/0.66 ms, 37k lines,
 p95 spikes to 6.1/7.1 ms). These numbers anchor the acceptance bars
 (levelmesh ≤ classic × 1.05 per map on both backends; SOS_Boom ≤ 50 % of
 its classic median).
+
+## Answer
+
+The deliverable (results table) is posted above in the final `## Progress`
+item — 26 maps × {GL33, Vulkan} at 2560×1440, `-nomonsters`, `baseline.cfg`
+pins; medians in ms/frame for render-CPU (`r`), frame (`total`), GPU 3d-fin
+(`fin`); p95 + full per-field breakdowns in `tools/abtest/results/baseline.json`,
+prose + table in `tools/abtest/results/baseline.md` (parsed with
+`parse_perflog.py --warmup 350 --window 2100` — 10 s warmup, 60 s window).
+
+Key facts for the spec:
+- Reference machine = the dev box (Void Linux 7.2.9_1, Ryzen 9 5900X, Navi 31,
+  31 GiB, RelWithDebInfo) — recorded in Progress.
+- Vulkan's CPU RenderView window ≈ 2× GL33 on every map while the GPU 3d-fin
+  window is within ~0.1 ms — the Vulkan gap is on the CPU submission side at
+  these scene sizes, not the GPU.
+- Total frame time flat 0.3–0.6 ms across most maps; heaviest: myhouse MAP01
+  0.82/0.99 ms (35,853 sectors, portal map) and PLANISF 0.57/0.66 ms (37,265
+  lines, p95 6.1/7.1 ms).
+- These numbers anchor 09's acceptance bars: levelmesh ≤ classic × 1.05 per
+  map on both backends; SOS_Boom ≤ 50 % of its classic median.
