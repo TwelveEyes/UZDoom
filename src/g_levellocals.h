@@ -45,6 +45,7 @@
 #include "r_data/r_interpolate.h"
 #include "doom_aabbtree.h"
 #include "doom_levelmesh.h"
+#include "levelmesh.h"
 #include "p_visualthinker.h"
 #include <memory>
 
@@ -527,6 +528,7 @@ public:
 	EventManager *localEventManager = nullptr;
 	DoomLevelAABBTree* aabbTree = nullptr;
 	DoomLevelMesh* levelMesh = nullptr;
+	levelmesh::FLevelMesh* levelMeshData = nullptr;
 
 	// [ZZ] Destructible geometry information
 	TMap<int, FHealthGroup> healthGroups;

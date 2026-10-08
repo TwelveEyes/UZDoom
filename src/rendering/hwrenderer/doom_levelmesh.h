@@ -20,8 +20,10 @@
 #include "tarray.h"
 #include "vectors.h"
 #include "r_defs.h"
+#include "levelmesh.h"
 
 struct FLevelLocals;
+namespace levelmesh { struct FLevelMesh; }
 
 struct Surface
 {
@@ -37,6 +39,16 @@ struct Surface
 class DoomLevelMesh : public hwrenderer::LevelMesh
 {
 public:
+	// Thin raytrace adapter: feeds VkRaytrace the frozen load-time positions +
+	// indices from the backend-neutral FLevelMesh data layer. VkRaytrace itself
+	// is unchanged; it reads MeshVertices / MeshElements / MeshSurfaces exactly
+	// as before. This is the standing-constraint deliverable: the raytracer
+	// renders the level via this adapter, not a NullMesh fallback.
+	DoomLevelMesh(const levelmesh::FLevelMesh &mesh);
+
+	// Classic builder (kept for the build-site transition): produces the same
+	// frozen positions + indices from FLevelLocals. Once the FLevelMesh geometry
+	// is verified to match, the build site uses the adapter above.
 	DoomLevelMesh(FLevelLocals &doomMap);
 
 	TArray<Surface> Surfaces;

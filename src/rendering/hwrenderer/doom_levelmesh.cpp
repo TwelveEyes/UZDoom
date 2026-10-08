@@ -19,6 +19,31 @@
 #include "g_levellocals.h"
 #include "texturemanager.h"
 
+// Thin raytrace adapter: copy the frozen load-time positions + indices from the
+// backend-neutral FLevelMesh data layer. The raytracer (VkRaytrace) reads these
+// arrays unchanged; we only repack the per-region IBOs into the flat MeshElements
+// the raytracer expects and map each element back to its source surface for the
+// per-surface lighting lookup.
+DoomLevelMesh::DoomLevelMesh(const levelmesh::FLevelMesh &mesh)
+{
+	MeshVertices = mesh.positions;
+	// identity UV index per vertex
+	for (size_t i = 0; i < mesh.positions.Size(); i++)
+	{
+		MeshUVIndex.Push((int)i);
+	}
+	// flatten the per-region IBOs; each index references a vertex in the whole
+	// pool, whose surfaceIndex drives the per-element surface mapping.
+	for (const auto &ibo : mesh.regionIBOs)
+	{
+		for (uint32_t idx : ibo)
+		{
+			MeshElements.Push(idx);
+			MeshSurfaces.Push((int)mesh.vertices[idx].surfaceIndex);
+		}
+	}
+}
+
 DoomLevelMesh::DoomLevelMesh(FLevelLocals &doomMap)
 {
 	for (unsigned int i = 0; i < doomMap.sides.Size(); i++)

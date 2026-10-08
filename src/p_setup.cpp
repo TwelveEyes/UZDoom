@@ -376,8 +376,10 @@ void FLevelLocals::ClearLevelData(bool fullgc)
 	localEventManager->Shutdown();
 	if (aabbTree) delete aabbTree;
 	if (levelMesh) delete levelMesh;
+	if (levelMeshData) delete levelMeshData;
 	aabbTree = nullptr;
 	levelMesh = nullptr;
+	levelMeshData = nullptr;
 	VisualThinkerHead = nullptr;
 	ActorBehaviors.Clear();
 	ClientSideActorBehaviors.Clear();
