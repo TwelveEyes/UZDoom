@@ -48,7 +48,7 @@
 #include "c_dispatch.h"
 #include "cmdlib.h"
 #include "common/scripting/dap/DebugServer.h"
-#include "widgets/errorwindow.h"
+#include "d_abcapture.h"
 #include "d_buttons.h"
 #include "d_dehacked.h"
 #include "d_event.h"
@@ -1065,6 +1065,10 @@ static void End2DAndUpdate()
 {
 	twod->End();
 	CheckBench();
+	// AbCapture_FrameComposed() is called from each backend's Update(), once
+	// the 2D layer has been rendered into the frame and the composed image
+	// is valid for readback (see ticket 01: hooking here, before Update(),
+	// captured GL33's recycled back buffer -> black screen).
 	screen->Update();
 	twod->OnFrameDone();
 }
@@ -1574,8 +1578,11 @@ void D_DoomLoop ()
 			TryRunTics (); // will run at least one tic
 			// Update display, next frame, with current state.
 			I_StartTic ();
+			AbCapture_BeginRenderPass ();
 			D_ProcessEvents();
 			D_Display ();
+			AbCapture_FrameComposed ();
+			AbCapture_EndRenderPass ();
 			S_UpdateMusic();
 
 			if (gameloop_abort)

@@ -876,11 +876,13 @@ FShaderManager::~FShaderManager()
 
 void FShaderManager::SetActiveShader(FShader *sh)
 {
-	if (mActiveShader != sh)
-	{
-		glUseProgram(sh!= NULL? sh->GetHandle() : 0);
-		mActiveShader = sh;
-	}
+	// The active program cannot be cached across draws: the present and
+	// post-process paths bind their FShaderProgram directly via glUseProgram,
+	// which would leave a stale cache and skip the rebind, leaving program 0
+	// bound and rendering black from the next frame on. glUseProgram with the
+	// already-bound program is a cheap no-op, so always issue the bind.
+	glUseProgram(sh!= NULL? sh->GetHandle() : 0);
+	mActiveShader = sh;
 }
 
 FShader *FShaderManager::BindEffect(int effect, EPassType passType)

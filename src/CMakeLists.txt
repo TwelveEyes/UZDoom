@@ -716,6 +716,7 @@ set (PCH_SOURCES
 	console/c_functions.cpp
 	ct_chat.cpp
 	d_iwad.cpp
+	d_abcapture.cpp
 	d_main.cpp
 	d_defcvars.cpp
 	d_anonstats.cpp
