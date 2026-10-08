@@ -383,9 +383,16 @@ def launch(engine, build, map_entry, mode, backend, cvar_value, ticks, outdir,
                 outdir=outdir))
     except OSError as e:
         return False, f"cannot write run config: {e}", None, 0.0
+    # -rngseed pins the static RNG seed (d_main.cpp FArg_rngseed) so the
+    # per-launch random stream is identical across a pair: the Doomguy face
+    # frame pick (M_Random) and the pickup's FloatBobPhase are seeded from it,
+    # so without a fixed seed they differ run-to-run and pollute the diff.
+    # NOTE: FARGs take a '-' prefix; a '+rngseed' would be parsed as a no-op
+    # console command and the seed would stay random per launch.
     cmd = [engine,
            "-iwad", os.path.join("wads", map_entry["iwad"]),
            "-nomonsters",
+           "-rngseed", "12345",
            "-config", cfg,
            "-exec", pins,
            "-width", "2560", "-height", "1440"]

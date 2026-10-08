@@ -31,6 +31,8 @@
 #include "gl_framebuffer.h"
 #include "gl_renderer.h"
 #include "gl_renderbuffers.h"
+
+#include "d_abcapture.h"
 #include "gl_samplers.h"
 #include "hw_clock.h"
 #include "hw_vrmodes.h"
@@ -184,6 +186,10 @@ void OpenGLFrameBuffer::Update()
 	Flush3D.Clock();
 	GLRenderer->Flush();
 	Flush3D.Unclock();
+
+	// A/B capture (ticket 01): the frame is composed and the GPU is idle,
+	// so the back buffer is valid for readback before Swap() recycles it.
+	AbCapture_FrameComposed();
 
 	Swap();
 	Super::Update();

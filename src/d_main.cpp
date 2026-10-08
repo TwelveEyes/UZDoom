@@ -1581,7 +1581,6 @@ void D_DoomLoop ()
 			AbCapture_BeginRenderPass ();
 			D_ProcessEvents();
 			D_Display ();
-			AbCapture_FrameComposed ();
 			AbCapture_EndRenderPass ();
 			S_UpdateMusic();
 
@@ -3124,6 +3123,10 @@ bool System_WantLeftButton()
 static bool System_DispatchEvent(event_t* ev)
 {
 	shiftState.AddEvent(ev);
+
+	// A/B capture: lock mouse input so the camera is stable.
+	if (AbCaptureEnabled && ev->type == EV_Mouse)
+		return true;
 
 	if (ev->type == EV_Mouse && (menuactive == MENU_Off || (menuactive == MENU_GameplayMenu && CurrentMenu && !CurrentMenu->mMouseCapture))&& ConsoleState != c_down && ConsoleState != c_falling && !primaryLevel->localEventManager->Responder(ev) && !paused)
 	{
