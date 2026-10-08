@@ -26,6 +26,7 @@
 #include <thread>
 #include <assert.h>
 #include "i_time.h"
+#include "printf.h"
 #include "vm.h"
 
 //==========================================================================
@@ -43,10 +44,30 @@ int GameTicRate = 35;	// make sure it is not 0, even if the client doesn't set i
 
 double TimeScale = 1.0;
 
+// A/B capture mode (d_abcapture.cpp): while a render pass is in flight
+// under r_ab_capture, the time sources return values derived from
+// AbCaptureTic -- the number of rendered frames of the current map -- so
+// the composed frame is a pure function of (map, frame).
+// The fake clock is BYPASSED while I_FreezeTime is active (FreezeTime != 0):
+// PerformWipe() freezes time and then drives its blocking wipe loop on real
+// I_msTime()/I_WaitVBL() pacing; a frozen fake clock would spin that loop
+// forever.
+extern bool AbCaptureActive;
+extern int AbCaptureTic;
+
 static uint64_t GetTimePoint()
 {
 	using namespace std::chrono;
 	return (uint64_t)(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
+static uint64_t AbCaptureNS()
+{
+	// (AbCaptureTic + 0.5) ticks after the start of the current map, in the
+	// domain of FirstFrameStartTime, so derived values (I_msTimeFS, deltas
+	// in SetDeltaTime/GetDeltaTime, ...) stay positive and advance exactly
+	// one tick per pass.
+	return FirstFrameStartTime + uint64_t((AbCaptureTic + 0.5) * 1'000'000'000.0 / GameTicRate);
 }
 
 void I_InitTime()
@@ -110,16 +131,19 @@ void I_WaitVBL(int count)
 int I_WaitForTic(int prevtic, double const ticrate)
 {
 	// Waits until the current tic is greater than prevtic. Time must not be frozen.
+	// NOTE: this always uses the real clock. Under r_ab_capture the time sources
+	// return tick-derived values (see AbCaptureActive above), which would make
+	// this loop spin forever because AbCaptureTic never reaches the real prevtic.
 
-	int time;
-	while ((time = I_GetTime(ticrate)) <= prevtic)
+	int time = NSToTic(CurrentFrameStartTime - FirstFrameStartTime, ticrate);
+	while (time <= prevtic)
 	{
 		// Windows-specific note:
 		// The minimum amount of time a thread can sleep is controlled by timeBeginPeriod.
 		// We set this to 1 ms in DoMain.
 
 		const uint64_t next = FirstFrameStartTime + TicToNS(prevtic + 1, ticrate);
-		const uint64_t now = I_nsTime();
+		const uint64_t now = GetClockTimeNS();
 
 		if (next > now)
 		{
@@ -132,6 +156,7 @@ int I_WaitForTic(int prevtic, double const ticrate)
 		}
 
 		I_SetFrameTime();
+		time = NSToTic(CurrentFrameStartTime - FirstFrameStartTime, ticrate);
 	}
 
 	return time;
@@ -139,6 +164,8 @@ int I_WaitForTic(int prevtic, double const ticrate)
 
 uint64_t I_nsTime()
 {
+	if (AbCaptureActive && FreezeTime == 0)
+		return AbCaptureNS();
 	return GetClockTimeNS();
 }
 
@@ -159,16 +186,23 @@ uint64_t I_msTimeFS() // from "start"
 
 uint64_t I_GetTimeNS()
 {
+	if (AbCaptureActive && FreezeTime == 0)
+		return AbCaptureNS() - FirstFrameStartTime;
 	return CurrentFrameStartTime - FirstFrameStartTime;
 }
 
 int I_GetTime(double const ticrate)
 {
+	if (AbCaptureActive && FreezeTime == 0)
+		return AbCaptureTic;
 	return NSToTic(CurrentFrameStartTime - FirstFrameStartTime, ticrate);
 }
 
 double I_GetTimeFrac(double const ticrate)
 {
+	if (AbCaptureActive && FreezeTime == 0)
+		return 0.5;
+
 	int currentTic = NSToTic(CurrentFrameStartTime - FirstFrameStartTime, ticrate);
 	uint64_t ticStartTime = FirstFrameStartTime + TicToNS(currentTic, ticrate);
 	uint64_t ticNextTime = FirstFrameStartTime + TicToNS(currentTic + 1, ticrate);

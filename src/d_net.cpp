@@ -2197,7 +2197,8 @@ void TryRunTics()
 		AddCommandString("toggle vid_fullscreen");
 	}
 
-	bool doWait = (cl_capfps || pauseext || (!netgame && r_NoInterpolate && !M_IsAnimated()));
+	// singletics (e.g. forced by r_ab_capture) paces the sim at exactly one tick per render pass.
+	bool doWait = (cl_capfps || pauseext || singletics || (!netgame && r_NoInterpolate && !M_IsAnimated()));
 	if (vid_dontdowait && (vid_maxfps > 0 || vid_vsync))
 		doWait = false;
 	if (!netgame && !AppActive && vid_lowerinbackground)

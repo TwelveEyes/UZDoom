@@ -28,6 +28,7 @@
 #include <zvulkan/vulkansurface.h>
 
 #include "c_dispatch.h"
+#include "d_abcapture.h"
 #include "flatvertices.h"
 #include "hw_bonebuffer.h"
 #include "hw_clock.h"
@@ -217,6 +218,12 @@ void VulkanRenderDevice::Update()
 
 	mCommands->WaitForCommands(true);
 	mCommands->UpdateGpuStats();
+
+	// [uzdoom] A/B capture (ticket 01): the frame is composed (3D +
+	// post-process + 2D in the pipeline image) and the GPU is idle, so
+	// GetScreenshotBuffer can blit/read it back the same way the F12 path
+	// does between frames.
+	AbCapture_FrameComposed();
 
 	Super::Update();
 }
