@@ -3248,7 +3248,16 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 		Level->FinalizePortals();	// finalize line portals after polyobjects have been initialized. This info is needed for properly flagging them.
 
 	Level->aabbTree = new DoomLevelAABBTree(Level);
-	Level->levelMesh = new DoomLevelMesh(*Level);
+	// [levelmesh] Build the backend-neutral static level-mesh model. The build
+	// site produces the whole-level vertex pool, per-region IBOs, surface/region
+	// records, bands, and the per-region actor list. Both the new draw path and
+	// the raytrace adapter consume this. DoomLevelMesh is a thin adapter over it:
+	// it repacks the frozen load-time positions + indices for VkRaytrace, which
+	// is itself unchanged. The classic scene path does not touch this model.
+	if (Level->levelMeshData) delete Level->levelMeshData;
+	Level->levelMeshData = new levelmesh::FLevelMesh(levelmesh::FLevelMesh::Build(*Level));
+	if (Level->levelMesh) delete Level->levelMesh;
+	Level->levelMesh = new DoomLevelMesh(*Level->levelMeshData);
 
 	// [DVR] Populate subsector->bbox for alternative space culling in orthographic projection with no fog of war
 	subsector_t* sub = &Level->subsectors[0];

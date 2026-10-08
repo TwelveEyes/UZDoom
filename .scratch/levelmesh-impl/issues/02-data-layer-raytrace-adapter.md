@@ -24,11 +24,19 @@ backends is still zero (the build-site change is invisible to the classic path).
 
 **Blocked by:** 01 (A/B capture mode + pixel-diff driver) — the comparator must exist before any levelmesh work is measured; the smoke A/B gates the build-site change.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
-- [ ] Build replaces the `DoomLevelMesh` build at the existing level-load build site; clean, warning-free build on both backends.
-- [ ] Raytracer renders the level via the adapter; the `SetLevelMesh` rebuild-on-mesh-pointer-change contract holds; `VkRaytrace` untouched.
+- [x] Build replaces the `DoomLevelMesh` build at the existing level-load build site; clean, warning-free build on both backends. (FLevelMesh built at the `maploader.cpp` build site; `DoomLevelMesh` is now a thin adapter over it. Classic scene path untouched.)
+- [x] Raytracer renders the level via the adapter; the `SetLevelMesh` rebuild-on-mesh-pointer-change contract holds; `VkRaytrace` untouched. (Adapter feeds the frozen positions + indices from FLevelMesh; raytrace smoke on DOOM2_MAP01 runs clean with non-empty geometry: 2227 positions, 3975 elements, 58 regions. In-game visual verification of the raytraced frame is a follow-up.)
 - [ ] SOS_Boom MAP32 pool/IBO/record sizes within the spec §3 memory budget.
-- [ ] Classic-vs-classic smoke A/B on one map, both backends: zero-diff (classic path unchanged).
+- [x] Classic-vs-classic smoke A/B on one map, both backends: zero-diff (classic path unchanged). (2026-10-08: DOOM2_MAP01 × {static, demo} × {GL33, Vulkan} all byte-identical, zero-diff — see comment.)
 
 **Note:** The raytracer adapter is the standing-constraint deliverable (spec §1): the raytracer must render the level via the adapter, not the `NullMesh` fallback cube.
+
+## Comments
+
+- **2026-10-08 — data layer + build site landed; classic path proven unchanged.**
+  - `src/common/rendering/levelmesh.{h,cpp}`: the `FLevelMesh` data layer. Whole-level 32-byte vertex pool (dual-purpose slotA/B), per-region IBOs, 64-byte surface records, sub-range table, per-level band table, region partition via build-time sector flood-fill, and the per-region actor list. Wall u/v baked from the classic tci methods (top/mid/bottom with peg + texturetop rules); flats fan over subsector polygon vertices with world-space `x/64, -y/64` UV. Registered in `src/CMakeLists.txt` (PCH_SOURCES). Built at the `maploader.cpp` build site (`Level->levelMeshData`), cleaned in `FLevelLocals::ClearLevelData`.
+  - Fixed a null-`sidedef` / degenerate-vertex crash in `BuildWall` (3D-floor and non-drawable segs carry null `sidedef`); the classic renderer skips them, now guarded.
+  - Classic-vs-classic smoke A/B (criterion 4) PASS on all 4 combos, byte-identical, zero-diff: `DOOM2_MAP01_static_gl33` 30/30, `DOOM2_MAP01_static_vulkan` 30/30, `DOOM2_MAP01_demo_gl33` 87/87, `DOOM2_MAP01_demo_vulkan` 87/87. The build-site change is invisible to the classic path.
+  - **2026-10-08 (cont.) — thin raytrace adapter landed (criterion 2).** `DoomLevelMesh` now has a `DoomLevelMesh(const levelmesh::FLevelMesh&)` constructor that repacks the frozen load-time positions + per-region IBOs into the flat `MeshVertices`/`MeshElements`/`MeshSurfaces` the raytracer reads; the build site builds FLevelMesh first, then the adapter from it. The classic builder constructor is retained for the transition. Raytrace smoke (`vk_raytrace 1`, DOOM2_MAP01, Vulkan) runs clean, no crash, non-empty geometry (2227 positions / 3975 elements / 58 regions). Classic A/B re-verified zero-diff on both backends after the adapter switch. **Still open:** (1) 3D-floor quads, fake flats, load-dynamic marking, full sky resolution, per-surface AABB; (2) SOS_Boom MAP32 memory-budget check (criterion 3); (3) in-game visual verification of the raytraced frame.
