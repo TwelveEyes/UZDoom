@@ -72,7 +72,26 @@ void VkFramebufferManager::AcquireImage()
 	PresentImageIndex = SwapChain->AcquireImage(SwapChainImageAvailableSemaphore.get());
 	if (PresentImageIndex != -1)
 	{
-		fb->GetPostprocess()->DrawPresentTexture(fb->mOutputLetterbox, true, false);
+		// The letterbox is sized from the window client area, which can be larger than the
+		// swapchain: the X11/Vulkan surface may not support the requested size, in which case
+		// the swapchain is clamped to its maximum extent. Keep the present viewport within the
+		// swapchain or the overflowing edges get clipped to black.
+		IntRect presentBox = fb->mOutputLetterbox;
+		if (presentBox.left < 0)
+		{
+			presentBox.width += presentBox.left;
+			presentBox.left = 0;
+		}
+		if (presentBox.top < 0)
+		{
+			presentBox.height += presentBox.top;
+			presentBox.top = 0;
+		}
+		if (presentBox.width > SwapChain->Width() - presentBox.left)
+			presentBox.width = SwapChain->Width() - presentBox.left;
+		if (presentBox.height > SwapChain->Height() - presentBox.top)
+			presentBox.height = SwapChain->Height() - presentBox.top;
+		fb->GetPostprocess()->DrawPresentTexture(presentBox, true, false);
 	}
 }
 
