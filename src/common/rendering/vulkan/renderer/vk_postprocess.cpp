@@ -274,14 +274,20 @@ void VkPostprocess::DrawPresentTexture(const IntRect &box, bool applyGamma, bool
 
 	uniforms.ColorScale = (gl_dither_bpc == -1) ? 255.0f : (float)((1 << gl_dither_bpc) - 1);
 
+	// Map the full pipeline image onto the screen quad. The pixel scaling from the
+	// canvas size to the window size is done by the render state's viewport (the
+	// GL backend's glViewport equivalent), so the UV scale must stay 1:1. Deriving
+	// it from mScreenViewport or the box size breaks when the window size differs
+	// from the video resolution: only part of the image is sampled and the rest of
+	// the window stays black.
 	if (screenshot)
 	{
-		uniforms.Scale = { screen->mScreenViewport.width / (float)fb->GetBuffers()->GetWidth(), screen->mScreenViewport.height / (float)fb->GetBuffers()->GetHeight() };
+		uniforms.Scale = { 1.0f, 1.0f };
 		uniforms.Offset = { 0.0f, 0.0f };
 	}
 	else
 	{
-		uniforms.Scale = { screen->mScreenViewport.width / (float)fb->GetBuffers()->GetWidth(), -screen->mScreenViewport.height / (float)fb->GetBuffers()->GetHeight() };
+		uniforms.Scale = { 1.0f, -1.0f };
 		uniforms.Offset = { 0.0f, 1.0f };
 	}
 
