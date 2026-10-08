@@ -27,6 +27,7 @@
 #include "c_cvars.h"
 #include "d_eventbase.h"
 #include "d_gui.h"
+#include "d_abcapture.h"
 #include "gamestate.h"
 #include "i_interface.h"
 #include "keydef.h"
@@ -60,6 +61,13 @@ CVAR(Bool, invertmousex, false,	CVAR_GLOBALCONFIG | CVAR_ARCHIVE);  // Invert mo
 
 void D_ProcessEvents (void)
 {
+	// A/B capture (ticket 01): lock all inputs so the camera is stable.
+	// AbCaptureEnabled is true for the entire capture session, unlike
+	// AbCaptureActive which is only set during the render pass (after
+	// TryRunTics has already processed input).
+	if (AbCaptureEnabled)
+		return;
+
 	FixedBitArray<NUM_KEYS> keywasdown;
 	TArray<event_t*> delayedevents;
 

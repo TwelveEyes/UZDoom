@@ -42,6 +42,10 @@
 // i_time.cpp to switch the time sources to the synthetic clock.
 extern bool AbCaptureActive;
 
+// True for the entire capture session (set when r_ab_capture is parsed);
+// used to lock all inputs so the camera is stable.
+extern bool AbCaptureEnabled;
+
 // Number of rendered frames of the current map (0 outside a level).
 extern int AbCaptureTic;
 

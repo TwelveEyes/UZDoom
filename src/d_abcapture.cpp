@@ -23,7 +23,9 @@
 #include "engineerrors.h"
 #include "g_levellocals.h"
 #include "m_misc.h"
+#include "menu.h"
 #include "printf.h"
+#include "r_defs.h"
 #include "zstring.h"
 
 // With r_ab_capture active the sim is paced at exactly one tick per
@@ -33,10 +35,16 @@
 bool AbCaptureActive = false;
 int AbCaptureTic = 0;
 
-static bool AbCaptureEnabled = false;
+bool AbCaptureEnabled = false;
 
 namespace
 {
+	// A/B capture diagnostics must not touch the on-screen console or
+	// notification buffers: they would differ run-to-run and pollute the
+	// pixel diff. (OR of two flags is an int; Printf wants a PrintFlag.)
+	constexpr PrintFlag AbCapturePrint =
+		static_cast<PrintFlag>(PRINT_NOCONSOLE | PRINT_NONOTIFY);
+
 	struct CaptureTick
 	{
 		int tick = 0;
@@ -54,6 +62,7 @@ namespace
 		AbCaptureEnabled = false;
 		AbCaptureActive = false;
 		AbCaptureTic = 0;
+		M_EnableMenu(true);
 		Ticks.Clear();
 		OutDir = "";
 		MapName = "";
@@ -69,7 +78,7 @@ namespace
 		ptrdiff_t colon = FString(value).IndexOf(':');
 		if (colon == (ptrdiff_t)-1)
 		{
-			Printf("ABCAPTURE: r_ab_capture needs \"T1,T2,...:outdir\", got \"%s\"\n", value);
+			Printf(AbCapturePrint, "ABCAPTURE: r_ab_capture needs \"T1,T2,...:outdir\", got \"%s\"\n", value);
 			singletics = false;
 			return;
 		}
@@ -79,7 +88,7 @@ namespace
 		FString dir = full.Mid((size_t)colon + 1);
 		if (dir.IsEmpty())
 		{
-			Printf("ABCAPTURE: r_ab_capture needs \"T1,T2,...:outdir\", got \"%s\"\n", value);
+			Printf(AbCapturePrint, "ABCAPTURE: r_ab_capture needs \"T1,T2,...:outdir\", got \"%s\"\n", value);
 			singletics = false;
 			return;
 		}
@@ -94,7 +103,7 @@ namespace
 			int t = atoi(part.GetChars());
 			if (t <= 0)
 			{
-				Printf("ABCAPTURE: bad tick \"%s\" in \"%s\"\n", part.GetChars(), value);
+				Printf(AbCapturePrint, "ABCAPTURE: bad tick \"%s\" in \"%s\"\n", part.GetChars(), value);
 				singletics = false;
 				return;
 			}
@@ -112,7 +121,7 @@ namespace
 		}
 		if (Ticks.Size() == 0)
 		{
-			Printf("ABCAPTURE: r_ab_capture has no ticks in \"%s\"\n", value);
+			Printf(AbCapturePrint, "ABCAPTURE: r_ab_capture has no ticks in \"%s\"\n", value);
 			singletics = false;
 			return;
 		}
@@ -121,11 +130,12 @@ namespace
 		OutDir = dir;
 		AbCaptureEnabled = true;
 		singletics = true;
+		M_EnableMenu(false);
 
-		Printf("ABCAPTURE: %u tick(s):", (unsigned)Ticks.Size());
+		Printf(AbCapturePrint, "ABCAPTURE: %u tick(s):", (unsigned)Ticks.Size());
 		for (const auto &t : Ticks)
-			Printf(" %d", t.tick);
-		Printf(" -> %s\n", OutDir.GetChars());
+			Printf(AbCapturePrint, " %d", t.tick);
+		Printf(AbCapturePrint, " -> %s\n", OutDir.GetChars());
 	}
 }
 
@@ -178,7 +188,7 @@ void AbCapture_BeginRenderPass ()
 			for (const auto &t : Ticks)
 				if (!t.done)
 					pending++;
-			Printf("ABCAPTURE incomplete: level ended with %d tick(s) unmet\n", pending);
+			Printf(AbCapturePrint, "ABCAPTURE incomplete: level ended with %d tick(s) unmet\n", pending);
 			throw CExitEvent(1);
 		}
 		return;
@@ -231,7 +241,7 @@ void AbCapture_FrameComposed ()
 	FString path;
 	path.Format("%s/%s_%d.png", OutDir.GetChars(), MapName.GetChars(), AbCaptureTic);
 	M_ScreenShot(path.GetChars());
-	Printf("ABCAPTURE %s\n", path.GetChars());
+	Printf(AbCapturePrint, "ABCAPTURE %s\n", path.GetChars());
 
 	bool all = true;
 	for (const auto &t : Ticks)
@@ -241,7 +251,7 @@ void AbCapture_FrameComposed ()
 	}
 	if (all)
 	{
-		Printf("ABCAPTURE done\n");
+		Printf(AbCapturePrint, "ABCAPTURE done\n");
 		throw CExitEvent(0);
 	}
 }
