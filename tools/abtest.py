@@ -39,7 +39,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -302,7 +301,13 @@ def compare_tick(path_a, path_b, entries_for_this_tick, strict):
     diff = diff.point(lambda v: 255 if v > 0 else 0)
     if diff.getbbox() is None:
         return "pass", "zero pixel diff", []
-    clusters = extract_clusters(diff.tobytes(), width, height)  # 'L': 1 byte/px
+    try:
+        clusters = extract_clusters(diff.tobytes(), width, height)  # 'L': 1 byte/px
+    except RuntimeError as e:
+        # A single diff region so large it cannot be enumerated (e.g. the whole
+        # frame) is a clear zero-tolerance failure; record it and let the run
+        # continue to the next tick/combo instead of crashing the whole matrix.
+        return "fail", f"{e}; treated as fail", []
     uncovered = []
     summaries = []
     for cl in clusters:
