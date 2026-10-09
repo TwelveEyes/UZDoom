@@ -134,8 +134,22 @@ bool VkShaderManager::CompileNextShader()
 		assert(i < EFFECT_SHADER_COUNT);
 
 		VkShaderProgram prog;
-		prog.vert = LoadVertShader(effectshaders[i].ShaderName, effectshaders[i].vp, effectshaders[i].defines, static_cast<AllShaderIndex>(i + FIRST_EFFECT_SHADER));
-		prog.frag = LoadFragShader(effectshaders[i].ShaderName, effectshaders[i].fp1, effectshaders[i].fp2, effectshaders[i].fp3, effectshaders[i].defines, true, compilePass == GBUFFER_PASS, static_cast<AllShaderIndex>(i + FIRST_EFFECT_SHADER));
+		if (!effectshaders[i].glonly)
+		{
+			const char *vpsrc = effectshaders[i].vp;
+			FString prelude_vp;
+			if (effectshaders[i].prelude != nullptr)
+			{
+				int prelude_lump = fileSystem.CheckNumForFullName(effectshaders[i].prelude, 0);
+				if (prelude_lump == -1) I_Error("Unable to load '%s'", effectshaders[i].prelude);
+				// A leading '#' marks inline source rather than a lump name, see LoadVertShader.
+				prelude_vp << '#' << GetStringFromLump(prelude_lump).GetChars() << "\n" << effectshaders[i].vp;
+				vpsrc = prelude_vp.GetChars();
+			}
+			prog.vert = LoadVertShader(effectshaders[i].ShaderName, vpsrc, effectshaders[i].defines, static_cast<AllShaderIndex>(i + FIRST_EFFECT_SHADER));
+			prog.frag = LoadFragShader(effectshaders[i].ShaderName, effectshaders[i].fp1, effectshaders[i].fp2, effectshaders[i].fp3, effectshaders[i].defines, true, compilePass == GBUFFER_PASS, static_cast<AllShaderIndex>(i + FIRST_EFFECT_SHADER));
+		}
+		// glonly entries stay empty; GetEffect() reports them as unavailable.
 		mEffectShaders[compilePass].push_back(std::move(prog));
 
 		compileIndex++;
@@ -374,7 +388,11 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadVertShader(FString shadername
 	code << ShaderInputsOutputs::GenerateInputsOutputs(true, false, type, false, fb->device->EnabledFeatures.Features.shaderClipDistance);
 	if (!fb->device->EnabledFeatures.Features.shaderClipDistance) code << "#define NO_CLIPDISTANCE_SUPPORT\n";
 	code << "#line 1\n";
-	code << LoadPrivateShaderLump(vert_lump).GetChars() << "\n";
+	if (vert_lump[0] == '#')
+		// A leading '#' marks inline source rather than a lump name.
+		code << vert_lump + 1 << "\n";
+	else
+		code << LoadPrivateShaderLump(vert_lump).GetChars() << "\n";
 
 	return ShaderBuilder()
 		.Type(ShaderType::Vertex)

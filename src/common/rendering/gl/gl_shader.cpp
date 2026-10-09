@@ -436,8 +436,14 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 	i_data += "#define NPOT_EMULATION\nuniform vec2 uNpotEmulation;\n";
 #endif
 
-	int vp_lump = fileSystem.CheckNumForFullName(vert_prog_lump, 0);
-	if (vp_lump == -1) I_Error("Unable to load '%s'", vert_prog_lump);
+	int vp_lump = -1;
+	if (vert_prog_lump[0] != '#')
+	{
+		// A leading '#' marks inline source rather than a lump name, mirroring
+		// the fragment proc source convention below.
+		vp_lump = fileSystem.CheckNumForFullName(vert_prog_lump, 0);
+		if (vp_lump == -1) I_Error("Unable to load '%s'", vert_prog_lump);
+	}
 
 	int fp_lump = fileSystem.CheckNumForFullName(frag_prog_lump, 0);
 	if (fp_lump == -1) I_Error("Unable to load '%s'", frag_prog_lump);
@@ -481,7 +487,10 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 	vp_comb << "#line 1\n";
 	fp_comb << "#line 1\n";
 
-	vp_comb << GetStringFromLump(vp_lump).GetChars() << "\n";
+	if (vert_prog_lump[0] == '#')
+		vp_comb << vert_prog_lump + 1 << "\n";
+	else
+		vp_comb << GetStringFromLump(vp_lump).GetChars() << "\n";
 	fp_comb << GetStringFromLump(fp_lump).GetChars() << "\n";
 	FString placeholder = "\n";
 	TArray<FString> filenames_for_error;
@@ -986,7 +995,17 @@ bool FShaderCollection::CompileNextShader()
 	else if (mCompileState == 3)
 	{ // effect shaders
 		FShader *eff = new FShader(effectshaders[i].ShaderName);
-		if (!eff->Load(effectshaders[i].ShaderName, effectshaders[i].vp, effectshaders[i].fp1,
+		const char *vpsrc = effectshaders[i].vp;
+		FString prelude_vp;
+		if (effectshaders[i].prelude != nullptr)
+		{
+			int prelude_lump = fileSystem.CheckNumForFullName(effectshaders[i].prelude, 0);
+			if (prelude_lump == -1) I_Error("Unable to load '%s'", effectshaders[i].prelude);
+			// A leading '#' marks inline source rather than a lump name, see FShader::Load.
+			prelude_vp << '#' << GetStringFromLump(prelude_lump).GetChars() << "\n" << effectshaders[i].vp;
+			vpsrc = prelude_vp.GetChars();
+		}
+		if (!eff->Load(effectshaders[i].ShaderName, vpsrc, effectshaders[i].fp1,
 						effectshaders[i].fp2, effectshaders[i].fp3, effectshaders[i].defines, (mPassType == GBUFFER_PASS), static_cast<AllShaderIndex>(i + FIRST_EFFECT_SHADER)))
 		{
 			delete eff;
