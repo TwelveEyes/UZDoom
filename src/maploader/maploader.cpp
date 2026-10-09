@@ -3258,6 +3258,9 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 	Level->levelMeshData = new levelmesh::FLevelMesh(levelmesh::FLevelMesh::Build(*Level));
 	if (Level->levelMesh) delete Level->levelMesh;
 	Level->levelMesh = new DoomLevelMesh(*Level->levelMeshData);
+	// [levelmesh] D1: upload the GL33 vertex GPU objects (pool VBO + per-region
+	// VAOs) for the new draw path. The classic path does not read them.
+	screen->SetLevelMeshData(Level->levelMeshData);
 
 	// [DVR] Populate subsector->bbox for alternative space culling in orthographic projection with no fog of war
 	subsector_t* sub = &Level->subsectors[0];

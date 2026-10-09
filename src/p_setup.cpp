@@ -375,6 +375,8 @@ void FLevelLocals::ClearLevelData(bool fullgc)
 	Behaviors.UnloadModules();
 	localEventManager->Shutdown();
 	if (aabbTree) delete aabbTree;
+	if (screen)
+		screen->SetLevelMeshData(nullptr); // [levelmesh] D1: free the GL vertex GPU objects
 	if (levelMesh) delete levelMesh;
 	if (levelMeshData) delete levelMeshData;
 	aabbTree = nullptr;

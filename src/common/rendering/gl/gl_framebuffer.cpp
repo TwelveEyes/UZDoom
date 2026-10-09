@@ -44,6 +44,7 @@
 #include "gl_debug.h"
 #include "r_videoscale.h"
 #include "gl_buffers.h"
+#include "gl_levelmesh.h"
 #include "gl_postprocessstate.h"
 #include "v_draw.h"
 #include "printf.h"
@@ -97,6 +98,11 @@ OpenGLFrameBuffer::~OpenGLFrameBuffer()
 	if (mBones != nullptr) delete mBones;
 	mShadowMap.Reset();
 
+	if (GLLevelMesh)
+	{
+		delete GLLevelMesh;
+		GLLevelMesh = nullptr;
+	}
 	if (GLRenderer)
 	{
 		delete GLRenderer;
@@ -165,6 +171,7 @@ void OpenGLFrameBuffer::InitializeState()
 	mBones = new BoneBuffer(screen->mPipelineNbr);
 	GLRenderer = new FGLRenderer(this);
 	GLRenderer->Initialize(GetWidth(), GetHeight());
+	GLLevelMesh = new FGLLevelMesh;
 	static_cast<GLDataBuffer*>(mLights->GetBuffer())->BindBase();
 	static_cast<GLDataBuffer*>(mBones->GetBuffer())->BindBase();
 
@@ -335,6 +342,12 @@ void OpenGLFrameBuffer::PrecacheMaterial(FMaterial *mat, int translation)
 	// unbind everything.
 	FHardwareTexture::UnbindAll();
 	gl_RenderState.ClearLastMaterial();
+}
+
+void OpenGLFrameBuffer::SetLevelMeshData(levelmesh::FLevelMesh *mesh)
+{
+	if (GLLevelMesh)
+		GLLevelMesh->SetMesh(mesh);
 }
 
 IVertexBuffer *OpenGLFrameBuffer::CreateVertexBuffer()

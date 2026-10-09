@@ -1078,6 +1078,7 @@ set (PCH_SOURCES
 	common/rendering/gl/gl_postprocessstate.cpp
 	common/rendering/gl/gl_debug.cpp
 	common/rendering/gl/gl_buffers.cpp
+	common/rendering/gl/gl_levelmesh.cpp
 	common/rendering/gl/gl_hwtexture.cpp
 	common/rendering/gl/gl_samplers.cpp
 	common/rendering/gl/gl_shader.cpp
