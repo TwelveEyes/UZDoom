@@ -382,6 +382,7 @@ void FLevelLocals::ClearLevelData(bool fullgc)
 	aabbTree = nullptr;
 	levelMesh = nullptr;
 	levelMeshData = nullptr;
+	useLevelMesh = false; // [levelmesh] E1: re-latched at the next level setup
 	VisualThinkerHead = nullptr;
 	ActorBehaviors.Clear();
 	ClientSideActorBehaviors.Clear();

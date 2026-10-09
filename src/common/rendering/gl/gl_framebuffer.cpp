@@ -52,6 +52,7 @@
 
 #include "flatvertices.h"
 #include "hw_cvars.h"
+#include "g_levellocals.h"
 
 EXTERN_CVAR (Bool, vid_vsync)
 EXTERN_CVAR(Int, gl_tonemap)
@@ -348,6 +349,19 @@ void OpenGLFrameBuffer::SetLevelMeshData(levelmesh::FLevelMesh *mesh)
 {
 	if (GLLevelMesh)
 		GLLevelMesh->SetMesh(mesh);
+}
+
+void OpenGLFrameBuffer::UploadLevelMeshSlot(FLevelLocals *level, int slot)
+{
+	// Called from D_Render's frame build right after PackSnapshot. The F-level
+	// draw list is already in level->levelMeshFrame; chunk E2 consumes it.
+	if (GLLevelMesh != nullptr && GLLevelMesh->IsRecordsReady() &&
+	    level != nullptr && level->levelMeshData != nullptr)
+	{
+		GLLevelMesh->UploadSectorSlot(slot, level->levelMeshData->state.GetSectorSlot(slot));
+		GLLevelMesh->UploadLightData(level->levelMeshData->state.GetLightData(),
+		    level->levelMeshData->state.LightDataSize());
+	}
 }
 
 IVertexBuffer *OpenGLFrameBuffer::CreateVertexBuffer()

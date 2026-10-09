@@ -42,6 +42,8 @@ glcycle_t Dirty;
 glcycle_t drawcalls;
 glcycle_t twoD, Flush3D;
 glcycle_t MTWait, WTTotal;
+glcycle_t LevelMeshFrame;
+int lm_drawentries;
 int vertexcount, flatvertices, flatprimitives;
 
 int rendered_lines,rendered_flats,rendered_sprites,render_vertexsplit,render_texsplit,rendered_decals, rendered_portals, rendered_commandbuffers;
@@ -66,7 +68,9 @@ void ResetProfilingData()
 	drawcalls.Reset();
 	MTWait.Reset();
 	WTTotal.Reset();
+	LevelMeshFrame.Reset();
 
+	lm_drawentries = 0;
 	flatvertices=flatprimitives=vertexcount=0;
 	render_texsplit=render_vertexsplit=rendered_lines=rendered_flats=rendered_sprites=rendered_decals=rendered_portals = 0;
 }
@@ -240,7 +244,8 @@ static void PerfLogHeader(FILE *f)
 		"bsp=<traversal ms, incl clip> clip=<wall clip ms> wr=<wall render ms> ws=<wall setup ms> "
 		"fr=<flat render ms> fs=<flat setup ms> sr=<sprite render ms> ss=<sprite setup ms> "
 		"2d=<2D ms> f3d=<3D flush ms> fin=<finish/present ms> pg=<portal ms> pr=<job processing ms> "
-		"dcms=<drawcall submission ms> wl=<wall count> wsp=<wall vertex splits> wv=<wall vertices> "
+		"dcms=<drawcall submission ms> lmfb=<levelmesh frame build ms> lmdc=<levelmesh draw list entries> "
+		"wl=<wall count> wsp=<wall vertex splits> wv=<wall vertices> "
 		"fl=<flat count> fp=<flat primitives> fv=<flat vertices> sp=<sprite count> "
 		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count>\n");
 	fprintf(f, "# L map=<name> sectors=<n> lines=<n> subsectors=<n> sprites=<n> polyobjs=<n> "
@@ -320,13 +325,13 @@ void PerfLogUpdate()
 	}
 	fprintf(PerfLogFile, "F %llu tic=%d total=%.3f r=%.3f bsp=%.3f clip=%.3f wr=%.3f ws=%.3f "
 		"fr=%.3f fs=%.3f sr=%.3f ss=%.3f 2d=%.3f f3d=%.3f fin=%.3f pg=%.3f pr=%.3f dcms=%.3f "
-		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d\n",
+		"lmfb=%.3f lmdc=%d wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d\n",
 		(unsigned long long)PerfLogFrame++, gametic, FrameCycles.TimeMS(), All.TimeMS(),
 		Bsp.TimeMS(), ClipWall.TimeMS(), RenderWall.TimeMS(), SetupWall.TimeMS(),
 		RenderFlat.TimeMS(), SetupFlat.TimeMS(), RenderSprite.TimeMS(), SetupSprite.TimeMS(),
 		twoD.TimeMS(), Flush3D.TimeMS(), Finish.TimeMS(), PortalAll.TimeMS(),
-		ProcessAll.TimeMS(), drawcalls.TimeMS(), rendered_lines, render_vertexsplit,
-		vertexcount, rendered_flats, flatprimitives, flatvertices, rendered_sprites,
-		rendered_decals, rendered_portals, rendered_commandbuffers);
+		ProcessAll.TimeMS(), drawcalls.TimeMS(), LevelMeshFrame.TimeMS(), lm_drawentries,
+		rendered_lines, render_vertexsplit, vertexcount, rendered_flats, flatprimitives,
+		flatvertices, rendered_sprites, rendered_decals, rendered_portals, rendered_commandbuffers);
 	fflush(PerfLogFile);
 }

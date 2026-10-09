@@ -46,6 +46,7 @@
 #include "doom_aabbtree.h"
 #include "doom_levelmesh.h"
 #include "levelmesh.h"
+#include "levelmesh_frame.h"
 #include "p_visualthinker.h"
 #include <memory>
 
@@ -529,6 +530,13 @@ public:
 	DoomLevelAABBTree* aabbTree = nullptr;
 	DoomLevelMesh* levelMesh = nullptr;
 	levelmesh::FLevelMesh* levelMeshData = nullptr;
+	// [levelmesh] gl_uselevelmesh latched at level setup (maploader); false on
+	// the classic path, in which case every levelmesh frame-build/draw code
+	// path is skipped. Cleared again in ClearLevelData.
+	bool useLevelMesh = false;
+	// [levelmesh] Per-frame culled draw list for this level's frame build
+	// (D_Render); the GL33 draw pass consumes it (later chunk).
+	levelmesh::FLevelMeshFrame levelMeshFrame;
 
 	// [ZZ] Destructible geometry information
 	TMap<int, FHealthGroup> healthGroups;
