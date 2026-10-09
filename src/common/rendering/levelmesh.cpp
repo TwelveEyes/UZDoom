@@ -909,5 +909,9 @@ FLevelMesh FLevelMesh::Build(FLevelLocals &lvl)
 	b.BuildSubRanges();
 	b.BuildBands();
 	b.BuildActors();
+	// Spec section 3 build order step 5: initialize the per-sector state
+	// ring with a full snapshot of the load-time sector state (and build
+	// the 3D light state buffer).
+	mesh.state.Init(lvl);
 	return mesh;
 }

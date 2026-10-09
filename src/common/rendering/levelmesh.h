@@ -23,6 +23,7 @@
 #include <cstddef>
 #include "tarray.h"
 #include "vectors.h"
+#include "levelmesh_state.h"
 
 struct FLevelLocals;
 
@@ -233,6 +234,9 @@ struct FLevelMesh
 	// per-region subsector index list, flat (into FLevelLocals::subsectors);
 	// the draw pass walks each subsector's live sprite list at draw time
 	TArray<uint32_t> actors;
+	// per-sector dynamic state: the 96-byte record ring (spec section 4) and
+	// the 3D light state buffer. Initial fill is one PackSnapshot at build.
+	FLevelMeshState state;
 
 	// The build replaces the classic DoomLevelMesh build site. It walks
 	// FLevelLocals and produces the whole model.
@@ -246,7 +250,8 @@ struct FLevelMesh
 	size_t RegionCount() const { return regions.Size(); }
 
 	// Memory footprint of the GPU-facing buffers (pool + IBOs), for the
-	// budget sanity check.
+	// budget sanity check. (The sector state ring is accounted by the
+	// backend; it is not part of the static geometry budget.)
 	size_t GPUMemoryBytes() const
 	{
 		size_t bytes = vertices.Size() * sizeof(LevelMeshVertex);
