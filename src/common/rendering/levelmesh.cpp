@@ -34,6 +34,7 @@ using levelmesh::LevelMeshVertex;
 using levelmesh::LevelMeshSurface;
 using levelmesh::LevelMeshRegion;
 using levelmesh::LevelMeshSubRange;
+using levelmesh::LevelMeshTexRange;
 using levelmesh::LevelMeshBand;
 using levelmesh::LMF_ISFLAT;
 using levelmesh::LMF_SKY;
@@ -370,6 +371,7 @@ struct Builder
 		mesh.regionIBOs[m_curRegion].Push(base + 3);
 		mesh.regionIBOs[m_curRegion].Push(base + 2);
 		mesh.regionIBOs[m_curRegion].Push(base + 1);
+		mesh.subRanges[surfaceIndex].iboCount = 6;
 		RecordSurfaceVerts(surfaceIndex, base, 4);
 		return iboOff;
 	}
@@ -615,16 +617,20 @@ struct Builder
 
 	// Emit a flat as a fan over the subsector's polygon vertices (firstline[j].v1),
 	// fanned from vertex 0. The flat UV is world-space: u = x/64, v = -y/64 (classic).
-	void EmitFlatFan(subsector_t *sub, float z, float lmuv[2], uint32_t surfaceIndex)
+	// z is evaluated per vertex from the plane so slanted planes (3D-floor model
+	// sectors) bake correctly; on horizontal planes this is the constant z.
+	void EmitFlatFan(subsector_t *sub, const secplane_t &plane, float lmuv[2], uint32_t surfaceIndex)
 	{
 		int n = sub->numlines;
 		uint32_t base = (uint32_t)mesh.vertices.Size();
 		for (int i = 0; i < n; i++)
 		{
 			vertex_t *vt = sub->firstline[i].v1;
-			float u = (float)vt->fX() / 64.f;
-			float v = -(float)vt->fY() / 64.f;
-			EmitVertex((float)vt->fX(), (float)vt->fY(), z, v, u,
+			float x = (float)vt->fX();
+			float y = (float)vt->fY();
+			float u = x / 64.f;
+			float v = -y / 64.f;
+			EmitVertex(x, y, (float)plane.ZatPoint(x, y), v, u,
 				lmuv[0], lmuv[1], surfaceIndex);
 		}
 		// fan triangles (0, i, i+1)
@@ -634,6 +640,7 @@ struct Builder
 			mesh.regionIBOs[m_curRegion].Push(base + i);
 			mesh.regionIBOs[m_curRegion].Push(base + i + 1);
 		}
+		mesh.subRanges[surfaceIndex].iboCount = 3 * (uint32_t)(n - 2);
 		RecordSurfaceVerts(surfaceIndex, base, (uint32_t)n);
 	}
 
@@ -647,7 +654,6 @@ struct Builder
 		SwitchRegion(r);
 
 		float lmuv[2] = { 0, 0 };
-		vertex_t *ref = sub->firstline[0].v1;
 
 		//--- floor ---
 		if (sec->GetTexture(sector_t::floor) != skyflatnum)
@@ -655,7 +661,6 @@ struct Builder
 			FGameTexture *tex = TexMan.GetGameTexture(sec->GetTexture(sector_t::floor), true);
 			if (tex && tex->isValid())
 			{
-				float z = (float)sec->floorplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT;
 				if (IsLoadDynamic(sec, sector_t::floor)) flags |= LMF_LOADDYN;
 				uint32_t planeRefs[4] = { LM_PlaneRef(sec, sector_t::floor),
@@ -665,7 +670,7 @@ struct Builder
 				// sector light for flats
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(sec->lightlevel);
 				mesh.surfaces[surf].tierLight = sec->planes[sector_t::floor].Light;
-				EmitFlatFan(sub, z, lmuv, surf);
+				EmitFlatFan(sub, sec->floorplane, lmuv, surf);
 			}
 		}
 
@@ -675,7 +680,6 @@ struct Builder
 			FGameTexture *tex = TexMan.GetGameTexture(sec->GetTexture(sector_t::ceiling), true);
 			if (tex && tex->isValid())
 			{
-				float z = (float)sec->ceilingplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT;
 				if (IsLoadDynamic(sec, sector_t::ceiling)) flags |= LMF_LOADDYN;
 				uint32_t planeRefs[4] = { LM_PlaneRef(sec, sector_t::floor),
@@ -684,7 +688,7 @@ struct Builder
 					LM_LightRef(sec, LM_LIGHT_SLOT_CEILING));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(sec->lightlevel);
 				mesh.surfaces[surf].tierLight = sec->planes[sector_t::ceiling].Light;
-				EmitFlatFan(sub, z, lmuv, surf);
+				EmitFlatFan(sub, sec->ceilingplane, lmuv, surf);
 			}
 		}
 
@@ -704,7 +708,6 @@ struct Builder
 			FGameTexture *ftex = TexMan.GetGameTexture(model->GetTexture(sector_t::floor), true);
 			if (ftex && ftex->isValid())
 			{
-				float z = (float)model->floorplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT | LMF_3DFLOOR;
 				if (IsLoadDynamic(model, sector_t::floor)) flags |= LMF_LOADDYN;
 				uint32_t planeRefs[4] = { LM_PlaneRef(model, sector_t::floor),
@@ -713,13 +716,12 @@ struct Builder
 					LM_LightRef(model, LM_LIGHT_SLOT_FLOOR));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
 				mesh.surfaces[surf].tierLight = model->planes[sector_t::floor].Light;
-				EmitFlatFan(sub, z, lmuv, surf);
+				EmitFlatFan(sub, model->floorplane, lmuv, surf);
 			}
 			// model ceiling fan
 			FGameTexture *ctex = TexMan.GetGameTexture(model->GetTexture(sector_t::ceiling), true);
 			if (ctex && ctex->isValid())
 			{
-				float z = (float)model->ceilingplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT | LMF_3DFLOOR;
 				if (IsLoadDynamic(model, sector_t::ceiling)) flags |= LMF_LOADDYN;
 				uint32_t planeRefs[4] = { LM_PlaneRef(model, sector_t::floor),
@@ -728,7 +730,7 @@ struct Builder
 					LM_LightRef(model, LM_LIGHT_SLOT_CEILING));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
 				mesh.surfaces[surf].tierLight = model->planes[sector_t::ceiling].Light;
-				EmitFlatFan(sub, z, lmuv, surf);
+				EmitFlatFan(sub, model->ceilingplane, lmuv, surf);
 			}
 		}
 	}
@@ -767,23 +769,72 @@ struct Builder
 
 	void BuildSubRanges()
 	{
-		// The sub-ranges are already in mesh.subRanges in build order (one per
-		// surface, with the AABB computed at emission). Compute the per-region
-		// [texRangeOffset, texRangeCount] range by walking the surfaces in order.
+		// The per-surface sub-range records are already in mesh.subRanges in build
+		// order (one per surface, with the AABB computed at emission). Build the
+		// per-(region, texture) table the region record's texRangeOffset/Count
+		// points into: group the region's surfaces by texture index (sorted, one
+		// entry per distinct texture); each entry carries the IBO span covering
+		// the group's surfaces and the union of their world AABBs (spec section 3
+		// region record). Within a texture group the surfaces keep build order.
+		mesh.texRanges.Clear();
 		int nregions = mesh.regions.Size();
+		TArray<uint32_t> regionSurfaces;
 		for (int r = 0; r < nregions; r++)
 		{
 			LevelMeshRegion &reg = mesh.regions[r];
-			uint32_t count = 0;
-			uint32_t first = 0xFFFFFFFFu;
+			regionSurfaces.Clear();
 			for (uint32_t s = 0; s < mesh.surfaces.Size(); s++)
 			{
 				if ((int)mesh.surfaces[s].regionIndex != r) continue;
-				if (first == 0xFFFFFFFFu) first = s;
-				count++;
+				regionSurfaces.Push(s);
 			}
-			reg.texRangeOffset = (first == 0xFFFFFFFFu) ? 0 : first;
-			reg.texRangeCount = count;
+			// stable insertion-sort by texture index (build order within a texture)
+			for (uint32_t i = 1; i < regionSurfaces.Size(); i++)
+			{
+				uint32_t cur = regionSurfaces[i];
+				uint32_t curTex = mesh.surfaces[cur].textureIndex;
+				int j = (int)i - 1;
+				while (j >= 0 && mesh.surfaces[regionSurfaces[j]].textureIndex > curTex)
+				{
+					regionSurfaces[j + 1] = regionSurfaces[j];
+					j--;
+				}
+				regionSurfaces[j + 1] = cur;
+			}
+			reg.texRangeOffset = (uint32_t)mesh.texRanges.Size();
+			reg.texRangeCount = 0;
+			uint32_t i = 0;
+			while (i < regionSurfaces.Size())
+			{
+				uint32_t tex = mesh.surfaces[regionSurfaces[i]].textureIndex;
+				LevelMeshTexRange tr;
+				memset(&tr, 0, sizeof(tr));
+				tr.textureIndex = tex;
+				tr.iboOffset = 0xFFFFFFFFu;
+				tr.aabbMin[0] = tr.aabbMin[1] = 1e30f;
+				tr.aabbMax[0] = tr.aabbMax[1] = -1e30f;
+				tr.firstSurface = regionSurfaces[i];
+				tr.surfaceCount = 0;
+				uint32_t j = i;
+				while (j < regionSurfaces.Size() &&
+					mesh.surfaces[regionSurfaces[j]].textureIndex == tex)
+				{
+					const LevelMeshSubRange &sr = mesh.subRanges[regionSurfaces[j]];
+					if (sr.iboOffset < tr.iboOffset) tr.iboOffset = sr.iboOffset;
+					uint32_t end = sr.iboOffset + sr.iboCount;
+					if (end > tr.iboOffset + tr.iboCount) tr.iboCount = end - tr.iboOffset;
+					if (sr.aabbMin[0] < tr.aabbMin[0]) tr.aabbMin[0] = sr.aabbMin[0];
+					if (sr.aabbMin[1] < tr.aabbMin[1]) tr.aabbMin[1] = sr.aabbMin[1];
+					if (sr.aabbMax[0] > tr.aabbMax[0]) tr.aabbMax[0] = sr.aabbMax[0];
+					if (sr.aabbMax[1] > tr.aabbMax[1]) tr.aabbMax[1] = sr.aabbMax[1];
+					tr.surfaceCount++;
+					j++;
+				}
+				if (tr.iboOffset == 0xFFFFFFFFu) tr.iboOffset = 0;
+				mesh.texRanges.Push(tr);
+				reg.texRangeCount++;
+				i = j;
+			}
 		}
 	}
 
@@ -813,9 +864,12 @@ struct Builder
 
 	void BuildActors()
 	{
-		// per-region actor list: each subsector's sprites are partitioned into
-		// the region that owns the subsector's sector. The actor list is a flat
-		// array; each region records an [actorOffset, actorCount] range.
+		// per-region actor list: the subsector indices (into level.subsectors) of
+		// all subsectors whose sector maps to the region, sorted by subsector
+		// index. The draw pass walks each subsector's live sprite list at draw
+		// time, so the list is static subsector references, not actor ids. The
+		// list is a flat array; each region records an [actorOffset, actorCount]
+		// range.
 		int nregions = mesh.regions.Size();
 		TArray<uint32_t> regionActorCount;
 		regionActorCount.Resize(nregions);
@@ -825,13 +879,8 @@ struct Builder
 			subsector_t &sub = level.subsectors[s];
 			if (sub.sector == nullptr) continue;
 			int r = SectorRegion(sub.sector);
-			for (DVisualThinker *spr : sub.sprites)
-			{
-				AActor *mo = dynamic_cast<AActor *>(spr);
-				if (mo == nullptr) continue;
-				mesh.actors.Push((uint32_t)mo->tid);
-				regionActorCount[r]++;
-			}
+			mesh.actors.Push((uint32_t)s);
+			regionActorCount[r]++;
 		}
 		uint32_t off = 0;
 		for (int r = 0; r < nregions; r++)
