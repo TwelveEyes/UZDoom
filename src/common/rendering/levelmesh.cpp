@@ -42,13 +42,40 @@ using levelmesh::LMF_LOADDYN;
 using levelmesh::LMF_FAKECONTRAST;
 using levelmesh::LMF_LIGHTMAP;
 using levelmesh::LMF_POLYOBJ;
-using levelmesh::LM_LIGHTREF_OWN;
+using levelmesh::LMF_3DFLOOR;
+using levelmesh::LMF_OPENING_UPPER;
+using levelmesh::LMF_OPENING_MIDDLE;
+using levelmesh::LMF_OPENING_LOWER;
+using levelmesh::LMF_UNPEGGEDLOWER;
+using levelmesh::LM_PLANEREF_NONE;
+using levelmesh::LM_LIGHT_SLOT_FLOOR;
+using levelmesh::LM_LIGHT_SLOT_CEILING;
+using levelmesh::LM_LIGHT_SLOT_WALL;
 
 //============================================================================
 //
 // Local helpers
 //
 //============================================================================
+
+// planeRef encoding: sectorIndex<<1 | planeBit (0=floor, 1=ceiling).
+static uint32_t LM_PlaneRef(const sector_t *sec, int plane)
+{
+	return ((uint32_t)sec->Index() << 1) | (uint32_t)(plane == sector_t::ceiling ? 1 : 0);
+}
+
+// lightRef encoding: sectorIndex<<2 | slot. The effective light sector mirrors the
+// classic renderer's fakesector resolution (hw_bsp.cpp DoSubsector passes hw_FakeFlat()
+// of the render sector as the wall/flat light source): a sector with a heightsec
+// (Transfer_Heights / transdoor hack) transfers the model sector's light unless it
+// carries SECMF_NOFAKELIGHT.
+static uint32_t LM_LightRef(const sector_t *sec, int slot)
+{
+	const sector_t *light = sec;
+	if (sec->GetHeightSec() && !(sec->GetHeightSec()->MoreFlags & SECMF_NOFAKELIGHT))
+		light = sec->GetHeightSec();
+	return ((uint32_t)light->Index() << 2) | (uint32_t)slot;
+}
 
 // Ported verbatim from hw_walls.cpp (it is a static inline there).
 static int LM_CalcRelLight(int lightlevel, int orglightlevel, int rel)
@@ -273,13 +300,16 @@ struct Builder
 
 	//--- surface record -----------------------------------------------------
 
-	uint32_t AddSurface(FGameTexture *tex, int r, uint32_t flags)
+	// planeRefs: 4 sector/plane refs. lightRef: resolved effective-light sector/slot.
+	uint32_t AddSurface(FGameTexture *tex, int r, uint32_t flags,
+		const uint32_t planeRefs[4], uint32_t lightRef)
 	{
 		LevelMeshSurface s;
 		memset(&s, 0, sizeof(s));
 		s.textureIndex = tex ? (uint32_t)tex->GetID().GetIndex() : 0xFFFFFFFFu;
 		s.regionIndex = (uint32_t)r;
-		s.lightRef = LM_LIGHTREF_OWN;
+		for (int i = 0; i < 4; i++) s.planeRef[i] = planeRefs[i];
+		s.lightRef = lightRef;
 		s.flags = flags;
 		s.lightlistRef = -1;
 		uint32_t idx = (uint32_t)mesh.surfaces.Size();
@@ -439,8 +469,14 @@ struct Builder
 			FillLightmapUV(seg, 1, lmuv);
 			uint32_t flags = GetSideLightmap(side, 1) ? LMF_LIGHTMAP : 0;
 			if (side->Flags & WALLF_POLYOBJ) flags |= LMF_POLYOBJ;
-			flags |= LMF_3DFLOOR;
-			uint32_t surf = AddSurface(tex, r, flags);
+			flags |= LMF_3DFLOOR | LMF_OPENING_MIDDLE;
+			flags |= side_t::mid << 8;
+			uint32_t planeRefs[4] = { LM_PlaneRef(model, sector_t::floor),
+				LM_PlaneRef(model, sector_t::ceiling),
+				LM_PlaneRef(model, sector_t::floor),
+				LM_PlaneRef(model, sector_t::ceiling) };
+			uint32_t surf = AddSurface(tex, r, flags, planeRefs,
+				LM_LightRef(model, LM_LIGHT_SLOT_WALL));
 			BakeLight(mesh.surfaces[surf], side, side_t::mid, orglightlevel);
 			EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, false, nullptr);
 		}
@@ -451,12 +487,15 @@ struct Builder
 			FGameTexture *tex = TexMan.GetGameTexture(side->GetTexture(side_t::bottom), true);
 			if (tex && tex->isValid())
 			{
-				bool peg = (seg->linedef->flags & ML_DONTPEGBOTTOM) > 0;
+				// ML_DONTPEGBOTTOM: the lower texture is unpegged - static at the back
+				// floor's height; without the flag it anchors on and tracks the front
+				// floor. Mirrors the classic DoTexture peg handling.
+				bool unpeg = (seg->linedef->flags & ML_DONTPEGBOTTOM) > 0;
 				WallUV wuv = MakeWallUV(tex, side, side_t::bottom, walllen);
 				float backFloorTexZ = backsector->GetPlaneTexZ(sector_t::floor);
 				float frontFloorTexZ = frontsector->GetPlaneTexZ(sector_t::floor);
-				float texturetop = peg ? frontFloorTexZ + side->GetTextureYOffset(side_t::bottom) + wuv.tci.mRenderHeight
-					: backFloorTexZ + side->GetTextureYOffset(side_t::bottom);
+				float texturetop = unpeg ? backFloorTexZ + side->GetTextureYOffset(side_t::bottom)
+					: frontFloorTexZ + side->GetTextureYOffset(side_t::bottom) + wuv.tci.mRenderHeight;
 				float z[4] = { ffh1, bfh1a, ffh2, bfh2a };
 				int cornerMap[4] = { 0, 3, 1, 2 };
 				float uv[4][2];
@@ -464,9 +503,23 @@ struct Builder
 				float lmuv[4][2] = { {0,0},{0,0},{0,0},{0,0} };
 				FillLightmapUV(seg, 3, lmuv);
 				uint32_t flags = GetSideLightmap(side, 3) ? LMF_LIGHTMAP : 0;
+				flags |= LMF_OPENING_LOWER;
+				flags |= side_t::bottom << 8;
+				if (unpeg) flags |= LMF_UNPEGGEDLOWER;
 				bool dyn = IsLoadDynamic(frontsector, sector_t::floor) || IsLoadDynamic(backsector, sector_t::floor);
 				if (dyn) flags |= LMF_LOADDYN;
-				uint32_t surf = AddSurface(tex, r, flags);
+				// vparam[0]: lower unpegged offset relative to the front floor. An unpegged
+				// texture anchors on the back floor TexZ, so its offset from the front floor
+				// plane is the TexZ difference; a pegged one tracks the front floor exactly (0).
+				float vparam[4] = { 0.f, 0.f, 0.f, 0.f };
+				if (unpeg) vparam[0] = backFloorTexZ - frontFloorTexZ;
+				uint32_t planeRefs[4] = { LM_PlaneRef(frontsector, sector_t::floor),
+					LM_PlaneRef(frontsector, sector_t::ceiling),
+					LM_PlaneRef(backsector, sector_t::floor),
+					LM_PlaneRef(backsector, sector_t::ceiling) };
+				uint32_t surf = AddSurface(tex, r, flags, planeRefs,
+					LM_LightRef(frontsector, LM_LIGHT_SLOT_WALL));
+				for (int i = 0; i < 4; i++) mesh.surfaces[surf].vparam[i] = vparam[i];
 				BakeLight(mesh.surfaces[surf], side, side_t::bottom, orglightlevel);
 				EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, dyn, nullptr);
 			}
@@ -476,13 +529,15 @@ struct Builder
 		if (bch1a > fch1 || bch2a > fch2)
 		{
 			FGameTexture *tex = TexMan.GetGameTexture(side->GetTexture(side_t::top), true);
-			bool peg = (seg->linedef->flags & ML_DONTPEGTOP) == 0;
+			// Upper window: without ML_DONTPEGTOP the texture anchors on and tracks the
+			// front floor (unpegged); with the flag it is static at the back ceiling's height.
+			bool unpeg = (seg->linedef->flags & ML_DONTPEGTOP) == 0;
 			if (tex && tex->isValid())
 			{
 				WallUV wuv = MakeWallUV(tex, side, side_t::top, walllen);
 				float frontFloorTexZ = frontsector->GetPlaneTexZ(sector_t::floor);
 				float backCeilTexZ = backsector->GetPlaneTexZ(sector_t::ceiling);
-				float texturetop = peg ? frontFloorTexZ + side->GetTextureYOffset(side_t::top) + wuv.tci.mRenderHeight
+				float texturetop = unpeg ? frontFloorTexZ + side->GetTextureYOffset(side_t::top) + wuv.tci.mRenderHeight
 					: backCeilTexZ + side->GetTextureYOffset(side_t::top);
 				float z[4] = { fch1, bch1a, fch2, bch2a };
 				int cornerMap[4] = { 2, 3, 0, 1 };
@@ -491,10 +546,23 @@ struct Builder
 				float lmuv[4][2] = { {0,0},{0,0},{0,0},{0,0} };
 				FillLightmapUV(seg, 0, lmuv);
 				uint32_t flags = GetSideLightmap(side, 0) ? LMF_LIGHTMAP : 0;
+				flags |= LMF_OPENING_UPPER;
+				flags |= side_t::top << 8;
 				if (frontsector->GetTexture(sector_t::ceiling) == skyflatnum) flags |= LMF_SKY;
 				bool dyn = IsLoadDynamic(frontsector, sector_t::ceiling) || IsLoadDynamic(backsector, sector_t::ceiling);
 				if (dyn) flags |= LMF_LOADDYN;
-				uint32_t surf = AddSurface(tex, r, flags);
+				// vparam[2]: upper window offset. The pegged top texture anchors on the
+				// back ceiling TexZ, so its offset from the front floor plane is the TexZ
+				// difference; the unpegged one tracks the front floor exactly (0).
+				float vparam[4] = { 0.f, 0.f, 0.f, 0.f };
+				if (!unpeg) vparam[2] = backCeilTexZ - frontFloorTexZ;
+				uint32_t planeRefs[4] = { LM_PlaneRef(frontsector, sector_t::floor),
+					LM_PlaneRef(frontsector, sector_t::ceiling),
+					LM_PlaneRef(backsector, sector_t::floor),
+					LM_PlaneRef(backsector, sector_t::ceiling) };
+				uint32_t surf = AddSurface(tex, r, flags, planeRefs,
+					LM_LightRef(frontsector, LM_LIGHT_SLOT_WALL));
+				for (int i = 0; i < 4; i++) mesh.surfaces[surf].vparam[i] = vparam[i];
 				BakeLight(mesh.surfaces[surf], side, side_t::top, orglightlevel);
 				// sky scroll kind: 0 sky1 / 1 sky2 / 2 mist. The full sky2/doublesky
 				// resolution (MBF line texture, doublesky second layer) is a rendering
@@ -522,10 +590,22 @@ struct Builder
 			float lmuv[4][2] = { {0,0},{0,0},{0,0},{0,0} };
 			FillLightmapUV(seg, 1, lmuv);
 			uint32_t flags = GetSideLightmap(side, 1) ? LMF_LIGHTMAP : 0;
+			flags |= LMF_OPENING_MIDDLE;
+			flags |= side_t::mid << 8;
 			if (side->Flags & WALLF_POLYOBJ) flags |= LMF_POLYOBJ;
 			bool dyn = IsLoadDynamic(frontsector, sector_t::floor) || IsLoadDynamic(frontsector, sector_t::ceiling);
 			if (dyn) flags |= LMF_LOADDYN;
-			uint32_t surf = AddSurface(midtex, r, flags);
+			// vparam[1]: middle window offset relative to the front ceiling plane. The
+			// mid texture anchors on and tracks the front ceiling (the builder's texturetop
+			// is fch1 + yOffset + renderHeight), so the static offset is 0.
+			float vparam[4] = { 0.f, 0.f, 0.f, 0.f };
+			uint32_t planeRefs[4] = { LM_PlaneRef(frontsector, sector_t::floor),
+				LM_PlaneRef(frontsector, sector_t::ceiling),
+				LM_PlaneRef(backsector, sector_t::floor),
+				LM_PlaneRef(backsector, sector_t::ceiling) };
+			uint32_t surf = AddSurface(midtex, r, flags, planeRefs,
+				LM_LightRef(frontsector, LM_LIGHT_SLOT_WALL));
+			for (int i = 0; i < 4; i++) mesh.surfaces[surf].vparam[i] = vparam[i];
 			BakeLight(mesh.surfaces[surf], side, side_t::mid, orglightlevel);
 			EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, dyn, nullptr);
 		}
@@ -578,7 +658,10 @@ struct Builder
 				float z = (float)sec->floorplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT;
 				if (IsLoadDynamic(sec, sector_t::floor)) flags |= LMF_LOADDYN;
-				uint32_t surf = AddSurface(tex, r, flags);
+				uint32_t planeRefs[4] = { LM_PlaneRef(sec, sector_t::floor),
+					LM_PlaneRef(sec, sector_t::ceiling), LM_PLANEREF_NONE, LM_PLANEREF_NONE };
+				uint32_t surf = AddSurface(tex, r, flags, planeRefs,
+					LM_LightRef(sec, LM_LIGHT_SLOT_FLOOR));
 				// sector light for flats
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(sec->lightlevel);
 				mesh.surfaces[surf].tierLight = sec->planes[sector_t::floor].Light;
@@ -595,7 +678,10 @@ struct Builder
 				float z = (float)sec->ceilingplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT;
 				if (IsLoadDynamic(sec, sector_t::ceiling)) flags |= LMF_LOADDYN;
-				uint32_t surf = AddSurface(tex, r, flags);
+				uint32_t planeRefs[4] = { LM_PlaneRef(sec, sector_t::floor),
+					LM_PlaneRef(sec, sector_t::ceiling), LM_PLANEREF_NONE, LM_PLANEREF_NONE };
+				uint32_t surf = AddSurface(tex, r, flags, planeRefs,
+					LM_LightRef(sec, LM_LIGHT_SLOT_CEILING));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(sec->lightlevel);
 				mesh.surfaces[surf].tierLight = sec->planes[sector_t::ceiling].Light;
 				EmitFlatFan(sub, z, lmuv, surf);
@@ -621,7 +707,10 @@ struct Builder
 				float z = (float)model->floorplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT | LMF_3DFLOOR;
 				if (IsLoadDynamic(model, sector_t::floor)) flags |= LMF_LOADDYN;
-				uint32_t surf = AddSurface(ftex, r, flags);
+				uint32_t planeRefs[4] = { LM_PlaneRef(model, sector_t::floor),
+					LM_PlaneRef(model, sector_t::ceiling), LM_PLANEREF_NONE, LM_PLANEREF_NONE };
+				uint32_t surf = AddSurface(ftex, r, flags, planeRefs,
+					LM_LightRef(model, LM_LIGHT_SLOT_FLOOR));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
 				mesh.surfaces[surf].tierLight = model->planes[sector_t::floor].Light;
 				EmitFlatFan(sub, z, lmuv, surf);
@@ -633,7 +722,10 @@ struct Builder
 				float z = (float)model->ceilingplane.ZatPoint(ref->fX(), ref->fY());
 				uint32_t flags = LMF_ISFLAT | LMF_3DFLOOR;
 				if (IsLoadDynamic(model, sector_t::ceiling)) flags |= LMF_LOADDYN;
-				uint32_t surf = AddSurface(ctex, r, flags);
+				uint32_t planeRefs[4] = { LM_PlaneRef(model, sector_t::floor),
+					LM_PlaneRef(model, sector_t::ceiling), LM_PLANEREF_NONE, LM_PLANEREF_NONE };
+				uint32_t surf = AddSurface(ctex, r, flags, planeRefs,
+					LM_LightRef(model, LM_LIGHT_SLOT_CEILING));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
 				mesh.surfaces[surf].tierLight = model->planes[sector_t::ceiling].Light;
 				EmitFlatFan(sub, z, lmuv, surf);
