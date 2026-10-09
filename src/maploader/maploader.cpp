@@ -54,6 +54,9 @@
 #include "version.h"
 #include "fs_decompress.h"
 
+// [levelmesh] Latched per level at setup; the draw path is skipped when 0.
+EXTERN_CVAR(Bool, gl_uselevelmesh)
+
 enum
 {
 	MISSING_TEXTURE_WARN_LIMIT = 20
@@ -3261,6 +3264,9 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 	// [levelmesh] D1: upload the GL33 vertex GPU objects (pool VBO + per-region
 	// VAOs) for the new draw path. The classic path does not read them.
 	screen->SetLevelMeshData(Level->levelMeshData);
+	// [levelmesh] E1: latch the draw-path selection once at level setup; a
+	// mid-game gl_uselevelmesh toggle applies at the next map load.
+	Level->useLevelMesh = gl_uselevelmesh != 0;
 
 	// [DVR] Populate subsector->bbox for alternative space culling in orthographic projection with no fog of war
 	subsector_t* sub = &Level->subsectors[0];

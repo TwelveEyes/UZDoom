@@ -37,6 +37,7 @@
 #include "vectors.h"
 
 struct FPortalSceneState;
+struct FLevelLocals;
 namespace levelmesh { struct FLevelMesh; }
 class FSkyVertexBuffer;
 class IIndexBuffer;
@@ -247,6 +248,11 @@ public:
 	// load and with null at level unload. Distinct from SetLevelMesh, which
 	// is the per-frame raytrace adapter hook.
 	virtual void SetLevelMeshData(levelmesh::FLevelMesh *mesh) {}
+	// Uploads the frame's sector state ring slot + 3D light data for the
+	// level's level-mesh model (called from D_Render's frame build, inside
+	// the interpolation window). Base no-op: only backends with a level-mesh
+	// GPU object set (GL33) implement it.
+	virtual void UploadLevelMeshSlot(FLevelLocals *level, int slot) {}
 
 	// Interface to hardware rendering resources
 	virtual IVertexBuffer *CreateVertexBuffer() { return nullptr; }

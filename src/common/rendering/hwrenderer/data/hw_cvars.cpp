@@ -44,9 +44,10 @@ CVAR(Bool, gl_seamless, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 // Levelmesh rendering path selector (levelmesh effort, ticket 01): false =
 // the classic BSP traversal path, true = the levelmesh path. Created here
-// with the A/B tooling because its per-run config hard-depends on it; the
-// actual path selection is wired in ticket 03, so selecting it for now
-// still renders through the classic path.
+// with the A/B tooling because its per-run config hard-depends on it.
+// Wired in ticket 03: latched per level at setup (FLevelLocals::useLevelMesh),
+// so a mid-game toggle applies at the next map load; when 0 the frame is
+// byte-for-byte classic.
 CVAR(Bool, gl_uselevelmesh, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 CUSTOM_CVAR(Int, r_portal_recursions, 4, CVAR_ARCHIVE)
