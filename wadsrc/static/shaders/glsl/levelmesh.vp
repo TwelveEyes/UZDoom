@@ -84,9 +84,9 @@ uniform int   uWallVertLight;         // FLevelLocals::WallVertLight (smooth)
 uniform bool  uInsybox;               // portalState.inskybox (skybox fog boost)
 
 // Record pools (re-packed float32 arrays; see RECORD LAYOUT below).
-uniform samplerBuffer uSurface;       // FLevelMesh::surfaces  (5 floats x 4 = 20, 1 pad)
-uniform samplerBuffer uSectorState;   // FLevelMeshState::sectorRing (6 floats x 4 = 24)
-uniform samplerBuffer uLightState;    // FLevelMeshState::lightData (3 floats x 4 = 12)
+uniform samplerBuffer uSurface;       // FLevelMesh::surfaces: 6 float4 texels per record (24 slots, 3 reserved)
+uniform samplerBuffer uSectorState;   // FLevelMeshState::sectorRing: 9 float4 texels per sector, slot-major ring
+uniform samplerBuffer uLightState;    // FLevelMeshState::lightData: 3 float4 texels per light (2 reserved)
 uniform int   uSectorStateSlot;       // current frame's ring slot
 uniform int   uSectorCount;           // number of sectors in the ring
 uniform int   uSurfaceCount;          // number of surface records
@@ -305,10 +305,13 @@ LMPlane LMGetPlane(LMSectorState st, int planeBit)
 }
 
 // planeRef -> (sectorIndex, planeBit). Returns false for LM_PLANEREF_NONE.
+// Encoding: the host stores the sentinel as -1.0f because 0xFFFFFFFF is not
+// exactly representable in float32 (it rounds to 0xFFFFFFC0); real refs are
+// small non-negative sectorIndex<<1|planeBit values.
 bool LMSplitPlaneRef(float planeRef, out int sectorIndex, out int planeBit)
 {
+	if (planeRef < 0.0) return false;   // host stores LM_PLANEREF_NONE as -1.0f (float32 cannot hold 0xFFFFFFFF)
 	uint pr = uint(planeRef);
-	if (pr == LM_PLANEREF_NONE) return false;
 	sectorIndex = int(pr >> 1);
 	planeBit    = int(pr & 1u);
 	return true;
