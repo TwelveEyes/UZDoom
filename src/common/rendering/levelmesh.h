@@ -127,9 +127,10 @@ static_assert(sizeof(LevelMeshSurface) == 64, "LevelMeshSurface must be 64 bytes
 
 //============================================================================
 //
-// Per-region sub-range table entry. Within a region the entries are sorted by
-// texture index, bands grouped within a texture. The world AABB is precomputed
-// so the frame build can frustum-cull whole sub-ranges.
+// Per-surface sub-range record. One per surface in build order (parallel to
+// FLevelMesh::surfaces): the surface's index range in its region's IBO plus
+// the precomputed world AABB. The per-(region, texture) table the region
+// record points at (LevelMeshTexRange) is grouped from these records.
 //
 //============================================================================
 
@@ -141,6 +142,28 @@ struct LevelMeshSubRange
 	float aabbMin[2];
 	float aabbMax[2];
 	uint32_t bandIndex;		// 0 = the surface's own band
+};
+
+//============================================================================
+//
+// Per-(region, texture) sub-range table entry (spec section 3 region record).
+// Within a region the entries are sorted by texture index; each entry is the
+// IBO span covering all of the region's surfaces of that texture, with the
+// union of their world AABBs so the frame build can frustum-cull whole
+// texture groups. firstSurface / surfaceCount span the parallel per-surface
+// sub-range records.
+//
+//============================================================================
+
+struct LevelMeshTexRange
+{
+	uint32_t textureIndex;
+	uint32_t iboOffset;		// start of the group's span in the region's IBO
+	uint32_t iboCount;		// span length
+	float aabbMin[2];
+	float aabbMax[2];
+	uint32_t firstSurface;	// first per-surface sub-range of the group
+	uint32_t surfaceCount;	// per-surface sub-ranges in the group
 };
 
 //============================================================================
@@ -172,10 +195,11 @@ struct LevelMeshRegion
 	uint32_t vertexCount;
 	uint32_t iboOffset;		// offset into the region IBO (per-region buffer)
 	uint32_t iboCount;
-	uint32_t texRangeOffset;	// offset into the sub-range table
+	uint32_t texRangeOffset;	// offset into the per-(region, texture) sub-range table
 	uint32_t texRangeCount;
-	uint32_t actorOffset;	// offset into the per-region actor list
-	uint32_t actorCount;
+	uint32_t actorOffset;	// offset into the per-region subsector index list
+	uint32_t actorCount;		// number of subsectors; the draw pass walks each
+				// subsector's live sprite list at draw time
 	// --- transform slot (section 5) ---
 	float transform[16];	// 4x4 remapped viewpoint; identity on main region
 	uint32_t frontFace;		// 0 = CCW, 1 = CW
@@ -198,13 +222,16 @@ struct FLevelMesh
 	TArray<TArray<uint32_t>> regionIBOs;
 	// surface records
 	TArray<LevelMeshSurface> surfaces;
-	// per-region sub-range tables (one contiguous table, offset per region)
+	// per-surface sub-range records (build order, parallel to surfaces)
 	TArray<LevelMeshSubRange> subRanges;
+	// per-(region, texture) sub-range table (one contiguous table, offset per region)
+	TArray<LevelMeshTexRange> texRanges;
 	// per-level band table
 	TArray<LevelMeshBand> bands;
 	// region records
 	TArray<LevelMeshRegion> regions;
-	// per-region actor list (sprite source indices), flat
+	// per-region subsector index list, flat (into FLevelLocals::subsectors);
+	// the draw pass walks each subsector's live sprite list at draw time
 	TArray<uint32_t> actors;
 
 	// The build replaces the classic DoomLevelMesh build site. It walks
