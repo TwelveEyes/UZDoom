@@ -37,6 +37,7 @@
 #include "vectors.h"
 
 struct FPortalSceneState;
+namespace levelmesh { struct FLevelMesh; }
 class FSkyVertexBuffer;
 class IIndexBuffer;
 class IVertexBuffer;
@@ -241,6 +242,11 @@ public:
 	virtual void BlurScene(float amount) {}
 
 	virtual void InitLightmap(int LMTextureSize, int LMTextureCount, TArray<uint16_t>& LMTextureData) {}
+	// Uploads the level's backend-neutral level-mesh model to the backend's
+	// vertex GPU objects (GL33: pool VBO + per-region VAOs). Called at level
+	// load and with null at level unload. Distinct from SetLevelMesh, which
+	// is the per-frame raytrace adapter hook.
+	virtual void SetLevelMeshData(levelmesh::FLevelMesh *mesh) {}
 
 	// Interface to hardware rendering resources
 	virtual IVertexBuffer *CreateVertexBuffer() { return nullptr; }
