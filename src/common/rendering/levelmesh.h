@@ -30,20 +30,48 @@ namespace levelmesh
 {
 //============================================================================
 //
-// Surface / record flag bits
+// Surface / record flag bits. The lower bits follow the spec section 3 flag
+// table; LMF_ISFLAT / LMF_3DFLOOR / LMF_POLYOBJ do not appear in that table,
+// so they use free bits 3, 10 and 12 instead of colliding with the
+// openingMask / unpeggedLower / tier bits. LMF_LOADDYN is the spec's bit-0 dynamic
+// flag; LMF_FAKECONTRAST is an internal bookkeeping bit outside the table (the rel
+// values are baked in the record either way and the draw path selects them by tier).
 //
 //============================================================================
 
 enum ESurfaceFlags : uint32_t
 {
-	LMF_ISFLAT = 1 << 0,		// a flat (floor/ceiling/3D-floor) rather than a wall
-	LMF_SKY = 1 << 1,			// upper wall of a sky sector (u baked with sky resolution)
-	LMF_3DFLOOR = 1 << 2,		// surface is a 3D floor (fake flat referencing a model)
-	LMF_LOADDYN = 1 << 3,		// vertex slotA holds a vparam, not a baked z
-	LMF_FAKECONTRAST = 1 << 4,	// fake-contrast rel pair baked below
-	LMF_LIGHTMAP = 1 << 5,		// surface has lightmap UVs
-	LMF_POLYOBJ = 1 << 6,		// mid wall of a polyobject line
+	LMF_DYNAMIC = 1 << 0,		// spec bit 0: dynamic (vertex slotA holds vparam, not baked z)
+	LMF_SKY = 1 << 1,			// spec bit 1: sky surface (upper wall of a sky sector)
+	LMF_LIGHTMAP = 1 << 2,		// spec bit 2: hasLightmap (surface has lightmap UVs)
+	LMF_ISFLAT = 1 << 3,		// free bit: a flat (floor/ceiling/3D-floor) rather than a wall
+	LMF_OPENING_UPPER = 1 << 4,	// spec bits 4-6 openingMask: upper window present
+	LMF_OPENING_MIDDLE = 1 << 5, // spec openingMask: middle window present
+	LMF_OPENING_LOWER = 1 << 6,  // spec openingMask: lower window present
+	LMF_UNPEGGEDLOWER = 1 << 7,  // spec bit 7: lower wall does not track the front floor
+	LMF_TIER = 3 << 8,		// spec bits 8-9: tier 0=upper / 1=middle / 2=lower (side_t index)
+	LMF_POLYOBJ = 1 << 10,		// free bit: mid wall of a polyobject line
+	LMF_3DFLOOR = 1 << 12,		// free bit: surface is a 3D floor (fake flat referencing a model)
 };
+
+// Legacy aliases kept for the builder's existing flag composition.
+constexpr uint32_t LMF_LOADDYN = LMF_DYNAMIC;	// vertex slotA holds a vparam, not a baked z
+constexpr uint32_t LMF_FAKECONTRAST = 1u << 13;	// internal free bit: fake-contrast rel pair baked below
+
+//============================================================================
+//
+// planeRef[4] / lightRef encodings (spec section 3):
+//   planeRef: sectorIndex<<1 | planeBit (0=floor, 1=ceiling); flats store the
+//             LM_PLANEREF_NONE sentinel in slots [2]/[3].
+//   lightRef: sectorIndex<<2 | slot (0=floor, 1=ceiling, 2=wall), resolved
+//             through heightsec transfer-light relationships at build time.
+//
+//============================================================================
+
+constexpr uint32_t LM_PLANEREF_NONE = static_cast<uint32_t>(-1);	// flat slots [2]/[3]
+constexpr uint32_t LM_LIGHT_SLOT_FLOOR = 0;
+constexpr uint32_t LM_LIGHT_SLOT_CEILING = 1;
+constexpr uint32_t LM_LIGHT_SLOT_WALL = 2;
 
 //============================================================================
 //
@@ -78,12 +106,13 @@ static_assert(sizeof(LevelMeshVertex) == 32, "LevelMeshVertex must be 32 bytes")
 
 struct LevelMeshSurface
 {
-	uint32_t textureIndex;		// 0   texture index (FTextureID::GetIndex), or -1
+	uint32_t textureIndex;		// 0   texture index (FTextureID::GetIndex), or 0xFFFFFFFF
 	uint32_t regionIndex;		// 4
-	uint32_t planeRef[4];		// 8   model references (sector/plane or 3D-floor)
-	uint32_t lightRef;			// 24  3D-light chain ref, or LM_LIGHTREF_OWN
+	uint32_t planeRef[4];		// 8   sector/plane refs; flats: own floor/ceil, [2]=[3]=sentinel
+	uint32_t lightRef;			// 24  sectorIndex<<2|slot (0=floor,1=ceiling,2=wall)
 	uint32_t flags;			// 28
-	float vparam[4];			// 32  per-vertex vparam for load-dynamic surfaces
+	float vparam[4];			// 32  [0] lower unpegged offset rel. front floor, [1] middle window,
+							//     [2] upper window offset, [3] reserved (spec: V = z - TexZ + vparam)
 	int16_t light;				// 48  baked static light level
 	int16_t tierLight;		// 50
 	int16_t relSmooth;		// 52  fake-contrast rel (smooth)
@@ -95,8 +124,6 @@ struct LevelMeshSurface
 	uint8_t skyScrollKind2;		// 63  doublesky second layer
 };
 static_assert(sizeof(LevelMeshSurface) == 64, "LevelMeshSurface must be 64 bytes");
-
-constexpr uint32_t LM_LIGHTREF_OWN = 0xFFFFFFFF;	// lightRef == this value: wall's own chain
 
 //============================================================================
 //
