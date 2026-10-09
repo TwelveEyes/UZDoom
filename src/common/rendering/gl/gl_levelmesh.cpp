@@ -23,6 +23,12 @@
 **   normal in the VS from the plane records (or extend the vertex) before
 **   normal-based shading can be A/B-validated.
 **
+** Record pools (chunk D2): surface records / sector state ring / 3D light
+** buffer are uploaded as GL texture buffers (GL_RGBA32F) that levelmesh.vp
+** fetches with texelFetch on samplerBuffers. The repack slot orders are the
+** exact orders LMFetchSurface / LMFetchSector / LMFetchLight fetch; see the
+** per-float comments in the repack functions below and handoff-d2-records.md.
+**
 **---------------------------------------------------------------------------
 **
 ** Copyright 2026 UZDoom Maintainers and Contributors
@@ -45,6 +51,124 @@ namespace OpenGLRenderer
 
 FGLLevelMesh *GLLevelMesh = nullptr;
 
+//==========================================================================
+//
+// planeRef -> float. A raw 0xFFFFFFFF (LM_PLANEREF_NONE) is not exactly
+// representable in float32 (it rounds to 0xFFFFFFC0), so the sentinel is
+// stored as -1.0f; levelmesh.vp's LMSplitPlaneRef rejects negative refs
+// before any bit decode, and real refs are small non-negative values.
+//
+//==========================================================================
+
+static float LM_PlaneRefFloat(uint32_t ref)
+{
+	return ref == levelmesh::LM_PLANEREF_NONE ? -1.0f : (float)ref;
+}
+
+//==========================================================================
+//
+// Unpack a raw PalEntry uint32 (little-endian {b,g,r,a} = 0xAABBGGRR) into
+// r,g,b,a floats 0-255.
+//
+//==========================================================================
+
+static void LM_ExpandABGR(uint32_t c, float *o)
+{
+	o[0] = (float)((c >> 16) & 0xFF);	// r
+	o[1] = (float)((c >> 8) & 0xFF); 	// g
+	o[2] = (float)(c & 0xFF); 		// b
+	o[3] = (float)((c >> 24) & 0xFF);	// a
+}
+
+//==========================================================================
+//
+// Repack one ring slot: sectorCount * 96-byte LevelMeshSectorState records
+// into sectorCount * 36 floats, in the exact slot order LMFetchSector fetches:
+//   [0..3]   floorPlane[4] (nx,ny,nz,D)
+//   [4..7]   ceilPlane[4]
+//   [8..9]   floorScroll[2]  [10..11] ceilScroll[2]
+//   [12] lightlevel  [13] planeLight[0]  [14] planeLight[1]  [15] flags
+//   [16..19] glowFloorColor r,g,b,a 0-255  [20] glowFloorHeight
+//   [21..24] glowCeilColor r,g,b,a  [25] glowCeilHeight
+//   [26..34] colormap[0..8] (LightColor rgb, BlendFactor, Desaturation,
+//            FadeColor rgb, FogDensity)  [35] 0 reserved
+//
+//==========================================================================
+
+static void RepackSectorSlot(const uint8_t *bytes, int sectorCount, TArray<float> &out)
+{
+	for (int r = 0; r < sectorCount; r++)
+	{
+		levelmesh::LevelMeshSectorState st;
+		memcpy(&st, bytes + r * sizeof(st), sizeof(st));
+		float *o = &out[r * 36];
+		int p = 0;
+		for (int i = 0; i < 4; i++) o[p++] = st.floorPlane[i];	// [0..3]
+		for (int i = 0; i < 4; i++) o[p++] = st.ceilPlane[i];	// [4..7]
+		o[p++] = st.floorScroll[0]; o[p++] = st.floorScroll[1];	// [8..9]
+		o[p++] = st.ceilScroll[0];  o[p++] = st.ceilScroll[1];	// [10..11]
+		o[p++] = float(st.lightlevel);			// [12]
+		o[p++] = float(st.planeLight[0]);		// [13]
+		o[p++] = float(st.planeLight[1]);		// [14]
+		o[p++] = float(st.flags);			// [15]
+		LM_ExpandABGR(st.glowFloorColor, o + p); p += 4;	// [16..19]
+		o[p++] = st.glowFloorHeight;			// [20]
+		LM_ExpandABGR(st.glowCeilColor, o + p); p += 4;	// [21..24]
+		o[p++] = st.glowCeilHeight;			// [25]
+		for (int i = 0; i < 9; i++) o[p++] = float(st.colormap[i]);	// [26..34]
+		o[p++] = 0.0f;					// [35] reserved
+	}
+}
+
+//==========================================================================
+//
+// Repack the 3D light buffer: count * 12-byte LevelMeshLightState records
+// into count * 12 floats, in the exact slot order LMFetchLight fetches:
+//   [0] lightlevel  [1..3] colormap[0..2] (LightColor rgb)
+//   [4] BlendFactor  [5] Desaturation  [6..8] FadeColor rgb  [9] FogDensity
+//   [10..11] 0,0
+//
+//==========================================================================
+
+static void RepackLightData(const uint8_t *bytes, size_t count, TArray<float> &out)
+{
+	for (size_t r = 0; r < count; r++)
+	{
+		levelmesh::LevelMeshLightState L;
+		memcpy(&L, bytes + r * sizeof(L), sizeof(L));
+		float *o = &out[r * 12];
+		o[0] = float(L.lightlevel);		// [0]
+		for (int i = 0; i < 9; i++) o[1 + i] = float(L.colormap[i]);	// [1..9]
+		o[10] = 0.0f;					// [10]
+		o[11] = 0.0f;					// [11]
+	}
+}
+
+//==========================================================================
+//
+// Create a buffer + texture pair for one samplerBuffer record pool.
+// data may be null (dynamic pools are allocated here and filled by a later
+// glBufferSubData). Leaves no texture or buffer bound on exit.
+//
+//==========================================================================
+
+void FGLLevelMesh::CreateRecordPool(GLuint &buffer, GLuint &tex, size_t byteSize, const void *data, GLenum usage)
+{
+	glGenBuffers(1, &buffer);
+	glBindBuffer(GL_TEXTURE_BUFFER, buffer);
+	glBufferData(GL_TEXTURE_BUFFER, (GLsizeiptr)byteSize, data, usage);
+	glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_BUFFER, tex);
+	glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, buffer);
+	glTexParameteri(GL_TEXTURE_BUFFER, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_BUFFER, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_BUFFER, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_BUFFER, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glBindTexture(GL_TEXTURE_BUFFER, 0);
+}
+
 FGLLevelMesh::~FGLLevelMesh()
 {
 	Destroy();
@@ -52,8 +176,9 @@ FGLLevelMesh::~FGLLevelMesh()
 
 //==========================================================================
 //
-// Delete the VAOs / IBOs. The vertex pool buffer itself is a permanent
-// member; its storage is replaced by SetData on the next SetMesh.
+// Delete the VAOs / IBOs and the record pool textures / buffers. The vertex
+// pool buffer itself is a permanent member; its storage is replaced by
+// SetData on the next SetMesh.
 //
 //==========================================================================
 
@@ -71,6 +196,22 @@ void FGLLevelMesh::Destroy()
 	mVAOs.Clear();
 	mRegionIBOs.Clear();
 	mGpuPool.Clear();
+
+	// Record pools: delete textures and buffers (guard nonzero handles).
+	if (mSurfaceTex) glDeleteTextures(1, &mSurfaceTex);
+	if (mSectorStateTex) glDeleteTextures(1, &mSectorStateTex);
+	if (mLightTex) glDeleteTextures(1, &mLightTex);
+	mSurfaceTex = mSectorStateTex = mLightTex = 0;
+
+	GLuint bufs[3] = { mSurfaceBuf, mSectorStateBuf, mLightBuf };
+	for (int i = 0; i < 3; i++)
+	{
+		if (bufs[i]) glDeleteBuffers(1, &bufs[i]);
+	}
+	mSurfaceBuf = mSectorStateBuf = mLightBuf = 0;
+	mSectorCount = 0;
+	mLightCapacity = 0;
+	mRepackWork.Clear();
 	mMesh = nullptr;
 }
 
@@ -134,6 +275,143 @@ void FGLLevelMesh::SetMesh(const levelmesh::FLevelMesh *mesh)
 			glBindVertexArray(0);
 		mVAOs[r] = vao;
 	}
+
+	//
+	// Record pools (chunk D2): the three samplerBuffer textures levelmesh.vp
+	// fetches. Slot orders are pinned by LMFetchSurface / LMFetchSector /
+	// LMFetchLight; see handoff-d2-records.md.
+	//
+
+	// Surface records: one 24-float record per LevelMeshSurface, static for
+	// the level's lifetime.
+	{
+		TArray<float> surfRepack;
+		surfRepack.Resize(mesh->surfaces.Size() * 24);
+		for (size_t i = 0; i < mesh->surfaces.Size(); i++)
+		{
+			const levelmesh::LevelMeshSurface &s = mesh->surfaces[i];
+			float *o = &surfRepack[i * 24];
+			// textureIndex 0xFFFFFFFF has the same float32 precision loss as
+			// LM_PLANEREF_NONE (rounds to 0xFFFFFFC0), but it is never
+			// fetched/compared by the VS, so a plain float() is fine.
+			o[0] = float(s.textureIndex);		// [0]
+			o[1] = float(s.regionIndex);		// [1]
+			o[2] = LM_PlaneRefFloat(s.planeRef[0]);	// [2]
+			o[3] = LM_PlaneRefFloat(s.planeRef[1]);	// [3]
+			o[4] = LM_PlaneRefFloat(s.planeRef[2]);	// [4]
+			o[5] = LM_PlaneRefFloat(s.planeRef[3]);	// [5]
+			o[6] = float(s.lightRef);			// [6]
+			o[7] = float(s.flags);			// [7]
+			o[8]  = s.vparam[0]; o[9]  = s.vparam[1];	// [8..9]
+			o[10] = s.vparam[2]; o[11] = s.vparam[3];	// [10..11]
+			o[12] = float(s.light);			// [12]
+			o[13] = float(s.tierLight);			// [13]
+			o[14] = float(s.relSmooth);			// [14]
+			o[15] = float(s.relNonSmooth);		// [15]
+			o[16] = float(s.lightlistRef);		// [16] (-1 for statics; the VS compares >= 0.0)
+			o[17] = float(s.bandOffset);		// [17]
+			o[18] = float(s.bandCount);		// [18]
+			o[19] = float(s.skyScrollKind);		// [19]
+			o[20] = float(s.skyScrollKind2);		// [20]
+			o[21] = 0.0f; o[22] = 0.0f; o[23] = 0.0f;	// [21..23] reserved
+		}
+		CreateRecordPool(mSurfaceBuf, mSurfaceTex, surfRepack.Size() * sizeof(float), surfRepack.Data(), GL_STATIC_DRAW);
+	}
+
+	// Sector state ring: HW_MAX_PIPELINE_BUFFERS slots of sectorCount 36-float
+	// records, slot-major (record r of slot s at float offset s*sectorCount*36
+	// + r*36; the VS computes idx = uSectorStateSlot*uSectorCount + sectorIndex).
+	// Allocated once with null data; slot 0 is filled below so the buffer is
+	// valid before chunk E's first per-frame upload.
+	mSectorCount = mesh->state.sectorCount;
+	{
+		const size_t slotBytes = (size_t)mSectorCount * 36 * sizeof(float);
+		CreateRecordPool(mSectorStateBuf, mSectorStateTex, HW_MAX_PIPELINE_BUFFERS * slotBytes, nullptr, GL_DYNAMIC_DRAW);
+		if (mSectorCount > 0)
+		{
+			mRepackWork.Resize((size_t)mSectorCount * 36);
+			RepackSectorSlot(mesh->state.GetSectorSlot(0), mSectorCount, mRepackWork);
+			glBindBuffer(GL_TEXTURE_BUFFER, mSectorStateBuf);
+			glBufferSubData(GL_TEXTURE_BUFFER, 0, (GLsizeiptr)slotBytes, mRepackWork.Data());
+			glBindBuffer(GL_TEXTURE_BUFFER, 0);
+		}
+	}
+
+	// 3D light buffer: grow-only capacity. The initial fill is the level's
+	// build-time PackSnapshot; chunk E re-uploads every frame. A level with no
+	// 3D lights still gets one record of storage (a zero-sized texture buffer
+	// is legal, but at least one texel keeps the object trivially valid).
+	mLightCapacity = mesh->state.LightDataSize() / 12;
+	if (mLightCapacity == 0) mLightCapacity = 1;
+	{
+		CreateRecordPool(mLightBuf, mLightTex, mLightCapacity * 12 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+		const size_t lightCount = mesh->state.LightDataSize() / 12;
+		if (lightCount > 0)
+		{
+			mRepackWork.Resize(lightCount * 12);
+			RepackLightData(mesh->state.GetLightData(), lightCount, mRepackWork);
+			glBindBuffer(GL_TEXTURE_BUFFER, mLightBuf);
+			glBufferSubData(GL_TEXTURE_BUFFER, 0, (GLsizeiptr)(lightCount * 12 * sizeof(float)), mRepackWork.Data());
+			glBindBuffer(GL_TEXTURE_BUFFER, 0);
+		}
+	}
+}
+
+//==========================================================================
+//
+// Per-frame upload of one sector state ring slot (chunk E, right after
+// PackSnapshot). bytes = FLevelMeshState::GetSectorSlot(slot), size =
+// SectorSlotSize() = sectorCount*96. Repacks every 96-byte record into the
+// 36-float layout and glBufferSubData's the one slot at its offset; the work
+// area is a member array sized once, so there is no per-frame allocation.
+//
+//==========================================================================
+
+void FGLLevelMesh::UploadSectorSlot(int slot, const uint8_t *bytes)
+{
+	if (mSectorStateBuf == 0 || mSectorCount <= 0) return;
+	if (slot < 0 || slot >= HW_MAX_PIPELINE_BUFFERS) return;
+	if (bytes == nullptr) return;
+
+	const size_t floats = (size_t)mSectorCount * 36;
+	mRepackWork.Resize(floats);
+	RepackSectorSlot(bytes, mSectorCount, mRepackWork);
+	const GLsizeiptr bytesize = (GLsizeiptr)(floats * sizeof(float));
+	glBindBuffer(GL_TEXTURE_BUFFER, mSectorStateBuf);
+	glBufferSubData(GL_TEXTURE_BUFFER, (GLsizeiptr)slot * bytesize, bytesize, mRepackWork.Data());
+	glBindBuffer(GL_TEXTURE_BUFFER, 0);
+}
+
+//==========================================================================
+//
+// Per-frame upload of the 3D light buffer (chunk E). bytes =
+// FLevelMeshState::GetLightData(), byteSize = LightDataSize() = count*12.
+// The count changes per frame: glBufferData if the capacity grew, else
+// glBufferSubData at 0. An empty light set is a zero-byte no-op upload; the
+// texture keeps its (zeroed) initial storage and is never fetched for
+// lightlistRef < 0 surfaces.
+//
+//==========================================================================
+
+void FGLLevelMesh::UploadLightData(const uint8_t *bytes, size_t byteSize)
+{
+	if (mLightBuf == 0 || bytes == nullptr || byteSize == 0) return;
+
+	const size_t count = byteSize / 12;
+	mRepackWork.Resize(count * 12);
+	RepackLightData(bytes, count, mRepackWork);
+	const GLsizeiptr bytesize = (GLsizeiptr)(count * 12 * sizeof(float));
+	glBindBuffer(GL_TEXTURE_BUFFER, mLightBuf);
+	if (count > mLightCapacity)
+	{
+		glBufferData(GL_TEXTURE_BUFFER, bytesize, mRepackWork.Data(), GL_DYNAMIC_DRAW);
+		mLightCapacity = count;
+	}
+	else
+	{
+		glBufferSubData(GL_TEXTURE_BUFFER, 0, bytesize, mRepackWork.Data());
+	}
+	glBindBuffer(GL_TEXTURE_BUFFER, 0);
 }
 
 }
