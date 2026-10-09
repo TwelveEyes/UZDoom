@@ -85,16 +85,24 @@ struct Builder
 	// per-region vertex offset (the pool is laid out region by region)
 	TArray<uint32_t> regionVertexOffset;
 
-	// surfaces built for the current region, for the sub-range table
-	struct Surf
+	// Record the vertex range for a surface just after its vertices are emitted,
+	// and compute its world XY AABB from the pool positions. The sub-range entry
+	// is parallel to the surface (same index), so we write the AABB in place.
+	void RecordSurfaceVerts(uint32_t surfaceIndex, uint32_t vertBase, uint32_t vertCount)
 	{
-		uint32_t textureIndex;
-		uint32_t iboOffset;
-		uint32_t iboCount;
-		uint32_t bandIndex;
-		float aabbMin[2], aabbMax[2];
-	};
-	TArray<Surf> regionSurfs;
+		LevelMeshSubRange &sr = mesh.subRanges[surfaceIndex];
+		sr.aabbMin[0] = sr.aabbMin[1] = 1e30f;
+		sr.aabbMax[0] = sr.aabbMax[1] = -1e30f;
+		for (uint32_t i = 0; i < vertCount; i++)
+		{
+			float x = mesh.positions[vertBase + i].X;
+			float y = mesh.positions[vertBase + i].Y;
+			if (x < sr.aabbMin[0]) sr.aabbMin[0] = x;
+			if (x > sr.aabbMax[0]) sr.aabbMax[0] = x;
+			if (y < sr.aabbMin[1]) sr.aabbMin[1] = y;
+			if (y > sr.aabbMax[1]) sr.aabbMax[1] = y;
+		}
+	}
 
 	Builder(FLevelLocals &lvl, levelmesh::FLevelMesh &m) : level(lvl), mesh(m) {}
 
@@ -171,7 +179,6 @@ struct Builder
 	{
 		m_curRegion = r;
 		mesh.regionIBOs.Push(TArray<uint32_t>());
-		regionSurfs.Clear();
 		regionVertexOffset[r] = (uint32_t)mesh.vertices.Size();
 	}
 
@@ -277,6 +284,16 @@ struct Builder
 		s.lightlistRef = -1;
 		uint32_t idx = (uint32_t)mesh.surfaces.Size();
 		mesh.surfaces.Push(s);
+		// parallel sub-range record (AABB + ibo range) in build order; the
+		// per-region texRangeOffset/Count is finalized in BuildSubRanges.
+		LevelMeshSubRange sr;
+		memset(&sr, 0, sizeof(sr));
+		sr.textureIndex = s.textureIndex;
+		sr.iboOffset = (uint32_t)mesh.regionIBOs[r].Size();
+		sr.bandIndex = 0;
+		sr.aabbMin[0] = sr.aabbMin[1] = 1e30f;
+		sr.aabbMax[0] = sr.aabbMax[1] = -1e30f;
+		mesh.subRanges.Push(sr);
 		return idx;
 	}
 
@@ -323,7 +340,22 @@ struct Builder
 		mesh.regionIBOs[m_curRegion].Push(base + 3);
 		mesh.regionIBOs[m_curRegion].Push(base + 2);
 		mesh.regionIBOs[m_curRegion].Push(base + 1);
+		RecordSurfaceVerts(surfaceIndex, base, 4);
 		return iboOff;
+	}
+
+	// A sector plane is load-dynamic if it is alpha, or the sector is a transdoor,
+	// or the plane is scrolling (non-zero scroll offset at load). These surfaces
+	// get their vertex slotA written as a vparam at load (LMF_LOADDYN) so the
+	// vertex shader evaluates z from the sector state ring.
+	static bool IsLoadDynamic(sector_t *sec, int plane)
+	{
+		if (sec == nullptr) return false;
+		if (sec->planes[plane].alpha > 0) return true;
+		if (sec->transdoor) return true;
+		const FTransform &xf = sec->planes[plane].xform;
+		if (xf.xOffs != 0 || xf.yOffs != 0) return true;
+		return false;
 	}
 
 	//--- wall build ---------------------------------------------------------
@@ -367,6 +399,52 @@ struct Builder
 
 		int orglightlevel = frontsector->lightlevel;
 
+		//--- 3D-floor boundary quads (lightmap index 1 = RENDERWALL_M1S) ---
+		// Each F3DFloor shared by the front sector but not the back sector gets a
+		// middle-wall quad spanning the model sector's floor/ceiling planes. This
+		// mirrors the classic builder's 3D-floor line emission. The model sector is
+		// recorded on the surface so the draw path samples its state (fake-flat / 3D
+		// floor semantics).
+		TArray<F3DFloor *> &frontff = frontsector->e->XFloor.ffloors;
+		TArray<F3DFloor *> &backff = backsector->e->XFloor.ffloors;
+		int nfrontff = (int)frontff.Size();
+		int nbackff = (int)backff.Size();
+		for (int j = 0; j < nfrontff; j++)
+		{
+			F3DFloor *xfloor = frontff[j];
+			if (!(xfloor->flags & FF_EXISTS) || !(xfloor->flags & FF_RENDERSIDES)) continue;
+			if ((xfloor->flags & FF_INVERTSIDES) == 0) continue;
+			bool bothSides = false;
+			for (int k = 0; k < nbackff; k++)
+			{
+				if (backff[k] == xfloor) { bothSides = true; break; }
+			}
+			if (bothSides) continue;
+			sector_t *model = xfloor->model;
+			if (model == nullptr) continue;
+			FGameTexture *tex = TexMan.GetGameTexture(side->GetTexture(side_t::mid), true);
+			if (tex == nullptr || !tex->isValid()) continue;
+			WallUV wuv = MakeWallUV(tex, side, side_t::mid, walllen);
+			float texturetop = (float)model->ceilingplane.ZatPoint(v1x, v1y)
+				+ side->GetTextureYOffset(side_t::mid) + wuv.tci.mRenderHeight;
+			float mff1 = (float)model->floorplane.ZatPoint(v1x, v1y);
+			float mff2 = (float)model->floorplane.ZatPoint(v2x, v2y);
+			float mch1 = (float)model->ceilingplane.ZatPoint(v1x, v1y);
+			float mch2 = (float)model->ceilingplane.ZatPoint(v2x, v2y);
+			float z[4] = { mff1, mch1, mff2, mch2 };
+			int cornerMap[4] = { 0, 3, 1, 2 };
+			float uv[4][2];
+			BakeWallUVs(seg, wuv.tci, wuv.l_ul, wuv.texlength, z, texturetop, 0, uv);
+			float lmuv[4][2] = { {0,0},{0,0},{0,0},{0,0} };
+			FillLightmapUV(seg, 1, lmuv);
+			uint32_t flags = GetSideLightmap(side, 1) ? LMF_LIGHTMAP : 0;
+			if (side->Flags & WALLF_POLYOBJ) flags |= LMF_POLYOBJ;
+			flags |= LMF_3DFLOOR;
+			uint32_t surf = AddSurface(tex, r, flags);
+			BakeLight(mesh.surfaces[surf], side, side_t::mid, orglightlevel);
+			EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, false, nullptr);
+		}
+
 		//--- lower wall (lightmap index 3 = RENDERWALL_BOTTOM) ---
 		if (bfh1 > ffh1 || bfh2 > ffh2)
 		{
@@ -386,9 +464,11 @@ struct Builder
 				float lmuv[4][2] = { {0,0},{0,0},{0,0},{0,0} };
 				FillLightmapUV(seg, 3, lmuv);
 				uint32_t flags = GetSideLightmap(side, 3) ? LMF_LIGHTMAP : 0;
+				bool dyn = IsLoadDynamic(frontsector, sector_t::floor) || IsLoadDynamic(backsector, sector_t::floor);
+				if (dyn) flags |= LMF_LOADDYN;
 				uint32_t surf = AddSurface(tex, r, flags);
 				BakeLight(mesh.surfaces[surf], side, side_t::bottom, orglightlevel);
-				EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, false, nullptr);
+				EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, dyn, nullptr);
 			}
 		}
 
@@ -412,9 +492,20 @@ struct Builder
 				FillLightmapUV(seg, 0, lmuv);
 				uint32_t flags = GetSideLightmap(side, 0) ? LMF_LIGHTMAP : 0;
 				if (frontsector->GetTexture(sector_t::ceiling) == skyflatnum) flags |= LMF_SKY;
+				bool dyn = IsLoadDynamic(frontsector, sector_t::ceiling) || IsLoadDynamic(backsector, sector_t::ceiling);
+				if (dyn) flags |= LMF_LOADDYN;
 				uint32_t surf = AddSurface(tex, r, flags);
 				BakeLight(mesh.surfaces[surf], side, side_t::top, orglightlevel);
-				EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, false, nullptr);
+				// sky scroll kind: 0 sky1 / 1 sky2 / 2 mist. The full sky2/doublesky
+				// resolution (MBF line texture, doublesky second layer) is a rendering
+				// concern; the data layer records the kind the VS uses to index the
+				// per-level sky scroll uniform. Default sky1 for the standard case.
+				if (flags & LMF_SKY)
+				{
+					mesh.surfaces[surf].skyScrollKind = 0;
+					mesh.surfaces[surf].skyScrollKind2 = 0;
+				}
+				EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, dyn, nullptr);
 			}
 		}
 
@@ -432,9 +523,11 @@ struct Builder
 			FillLightmapUV(seg, 1, lmuv);
 			uint32_t flags = GetSideLightmap(side, 1) ? LMF_LIGHTMAP : 0;
 			if (side->Flags & WALLF_POLYOBJ) flags |= LMF_POLYOBJ;
+			bool dyn = IsLoadDynamic(frontsector, sector_t::floor) || IsLoadDynamic(frontsector, sector_t::ceiling);
+			if (dyn) flags |= LMF_LOADDYN;
 			uint32_t surf = AddSurface(midtex, r, flags);
 			BakeLight(mesh.surfaces[surf], side, side_t::mid, orglightlevel);
-			EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, false, nullptr);
+			EmitWallQuad(seg, z, uv, cornerMap, lmuv, surf, dyn, nullptr);
 		}
 	}
 
@@ -461,6 +554,7 @@ struct Builder
 			mesh.regionIBOs[m_curRegion].Push(base + i);
 			mesh.regionIBOs[m_curRegion].Push(base + i + 1);
 		}
+		RecordSurfaceVerts(surfaceIndex, base, (uint32_t)n);
 	}
 
 	//--- flat build ---------------------------------------------------------
@@ -482,7 +576,9 @@ struct Builder
 			if (tex && tex->isValid())
 			{
 				float z = (float)sec->floorplane.ZatPoint(ref->fX(), ref->fY());
-				uint32_t surf = AddSurface(tex, r, LMF_ISFLAT);
+				uint32_t flags = LMF_ISFLAT;
+				if (IsLoadDynamic(sec, sector_t::floor)) flags |= LMF_LOADDYN;
+				uint32_t surf = AddSurface(tex, r, flags);
 				// sector light for flats
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(sec->lightlevel);
 				mesh.surfaces[surf].tierLight = sec->planes[sector_t::floor].Light;
@@ -497,9 +593,49 @@ struct Builder
 			if (tex && tex->isValid())
 			{
 				float z = (float)sec->ceilingplane.ZatPoint(ref->fX(), ref->fY());
-				uint32_t surf = AddSurface(tex, r, LMF_ISFLAT);
+				uint32_t flags = LMF_ISFLAT;
+				if (IsLoadDynamic(sec, sector_t::ceiling)) flags |= LMF_LOADDYN;
+				uint32_t surf = AddSurface(tex, r, flags);
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(sec->lightlevel);
 				mesh.surfaces[surf].tierLight = sec->planes[sector_t::ceiling].Light;
+				EmitFlatFan(sub, z, lmuv, surf);
+			}
+		}
+
+		//--- 3D-floor fake flats (model sector's floor + ceiling fans) ---
+		// Each F3DFloor in the sector gets its own floor + ceiling fan in the same
+		// pool, plane refs pointing at the model sector (heightsec). No second pass,
+		// no runtime copies; the structure is static data.
+		TArray<F3DFloor *> &ffloors = sec->e->XFloor.ffloors;
+		int nff = (int)ffloors.Size();
+		for (int j = 0; j < nff; j++)
+		{
+			F3DFloor *xfloor = ffloors[j];
+			if (!(xfloor->flags & FF_EXISTS)) continue;
+			sector_t *model = xfloor->model;
+			if (model == nullptr) continue;
+			// model floor fan
+			FGameTexture *ftex = TexMan.GetGameTexture(model->GetTexture(sector_t::floor), true);
+			if (ftex && ftex->isValid())
+			{
+				float z = (float)model->floorplane.ZatPoint(ref->fX(), ref->fY());
+				uint32_t flags = LMF_ISFLAT | LMF_3DFLOOR;
+				if (IsLoadDynamic(model, sector_t::floor)) flags |= LMF_LOADDYN;
+				uint32_t surf = AddSurface(ftex, r, flags);
+				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
+				mesh.surfaces[surf].tierLight = model->planes[sector_t::floor].Light;
+				EmitFlatFan(sub, z, lmuv, surf);
+			}
+			// model ceiling fan
+			FGameTexture *ctex = TexMan.GetGameTexture(model->GetTexture(sector_t::ceiling), true);
+			if (ctex && ctex->isValid())
+			{
+				float z = (float)model->ceilingplane.ZatPoint(ref->fX(), ref->fY());
+				uint32_t flags = LMF_ISFLAT | LMF_3DFLOOR;
+				if (IsLoadDynamic(model, sector_t::ceiling)) flags |= LMF_LOADDYN;
+				uint32_t surf = AddSurface(ctex, r, flags);
+				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
+				mesh.surfaces[surf].tierLight = model->planes[sector_t::ceiling].Light;
 				EmitFlatFan(sub, z, lmuv, surf);
 			}
 		}
@@ -539,28 +675,22 @@ struct Builder
 
 	void BuildSubRanges()
 	{
+		// The sub-ranges are already in mesh.subRanges in build order (one per
+		// surface, with the AABB computed at emission). Compute the per-region
+		// [texRangeOffset, texRangeCount] range by walking the surfaces in order.
 		int nregions = mesh.regions.Size();
 		for (int r = 0; r < nregions; r++)
 		{
 			LevelMeshRegion &reg = mesh.regions[r];
-			reg.texRangeOffset = (uint32_t)mesh.subRanges.Size();
-			// group surfaces by texture (already in build order)
 			uint32_t count = 0;
+			uint32_t first = 0xFFFFFFFFu;
 			for (uint32_t s = 0; s < mesh.surfaces.Size(); s++)
 			{
-				LevelMeshSurface &surf = mesh.surfaces[s];
-				if ((int)surf.regionIndex != r) continue;
-				LevelMeshSubRange sr;
-				memset(&sr, 0, sizeof(sr));
-				sr.textureIndex = surf.textureIndex;
-				sr.bandIndex = 0;
-				// AABB from the region's vertices for this surface
-				// (approximate: use the whole region for now)
-				sr.aabbMin[0] = sr.aabbMin[1] = 1e30f;
-				sr.aabbMax[0] = sr.aabbMax[1] = -1e30f;
-				mesh.subRanges.Push(sr);
+				if ((int)mesh.surfaces[s].regionIndex != r) continue;
+				if (first == 0xFFFFFFFFu) first = s;
 				count++;
 			}
+			reg.texRangeOffset = (first == 0xFFFFFFFFu) ? 0 : first;
 			reg.texRangeCount = count;
 		}
 	}

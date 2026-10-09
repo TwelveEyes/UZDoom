@@ -91,7 +91,8 @@ struct LevelMeshSurface
 	int16_t lightlistRef;		// 56  -1 for statics
 	uint16_t bandOffset;		// 58  offset into the per-level band table
 	uint16_t bandCount;		// 60
-	uint8_t reserved[2];		// 62
+	uint8_t skyScrollKind;		// 62  0 sky1 / 1 sky2 / 2 mist (sky surfaces)
+	uint8_t skyScrollKind2;		// 63  doublesky second layer
 };
 static_assert(sizeof(LevelMeshSurface) == 64, "LevelMeshSurface must be 64 bytes");
 
