@@ -109,7 +109,7 @@ out vec4  vFogColor;       // fog color (A=0 for regular fog)
 out float vLightFactor;    // SetShaderLight lightfactor
 out float vLightDist;      // SetShaderLight lightdist
 out float vDesaturation;   // cm.Desaturation (0-31)
-out int   vFogEnabled;     // 0 none; +gl_fogmode black; -gl_fogmode colored
+flat out int vFogEnabled; // 0 none; +gl_fogmode black; -gl_fogmode colored (flat: int varyings require flat in both stages)
 out vec4  vGlowTopPlane;   // frontsector ceiling plane (nx, nz, ny, D)
 out vec4  vGlowBottomPlane;// frontsector floor plane   (nx, nz, ny, D)
 out vec4  vGlowTopColor;   // top glow color (A = height)

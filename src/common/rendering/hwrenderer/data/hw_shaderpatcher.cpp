@@ -305,6 +305,7 @@ const FEffectShader effectshaders[] =
 	{ "burn", "shaders/glsl/main.vp", "shaders/glsl/burn.fp", nullptr, nullptr, "#define SIMPLE\n#define NO_ALPHATEST\n" },
 	{ "stencil", "shaders/glsl/main.vp", "shaders/glsl/stencil.fp", nullptr, nullptr, "#define SIMPLE\n#define NO_ALPHATEST\n" },
 	{ "dithertrans", "shaders/glsl/main.vp", "shaders/glsl/main.fp", "shaders/glsl/func_normal.fp", "shaders/glsl/material_normal.fp", "#define NO_ALPHATEST\n#define DITHERTRANS\n" },
+	{ "levelmesh", "shaders/glsl/levelmesh.vp", "shaders/glsl/levelmesh.fp", "shaders/glsl/func_normal.fp", "shaders/glsl/material_normal.fp", "#define NO_ALPHATEST\n", "shaders/glsl/levelmesh_light.glsl", true },
 };
 
 namespace ShaderInputsOutputs
@@ -331,6 +332,7 @@ namespace ShaderInputsOutputs
 		ShaderProperty::Simple, //EFFSHADER_Burn
 		ShaderProperty::Simple, //EFFSHADER_Stencil
 		0, //EFFSHADER_Dithertrans
+		0, //EFFSHADER_LevelMesh
 	};
 
 	TArray<ShaderIOEntry> ShaderFields

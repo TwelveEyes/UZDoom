@@ -54,6 +54,14 @@ struct FEffectShader
 	const char *fp2;
 	const char *fp3;
 	const char *defines;
+	// Lump of GLSL to concatenate before the vertex shader source (e.g. a
+	// function library the VP depends on). nullptr = no prelude.
+	const char *prelude;
+	// Set for effect shaders the Vulkan backend cannot compile (e.g. the
+	// levelmesh VP, which uses a bare scalar uniform the Vulkan GLSL subset
+	// forbids). The Vulkan backend skips such entries; they are GL-only for
+	// now (the Vulkan levelmesh path is a later ticket).
+	bool glonly;
 };
 
 extern const FDefaultShader defaultshaders[];
