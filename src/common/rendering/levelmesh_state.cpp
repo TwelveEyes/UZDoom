@@ -75,7 +75,7 @@ LevelMeshPackedState FLevelMeshState::PackSnapshot(FLevelLocals &level, int slot
 	{
 		return out;
 	}
-	if (level.sectors.Size() != sectorCount)
+	if (level.sectors.Size() != (size_t)sectorCount)
 	{
 		// The sector set is static per level; re-init defensively.
 		Init(level);
@@ -91,24 +91,50 @@ LevelMeshPackedState FLevelMeshState::PackSnapshot(FLevelLocals &level, int slot
 		LevelMeshSectorState &rec = *(LevelMeshSectorState *)(base + (size_t)i * sizeof(LevelMeshSectorState));
 		const DVector3 &fn = sec.floorplane.Normal();
 		const DVector3 &cn = sec.ceilingplane.Normal();
-		rec.floorNormal[0] = (float)fn.X;
-		rec.floorNormal[1] = (float)fn.Y;
-		rec.floorNormal[2] = (float)fn.Z;
-		rec.floorD = (float)sec.floorplane.fD();
-		rec.ceilNormal[0] = (float)cn.X;
-		rec.ceilNormal[1] = (float)cn.Y;
-		rec.ceilNormal[2] = (float)cn.Z;
-		rec.ceilD = (float)sec.ceilingplane.fD();
+		rec.floorPlane[0] = (float)fn.X;
+		rec.floorPlane[1] = (float)fn.Y;
+		rec.floorPlane[2] = (float)fn.Z;
+		rec.floorPlane[3] = (float)sec.floorplane.fD();
+		rec.ceilPlane[0] = (float)cn.X;
+		rec.ceilPlane[1] = (float)cn.Y;
+		rec.ceilPlane[2] = (float)cn.Z;
+		rec.ceilPlane[3] = (float)sec.ceilingplane.fD();
 		// Inside the interpolation window these are the tick-blended values
-		// DoInterpolations() wrote into sector_t; on non-interpolated frames
-		// the raw tick values - exactly what the classic path renders.
-		rec.floorTexZ = (float)sec.GetPlaneTexZ(sector_t::floor);
-		rec.ceilTexZ = (float)sec.GetPlaneTexZ(sector_t::ceiling);
-		rec.lightlevel = sec.lightlevel;
-		rec.planeLight[0] = sec.GetPlaneLight(sector_t::floor);
-		rec.planeLight[1] = sec.GetPlaneLight(sector_t::ceiling);
+		// DoInterpolations() wrote into sector_t (scroll via
+		// DSectorScrollInterpolation); on non-interpolated frames the raw
+		// tick values - exactly what the classic path renders. The scroll is
+		// the sector plane's xform offset (HWSectorPlane::GetFromSector reads
+		// the same GetXOffset/GetYOffset values).
+		rec.floorScroll[0] = (float)sec.GetXOffset(sector_t::floor);
+		rec.floorScroll[1] = (float)sec.GetYOffset(sector_t::floor);
+		rec.ceilScroll[0] = (float)sec.GetXOffset(sector_t::ceiling);
+		rec.ceilScroll[1] = (float)sec.GetYOffset(sector_t::ceiling);
+		rec.lightlevel = (uint16_t)sec.lightlevel;
+		rec.planeLight[0] = (int16_t)sec.GetPlaneLight(sector_t::floor);
+		rec.planeLight[1] = (int16_t)sec.GetPlaneLight(sector_t::ceiling);
+		// bit0 transdoor is locked to 0 (ticket 05 territory); bits 1/2 carry
+		// the per-plane ABSLIGHTING state for the VS light chain.
+		uint16_t lmflags = 0;
+		if (sec.GetFlags(sector_t::floor) & PLANEF_ABSLIGHTING)
+		{
+			lmflags |= 2;
+		}
+		if (sec.GetFlags(sector_t::ceiling) & PLANEF_ABSLIGHTING)
+		{
+			lmflags |= 4;
+		}
+		rec.flags = lmflags;
+		// Raw PalEntry (ABGR): the 0 = texture-glow fallback / ~0u = glow
+		// disabled sentinels are preserved by the raw store. Direct field
+		// access: the GetGlowColor/GetGlowHeight accessors are non-const.
+		rec.glowFloorColor = sec.planes[sector_t::floor].GlowColor;
+		rec.glowFloorHeight = (float)sec.planes[sector_t::floor].GlowHeight;
+		rec.glowCeilColor = sec.planes[sector_t::ceiling].GlowColor;
+		rec.glowCeilHeight = (float)sec.planes[sector_t::ceiling].GlowHeight;
 		LM_PackColormap(rec.colormap, sec.Colormap);
 		memset(rec.reserved, 0, sizeof(rec.reserved));
+		memset(rec.reservedF, 0, sizeof(rec.reservedF));
+		rec.reservedU32 = 0;
 	}
 
 	//--- 3D light state buffer (rebuilt every pack) -------------------------
