@@ -47,35 +47,68 @@ namespace levelmesh
 // Offsets (96 bytes, 4-byte aligned, no padding gaps):
 //
 //	offset	type	field
-//	0		float	floorNormal[3]	sec->floorplane normal (nx, ny, nz)
-//	12		float	floorD			sec->floorplane D
-//	16		float	ceilNormal[3]	sec->ceilingplane normal
-//	28		float	ceilD			sec->ceilingplane D
-//	32		float	floorTexZ		interpolated floor TexZ (GetPlaneTexZ)
-//	36		float	ceilTexZ		interpolated ceiling TexZ
-//	40		int32	lightlevel		raw sec->lightlevel
-//	44		int32	planeLight[2]	[0] floor / [1] ceiling secplane Light offset
-//	52		uint8	colormap[9]	FColormap: LightColor(3) BlendFactor(1)
-//						Desaturation(1) FadeColor(3) FogDensity(1)
-//	61		uint8	reserved[35]	zero; spec section 4's scroll / glow /
-//						flags slots are reserved for later slices
+//	0		float	floorPlane[4]	sec->floorplane (nx, ny, nz, d) - tilted floor plane
+//	16		float	ceilPlane[4]	sec->ceilingplane (nx, ny, nz, d) - tilted ceiling plane
+//	32		float	floorScroll[2]	floor UV offset (applied in VS)
+//	40		float	ceilScroll[2]	ceiling UV offset
+//	48		uint16	lightlevel		raw sector->lightlevel (0..255)
+//	50		int16	planeLight[2]	[0] floor, [1] ceiling - secplane Light offset
+//	54		uint16	flags			bit0 transdoor (VS applies the classic z-1 floor offset)
+//							| bit1 floor ABSLIGHTING | bit2 ceil ABSLIGHTING
+//	56		uint32	glowFloorColor	packed PalEntry (ABGR);
+//							0 = texture-glow fallback, ~0u = glow disabled
+//	60		float	glowFloorHeight
+//	64		uint32	glowCeilColor	packed PalEntry (ABGR);
+//							0 = texture-glow fallback, ~0u = glow disabled
+//	68		float	glowCeilHeight
+//	72		uint8	colormap[9]	FColormap: LightColor(3) BlendFactor(1)
+//							Desaturation(1) FadeColor(3) FogDensity(1)
+//	81		uint8	reserved[3]	zero
+//	84		float	reserved[2]	0 (05's skyOffset slot - reserved)
+//	92		uint32	reserved		0
+//
+// The natural field order below already lands every member at its spec
+// offset (the first 4-byte member after byte 47 is at 56), so no
+// #pragma pack is needed; the offsetof asserts pin the layout.
 //
 //============================================================================
 
 struct LevelMeshSectorState
 {
-	float floorNormal[3];	// 0
-	float floorD;			// 12
-	float ceilNormal[3];	// 16
-	float ceilD;			// 28
-	float floorTexZ;		// 32
-	float ceilTexZ;		// 36
-	int32_t lightlevel;		// 40
-	int32_t planeLight[2];	// 44  [0] floor, [1] ceiling
-	uint8_t colormap[9];	// 52  packed FColormap
-	uint8_t reserved[35];	// 61
+	float floorPlane[4];		// 0   (nx, ny, nz, d) tilted floor plane
+	float ceilPlane[4];		// 16  (nx, ny, nz, d) tilted ceiling plane
+	float floorScroll[2];		// 32  floor UV offset (applied in VS)
+	float ceilScroll[2];		// 40  ceiling UV offset
+	uint16_t lightlevel;		// 48  raw sec->lightlevel (0..255)
+	int16_t planeLight[2];		// 50  [0] floor, [1] ceiling secplane Light offset
+	uint16_t flags;			// 54  bit0 transdoor, bit1 floor ABSLIGHTING,
+							//     bit2 ceil ABSLIGHTING
+	uint32_t glowFloorColor;	// 56  packed PalEntry (ABGR); 0 = texture-glow
+							//     fallback, ~0u = glow disabled
+	float glowFloorHeight;		// 60
+	uint32_t glowCeilColor;		// 64  packed PalEntry (ABGR); 0 = texture-glow
+							//     fallback, ~0u = glow disabled
+	float glowCeilHeight;		// 68
+	uint8_t colormap[9];		// 72  packed FColormap
+	uint8_t reserved[3];		// 81
+	float reservedF[2];		// 84  0
+	uint32_t reservedU32;		// 92  0
 };
 static_assert(sizeof(LevelMeshSectorState) == 96, "LevelMeshSectorState must be 96 bytes");
+static_assert(offsetof(LevelMeshSectorState, ceilPlane) == 16, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, floorScroll) == 32, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, ceilScroll) == 40, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, lightlevel) == 48, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, planeLight) == 50, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, flags) == 54, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, glowFloorColor) == 56, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, glowFloorHeight) == 60, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, glowCeilColor) == 64, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, glowCeilHeight) == 68, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, colormap) == 72, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, reserved) == 81, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, reservedF) == 84, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, reservedU32) == 92, "LevelMeshSectorState layout");
 
 //============================================================================
 //
