@@ -189,6 +189,44 @@ struct FVector4PalEntry
 
 };
 
+// Ticket 03 (level-mesh): per-draw parameters for the levelmesh path. The
+// draw pass fills one of these from FLevelLocals + cvars before drawing the
+// sub-ranges; the GL backend pushes it into the active shader's levelmesh
+// uniforms in FGLRenderState::ApplyShader. All fields default to values that
+// keep a first draw plausible without per-level state (no fog, Doom light
+// mode, full visibility).
+struct LevelMeshDrawParams
+{
+	// Record pool geometry: uSectorStateSlot / uSurfaceCount / uSectorCount.
+	int sectorStateSlot = -1;		// FLevelMeshFrame::currentSlot
+	int surfaceCount = 0;			// FLevelMesh::surfaces.Size()
+	int sectorCount = 0;			// FLevelMeshState sector count
+
+	// Per-level state (FLevelLocals).
+	float fogDensity = 0.f;
+	float outsideFogDensity = 0.f;
+	uint32_t outsideFog = 0;
+	uint32_t flags3 = 0;
+	uint32_t flags2 = 0;
+	uint32_t flags = 0;
+	int skyfog = 0;
+	float culldist = 0.f;
+
+	// Per-frame / global.
+	float skyPos[3] = { 0, 0, 0 };	// hw_sky1pos / hw_sky2pos / hw_skymistpos
+	int lightMode = 0;				// ELightMode
+	int distanceCullType = 0;		// r_distance_cull_type
+	float cullColor[4] = { 0, 0, 0, 0 };	// gl_cullcolor (0-1)
+	int fogMode = 0;					// gl_fogmode
+	float visibility = 1.f;			// r_visibility
+	int extralight = 0;				// r_extralight
+	int weaponLight = 0;			// viewpoint.extralight * gl_weaponlight
+	int fakeContrast = 0;			// r_fakecontrast
+	int wallHorizLight = 0;			// FLevelLocals::WallHorizLight
+	int wallVertLight = 0;			// FLevelLocals::WallVertLight
+	bool insybox = false;			// portalState.inskybox
+};
+
 struct StreamData
 {
 	FVector4PalEntry uObjectColor;
@@ -263,6 +301,8 @@ protected:
 	IIndexBuffer *mIndexBuffer;
 
 	EPassType mPassType = NORMAL_PASS;
+
+	LevelMeshDrawParams mLevelMesh;
 
 public:
 
@@ -743,6 +783,21 @@ public:
 	virtual void ClearScreen() = 0;
 	virtual void Draw(int dt, int index, int count, bool apply = true) = 0;
 	virtual void DrawIndexed(int dt, int index, int count, bool apply = true) = 0;
+
+	// Ticket 03 (level-mesh): draw indexed triangles from an explicit vertex
+	// array object (a levelmesh region VAO whose own IBO is already bound on
+	// GL_ELEMENT_ARRAY_BUFFER). Applies the pending render state first, then
+	// binds `vao` and issues glDrawElements over elements [index, index+count)
+	// of the VAO's index buffer. The standard vertex/index buffer path is not
+	// used: the levelmesh attribute layout differs from IVertexBuffer's.
+	// GL33-only; the base implementation is a no-op for backends without a
+	// levelmesh path.
+	virtual void DrawLevelMesh(unsigned int vao, int index, int count) { }
+
+	// Ticket 03 (level-mesh): per-draw levelmesh parameters, pushed into the
+	// active shader by the GL backend on Apply. No-op storage on backends
+	// that never draw levelmesh.
+	void SetLevelMeshParams(const LevelMeshDrawParams &p) { mLevelMesh = p; }
 
 	// Immediate render state change commands. These only change infrequently and should not clutter the render state.
 	virtual bool SetDepthClamp(bool on) = 0;					// Deactivated only by skyboxes.

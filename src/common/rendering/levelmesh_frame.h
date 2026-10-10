@@ -77,6 +77,13 @@ struct FLevelMeshFrame
 	// all regions (0 until Prepare). Build never appends past this index.
 	uint32_t bound = 0;
 
+	// [levelmesh] E2: the sector state ring slot this frame's data was
+	// uploaded to (the one D_Render passed to PackSnapshot and
+	// UploadLevelMeshSlot); -1 until the first Build. The draw pass feeds it
+	// to the shader as uSectorStateSlot so the VS fetches the ring slot the
+	// CPU just wrote.
+	int currentSlot = -1;
+
 	// Size the draw list to the static bound for this mesh. Idempotent: a
 	// second call with the same bound is a no-op, so it is safe to run
 	// every frame. Build() self-Prepares lazily (see there).
