@@ -26,8 +26,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <cstddef>
 #include "tarray.h"
+#include "matrix.h"
 #include "hwrenderer/data/buffers.h"	// HW_MAX_PIPELINE_BUFFERS (ring slot math)
 
 class player_t;
@@ -90,10 +90,11 @@ struct FLevelMeshFrame
 	void Prepare(const FLevelMesh &mesh);
 
 	// The per-frame cull walk: test every region's texRange entries'
-	// precomputed world AABBs against the six view-frustum planes and
-	// append the survivors to the draw list. Returns the entry count.
-	// No allocation after the first Build (Prepare is lazy, see above).
-	uint32_t Build(const FLevelMesh &mesh, const float frustumPlanes[24]);
+	// precomputed world AABB corners through the view-projection matrix in
+	// clip space and append the survivors to the draw list. Returns the
+	// entry count. No allocation after the first Build (Prepare is lazy, see
+	// above).
+	uint32_t Build(const FLevelMesh &mesh, VSMatrix &vp);
 
 	// Number of entries in this frame's draw list.
 	uint32_t EntryCount() const { return (uint32_t)drawList.Size(); }
@@ -112,19 +113,17 @@ struct FLevelMeshFrame
 
 //============================================================================
 //
-// LevelMesh_CalcFrustumPlanes
+// LevelMesh_CalcCullVP
 //
-// Derives the six view-frustum planes (near, far, left, right, top,
-// bottom) for a player viewpoint into out[24] as six float4s
-// (a, b, c, d) with the "inside = dot(p, plane) >= 0" convention.
-//
+// Builds the view-projection matrix for a player viewpoint into vp.
 // Replicates the classic view math: the view matrix is built exactly like
 // HWDrawInfo::SetViewMatrix (roll/pitch/yaw + translate + x-flip scale with
 // the level pixelstretch) and the projection exactly like the mono path of
 // VREyeInfo::GetProjection (perspective from r_viewwindow's widescreen
-// ratio, zNear 5 / zFar 65536). The planes are then extracted from the
-// VP = P*V matrix rows. The cull walk runs BEFORE RenderView computes the
-// real VPUniforms, which is why this helper exists.
+// ratio, zNear 5 / zFar 65536). Culling then tests texRange AABB corners
+// through this VP in clip space - the exact same product as the vertex
+// shader. The cull walk runs BEFORE RenderView computes the real
+// VPUniforms, which is why this helper exists.
 //
 // Note: this uses the player's current (uninterpolated) origin and angles;
 // the classic view interpolates sub-tic position. The difference is sub-tic
@@ -133,6 +132,6 @@ struct FLevelMeshFrame
 //
 //============================================================================
 
-void LevelMesh_CalcFrustumPlanes(player_t *pl, float out[24]);
+void LevelMesh_CalcCullVP(player_t *pl, VSMatrix &vp);
 
 }

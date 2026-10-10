@@ -582,6 +582,7 @@ void D_Render(std::function<void()> action, bool interpolate)
 	// counter makes the rotation trivially auditable). The gamestate guard
 	// mirrors the D_Render call site below (GS_LEVEL/GS_TITLELEVEL only).
 	static uint64_t LevelMeshSlotCounter = 0;
+	lm_drawentries = 0; // fresh per-frame value for the r_perflog line (ResetProfilingData runs later, inside action())
 	int lmSlot = -1;
 	if (interpolate && (gamestate == GS_LEVEL || gamestate == GS_TITLELEVEL))
 	{
@@ -617,9 +618,9 @@ void D_Render(std::function<void()> action, bool interpolate)
 			Clocker c(LevelMeshFrame);
 			int slot = lmSlot;
 			Level->levelMeshData->state.PackSnapshot(*Level, slot);
-			float planes[24];
-			levelmesh::LevelMesh_CalcFrustumPlanes(&players[consoleplayer], planes);
-			lm_drawentries = (int)Level->levelMeshFrame.Build(*Level->levelMeshData, planes);
+			VSMatrix cullVP;
+			levelmesh::LevelMesh_CalcCullVP(&players[consoleplayer], cullVP);
+			lm_drawentries = (int)Level->levelMeshFrame.Build(*Level->levelMeshData, cullVP);
 			Level->levelMeshFrame.currentSlot = slot;
 			if (screen != nullptr) screen->UploadLevelMeshSlot(Level, slot);
 		}
