@@ -65,7 +65,10 @@ static float LM_RAD2DEG(float rad)
 // LMAABBInFrustum
 //
 // The exact cull test: a sub-range entry's 2D world AABB is extruded to two
-// z-slices (z=0 and z=LM_CULL_ZMAX), giving eight corner points. The entry
+// z-slices (z=0 and z=LM_CULL_ZMAX) in DOOM space, giving eight corner points.
+// The frustum planes are in GPU space - levelmesh.vp transforms vertices as
+// worldpos = (x, z_doom, y_doom) before ViewMatrix - so the plane dot uses
+// pl[1] with the DOOM z and pl[2] with the DOOM y. The entry
 // is kept iff ANY of the eight corners is inside ALL six frustum planes;
 // it is culled only if EVERY corner fails at least one plane. For a convex
 // box this is exact: all-corners-outside implies the whole box is outside,
@@ -76,7 +79,21 @@ static float LM_RAD2DEG(float rad)
 //
 //============================================================================
 
-static bool LMAABBInFrustum(const float aabbMin[2], const float aabbMax[2], const float planes[24])
+// Clip-space corner test: a point is inside the frustum when its clip coords
+// satisfy |x| <= w, |y| <= w and -w <= z <= w.  This uses the exact same matrix
+// product as the vertex shader (uProj * uView), so no plane-extraction or layout
+// assumptions are needed.
+static bool LMPointInFrustum(VSMatrix &vp, float x, float y, float z)
+{
+	float p[4] = { x, y, z, 1.f };
+	float o[4];
+	vp.multMatrixPoint(p, o);
+	const float w = o[3];
+	if (w <= 0.f) return false; // behind the camera
+	return fabsf(o[0]) <= w && fabsf(o[1]) <= w && o[2] >= -w && o[2] <= w;
+}
+
+static bool LMAABBInFrustum(const float aabbMin[2], const float aabbMax[2], VSMatrix &vp)
 {
 	const float xs[2] = { aabbMin[0], aabbMax[0] };
 	const float ys[2] = { aabbMin[1], aabbMax[1] };
@@ -88,16 +105,7 @@ static bool LMAABBInFrustum(const float aabbMin[2], const float aabbMax[2], cons
 		{
 			for (int iz = 0; iz < 2; iz++)
 			{
-				const float x = xs[ix];
-				const float y = ys[iy];
-				const float z = zs[iz];
-				bool inside = true;
-				for (int p = 0; p < 6 && inside; p++)
-				{
-					const float *pl = &planes[p * 4];
-					if (pl[0] * x + pl[1] * y + pl[2] * z + pl[3] < 0.f) inside = false;
-				}
-				if (inside) return true;
+				if (LMPointInFrustum(vp, xs[ix], ys[iy], zs[iz])) return true;
 			}
 		}
 	}
@@ -124,7 +132,7 @@ void FLevelMeshFrame::Prepare(const FLevelMesh &mesh)
 	drawList.Reserve(newBound);	// Count = newBound; no further allocation in Build
 }
 
-uint32_t FLevelMeshFrame::Build(const FLevelMesh &mesh, const float planes[24])
+uint32_t FLevelMeshFrame::Build(const FLevelMesh &mesh, VSMatrix &vp)
 {
 	Prepare(mesh);	// lazy: allocates at most once per level (re)load
 	if (bound == 0) return 0;
@@ -137,7 +145,7 @@ uint32_t FLevelMeshFrame::Build(const FLevelMesh &mesh, const float planes[24])
 		const LevelMeshTexRange *tr = &mesh.texRanges[reg.texRangeOffset];
 		for (uint32_t i = 0; i < reg.texRangeCount; i++, tr++)
 		{
-			if (LMAABBInFrustum(tr->aabbMin, tr->aabbMax, planes))
+			if (LMAABBInFrustum(tr->aabbMin, tr->aabbMax, vp))
 			{
 				drawList[count].regionIndex = r;
 				drawList[count].texRangeIndex = reg.texRangeOffset + i;
@@ -151,7 +159,7 @@ uint32_t FLevelMeshFrame::Build(const FLevelMesh &mesh, const float planes[24])
 
 //============================================================================
 //
-// LevelMesh_CalcFrustumPlanes
+// LevelMesh_CalcCullVP
 //
 // Duplicates the classic view math (the cull walk runs before RenderView
 // computes VPUniforms, so those cannot be read):
@@ -165,22 +173,17 @@ uint32_t FLevelMeshFrame::Build(const FLevelMesh &mesh, const float planes[24])
 //                  fov is the main view's FOV (D_Display's camera GetFOV)
 //                  and ratio / fovratio come from r_viewwindow exactly like
 //                  the main-view call in hw_entrypoint.cpp.
-//   planes       - standard row extraction from VP = P*V (OpenGL convention,
-//                  clip z in [-1, 1]): near R3+R4, far R3-R4, left R3+R1,
-//                  right R3-R1, bottom R3+R2, top R3-R2.
+//
+// Culling then tests texRange AABB corners through this VP in clip space, the
+// exact same product as the vertex shader - no plane extraction needed.
 //
 //============================================================================
 
-void LevelMesh_CalcFrustumPlanes(player_t *pl, float out[24])
+void LevelMesh_CalcCullVP(player_t *pl, VSMatrix &vp)
 {
-	// No valid player/mo: all-passing planes (no culling).
 	if (pl == nullptr || pl->mo == nullptr)
 	{
-		for (int i = 0; i < 6; i++)
-		{
-			out[i * 4 + 0] = out[i * 4 + 1] = out[i * 4 + 2] = 0.f;
-			out[i * 4 + 3] = 1.f;
-		}
+		vp.loadIdentity(); // identity VP passes everything in clip space only for the origin; culling stays off via the caller's early-out
 		return;
 	}
 
@@ -224,32 +227,8 @@ void LevelMesh_CalcFrustumPlanes(player_t *pl, float out[24])
 	VSMatrix proj;
 	proj.perspective(fovyDeg, ratio, LM_CULL_ZNEAR, LM_CULL_ZFAR);
 
-	// VP = P*V, then the six frustum planes from its rows. VSMatrix storage
-	// is column-major: row r = (m[0*4+r], m[1*4+r], m[2*4+r], m[3*4+r]).
-	VSMatrix vp;
 	vp.loadMatrix(proj.get());
 	vp.multMatrix(view);
-	const float *m = vp.mMatrix;
-
-	float rows[4][4];
-	for (int r = 1; r <= 4; r++)
-	{
-		rows[r - 1][0] = m[0 * 4 + r];
-		rows[r - 1][1] = m[1 * 4 + r];
-		rows[r - 1][2] = m[2 * 4 + r];
-		rows[r - 1][3] = m[3 * 4 + r];
-	}
-	const float (*r)[4] = rows;
-	// R3 is the base row for all six planes; the addend row carries the sign.
-	static const int addend[6] = { 3, 3, 0, 0, 1, 1 };	// near/far R4, left/right R1, bottom/top R2
-	static const int sign[6] = { 1, -1, 1, -1, 1, -1 };
-	for (int p = 0; p < 6; p++)
-	{
-		for (int i = 0; i < 4; i++)
-		{
-			out[p * 4 + i] = r[2][i] + sign[p] * r[addend[p]][i];
-		}
-	}
 }
 
 }

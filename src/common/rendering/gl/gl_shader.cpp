@@ -1011,8 +1011,10 @@ bool FShaderCollection::CompileNextShader()
 		{
 			int prelude_lump = fileSystem.CheckNumForFullName(effectshaders[i].prelude, 0);
 			if (prelude_lump == -1) I_Error("Unable to load '%s'", effectshaders[i].prelude);
+			int vp_lump = fileSystem.CheckNumForFullName(effectshaders[i].vp, 0);
+			if (vp_lump == -1) I_Error("Unable to load '%s'", effectshaders[i].vp);
 			// A leading '#' marks inline source rather than a lump name, see FShader::Load.
-			prelude_vp << '#' << GetStringFromLump(prelude_lump).GetChars() << "\n" << effectshaders[i].vp;
+			prelude_vp << '#' << GetStringFromLump(prelude_lump).GetChars() << "\n" << GetStringFromLump(vp_lump).GetChars();
 			vpsrc = prelude_vp.GetChars();
 		}
 		if (!eff->Load(effectshaders[i].ShaderName, vpsrc, effectshaders[i].fp1,

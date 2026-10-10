@@ -70,7 +70,9 @@ void ResetProfilingData()
 	WTTotal.Reset();
 	LevelMeshFrame.Reset();
 
-	lm_drawentries = 0;
+	// lm_drawentries is NOT reset here: D_Render sets it before action() runs
+	// this function, and the perf log reads it after. It is zeroed per frame in
+	// D_Render (d_main.cpp) instead.
 	flatvertices=flatprimitives=vertexcount=0;
 	render_texsplit=render_vertexsplit=rendered_lines=rendered_flats=rendered_sprites=rendered_decals=rendered_portals = 0;
 }
