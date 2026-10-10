@@ -124,6 +124,10 @@ bool FGLRenderState::ApplyShader()
 	activeShader->muInterpolationFactor.Set(mStreamData.uInterpolationFactor);
 	activeShader->muTimer.Set((double)(screen->FrameTime - firstFrame) * (double)mShaderTimer / 1000.);
 	activeShader->muAlphaThreshold.Set(mAlphaThreshold);
+
+	// Ticket 03 (level-mesh): push this draw's levelmesh parameters into the
+	// active program; a no-op on non-levelmesh shaders (all locations -1).
+	activeShader->SetLevelMesh(mLevelMesh);
 	activeShader->muLightIndex.Set(-1);
 	activeShader->muBoneIndexBase.Set(-1);
 	activeShader->muClipSplit.Set(mClipSplit);
@@ -427,6 +431,31 @@ void FGLRenderState::DrawIndexed(int dt, int index, int count, bool apply)
 	}
 	drawcalls.Clock();
 	glDrawElements(dt2gl[dt], count, GL_UNSIGNED_INT, (void*)(intptr_t)(index * sizeof(uint32_t)));
+	drawcalls.Unclock();
+}
+
+//==========================================================================
+//
+// Ticket 03 (level-mesh): draw one sub-range from an explicit region VAO.
+// The levelmesh VAOs carry their own IBO and attribute bindings, so the
+// standard vertex/index buffer path is bypassed here; ApplyBuffers() is not
+// called because mVertexBuffer is not set for this pass. Material, effect
+// and shader state are applied first; depth/blend/scissor were already made
+// live by the Set* calls of the draw pass.
+//
+//==========================================================================
+
+void FGLRenderState::DrawLevelMesh(unsigned int vao, int index, int count)
+{
+	ApplyState();
+	ApplyShader();
+	drawcalls.Clock();
+	glBindVertexArray(vao);
+	glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, (void*)(intptr_t)(index * sizeof(uint32_t)));
+	// Restore the renderer's default VAO: the attribute state of mVAOID is
+	// what mCurrentVertexBuffer/mCurrentIndexBuffer track, and it must stay
+	// in sync for the next standard draw.
+	glBindVertexArray(GLRenderer->mVAOID);
 	drawcalls.Unclock();
 }
 

@@ -76,6 +76,7 @@ public:
 	void InitLightmap(int LMTextureSize, int LMTextureCount, TArray<uint16_t>& LMTextureData) override;
 	void SetLevelMeshData(levelmesh::FLevelMesh *mesh) override;
 	void UploadLevelMeshSlot(::FLevelLocals *level, int slot) override;
+	bool DrawLevelMesh(FRenderState &state, ::FLevelLocals *level) override;
 
 	// Retrieves a buffer containing image data for a screenshot.
 	// Hint: Pitch can be negative for upside-down images, in which case buffer

@@ -263,6 +263,99 @@ class FShader
 	FBufferedUniform2f muNpotEmulation;
 #endif
 
+	// Ticket 03 (level-mesh): the levelmesh.vp-specific uniforms. Raw
+	// locations: -1 on every non-levelmesh shader, where all Set* calls are
+	// no-ops, so FGLRenderState::ApplyShader pushes the params through the
+	// same code path unconditionally.
+	struct LevelMeshUniforms
+	{
+		int sectorStateSlot = -1;	// uSectorStateSlot (int)
+		int surfaceCount = -1;		// uSurfaceCount (int)
+		int sectorCount = -1;		// uSectorCount (int)
+		int levelSkyPos = -1;		// uLevelSkyPos (vec3)
+		int lightMode = -1;		// uLightMode (int)
+		int levelFogDensity = -1;	// uLevelFogDensity (float)
+		int outsideFogDensity = -1;// uOutsideFogDensity (float)
+		int outsideFog = -1;		// uOutsideFog (uint)
+		int levelFlags3 = -1;		// uLevelFlags3 (uint)
+		int levelFlags2 = -1;		// uLevelFlags2 (uint)
+		int levelFlags = -1;		// uLevelFlags (uint)
+		int skyfog = -1;		// uSkyfog (int)
+		int cullDist = -1;		// uCullDist (float)
+		int glCullColor = -1;		// uGlCullColor (vec4, 0-1)
+		int rDistanceCullType = -1;// uRDistanceCullType (int)
+		int fogMode = -1;		// uGlFogMode (int)
+		int rVisibility = -1;		// uRVisibility (float)
+		int rExtralight = -1;		// uRExtralight (int)
+		int weaponLight = -1;		// uWeaponLight (int)
+		int rFakeContrast = -1;	// uRFakeContrast (int)
+		int wallHorizLight = -1;	// uWallHorizLight (int)
+		int wallVertLight = -1;	// uWallVertLight (int)
+		int insybox = -1;		// uInsybox (bool -> uniform1i)
+		int uSurface = -1;		// samplerBuffer record pools, fixed units 12-14
+		int uSectorState = -1;
+		int uLightState = -1;
+
+		void Init(GLuint hShader)
+		{
+			sectorStateSlot = glGetUniformLocation(hShader, "uSectorStateSlot");
+			surfaceCount = glGetUniformLocation(hShader, "uSurfaceCount");
+			sectorCount = glGetUniformLocation(hShader, "uSectorCount");
+			levelSkyPos = glGetUniformLocation(hShader, "uLevelSkyPos");
+			lightMode = glGetUniformLocation(hShader, "uLightMode");
+			levelFogDensity = glGetUniformLocation(hShader, "uLevelFogDensity");
+			outsideFogDensity = glGetUniformLocation(hShader, "uOutsideFogDensity");
+			outsideFog = glGetUniformLocation(hShader, "uOutsideFog");
+			levelFlags3 = glGetUniformLocation(hShader, "uLevelFlags3");
+			levelFlags2 = glGetUniformLocation(hShader, "uLevelFlags2");
+			levelFlags = glGetUniformLocation(hShader, "uLevelFlags");
+			skyfog = glGetUniformLocation(hShader, "uSkyfog");
+			cullDist = glGetUniformLocation(hShader, "uCullDist");
+			glCullColor = glGetUniformLocation(hShader, "uGlCullColor");
+			rDistanceCullType = glGetUniformLocation(hShader, "uRDistanceCullType");
+			fogMode = glGetUniformLocation(hShader, "uGlFogMode");
+			rVisibility = glGetUniformLocation(hShader, "uRVisibility");
+			rExtralight = glGetUniformLocation(hShader, "uRExtralight");
+			weaponLight = glGetUniformLocation(hShader, "uWeaponLight");
+			rFakeContrast = glGetUniformLocation(hShader, "uRFakeContrast");
+			wallHorizLight = glGetUniformLocation(hShader, "uWallHorizLight");
+			wallVertLight = glGetUniformLocation(hShader, "uWallVertLight");
+			insybox = glGetUniformLocation(hShader, "uInsybox");
+			uSurface = glGetUniformLocation(hShader, "uSurface");
+			uSectorState = glGetUniformLocation(hShader, "uSectorState");
+			uLightState = glGetUniformLocation(hShader, "uLightState");
+		}
+
+		void Set(const LevelMeshDrawParams &p)
+		{
+			glUniform1i(sectorStateSlot, p.sectorStateSlot);
+			glUniform1i(surfaceCount, p.surfaceCount);
+			glUniform1i(sectorCount, p.sectorCount);
+			glUniform3fv(levelSkyPos, 1, p.skyPos);
+			glUniform1i(lightMode, p.lightMode);
+			glUniform1f(levelFogDensity, p.fogDensity);
+			glUniform1f(outsideFogDensity, p.outsideFogDensity);
+			glUniform1ui(outsideFog, (GLuint)p.outsideFog);
+			glUniform1ui(levelFlags3, p.flags3);
+			glUniform1ui(levelFlags2, p.flags2);
+			glUniform1ui(levelFlags, p.flags);
+			glUniform1i(skyfog, p.skyfog);
+			glUniform1f(cullDist, p.culldist);
+			glUniform4fv(glCullColor, 1, p.cullColor);
+			glUniform1i(rDistanceCullType, p.distanceCullType);
+			glUniform1i(fogMode, p.fogMode);
+			glUniform1f(rVisibility, p.visibility);
+			glUniform1i(rExtralight, p.extralight);
+			glUniform1i(weaponLight, p.weaponLight);
+			glUniform1i(rFakeContrast, p.fakeContrast);
+			glUniform1i(wallHorizLight, p.wallHorizLight);
+			glUniform1i(wallVertLight, p.wallVertLight);
+			glUniform1i(insybox, (int)p.insybox);
+		}
+	};
+
+	LevelMeshUniforms lmU;
+
 	int lights_index;
 	int modelmatrix_index;
 	int normalmodelmatrix_index;
@@ -284,6 +377,10 @@ public:
 	}
 
 	~FShader();
+
+	// Ticket 03 (level-mesh): push one frame's levelmesh parameters into the
+	// program. No-op on non-levelmesh shaders (all locations -1).
+	void SetLevelMesh(const LevelMeshDrawParams &p) { lmU.Set(p); }
 
 	bool Load(const char * name, const char * vert_prog_lump, const char * fragprog, const char * fragprog2, const char * light_fragprog, const char *defines, bool isGBuffer, AllShaderIndex type);
 

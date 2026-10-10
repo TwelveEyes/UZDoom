@@ -751,6 +751,7 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 	muTextureModulateColor.Init(hShader, "uTextureModulateColor");
 	muTextureBlendColor.Init(hShader, "uTextureBlendColor");
 	muTimer.Init(hShader, "timer");
+	lmU.Init(hShader);
 
 	lights_index = glGetUniformLocation(hShader, "lights");
 	modelmatrix_index = glGetUniformLocation(hShader, "ModelMatrix");
@@ -784,6 +785,15 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 
 	int lightmapindex = glGetUniformLocation(hShader, "LightMap");
 	if (lightmapindex != -1) glUniform1i(lightmapindex, 17);
+
+	// Ticket 03 (level-mesh): fixed units for the three record-pool
+	// samplerBuffers. Material layers own units 0-11 (the texture%d loop
+	// above), ShadowMap owns 16 and LightMap 17, so 12-14 cannot collide with
+	// per-draw material textures. The locations are -1 on non-levelmesh
+	// shaders; glUniform1i on -1 is a no-op.
+	if (lmU.uSurface != -1) glUniform1i(lmU.uSurface, 12);
+	if (lmU.uSectorState != -1) glUniform1i(lmU.uSectorState, 13);
+	if (lmU.uLightState != -1) glUniform1i(lmU.uLightState, 14);
 
 	glUseProgram(0);
 	return true;

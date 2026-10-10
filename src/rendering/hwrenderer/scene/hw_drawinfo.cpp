@@ -558,21 +558,34 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 
 	state.EnableTexture(gl_texture);
 	state.EnableBrightmap(true);
-	drawlists[GLDL_PLAINWALLS].DrawWalls(this, state, false);
-	drawlists[GLDL_PLAINFLATS].DrawFlats(this, state, false);
 
-
-	// Part 2: masked geometry. This is set up so that only pixels with alpha>gl_mask_threshold will show
-	state.AlphaFunc(Alpha_GEqual, gl_mask_threshold);
-	drawlists[GLDL_MASKEDWALLS].DrawWalls(this, state, false);
-	drawlists[GLDL_MASKEDFLATS].DrawFlats(this, state, false);
-
-	// Part 3: masked geometry with polygon offset. This list is empty most of the time so only waste time on it when in use.
-	if (drawlists[GLDL_MASKEDWALLSOFS].Size() > 0)
+	// Ticket 03 (chunk E2): the prebuilt level-mesh path. When the level was
+	// built for it, the per-frame culled sub-range table replaces all three
+	// classic geometry passes below; the draw walks it through the
+	// DFrameBuffer seam (GL33 only). A false return - GL objects not ready or
+	// no frame built yet - falls back to the classic passes so the level is
+	// always drawn. With gl_uselevelmesh 0 none of this runs and the frame
+	// stays byte-for-byte classic.
+	if (Level->useLevelMesh && screen->DrawLevelMesh(state, Level))
 	{
-		state.SetDepthBias(-1, -128);
-		drawlists[GLDL_MASKEDWALLSOFS].DrawWalls(this, state, false);
-		state.ClearDepthBias();
+	}
+	else
+	{
+		drawlists[GLDL_PLAINWALLS].DrawWalls(this, state, false);
+		drawlists[GLDL_PLAINFLATS].DrawFlats(this, state, false);
+
+		// Part 2: masked geometry. This is set up so that only pixels with alpha>gl_mask_threshold will show
+		state.AlphaFunc(Alpha_GEqual, gl_mask_threshold);
+		drawlists[GLDL_MASKEDWALLS].DrawWalls(this, state, false);
+		drawlists[GLDL_MASKEDFLATS].DrawFlats(this, state, false);
+
+		// Part 3: masked geometry with polygon offset. This list is empty most of the time so only waste time on it when in use.
+		if (drawlists[GLDL_MASKEDWALLSOFS].Size() > 0)
+		{
+			state.SetDepthBias(-1, -128);
+			drawlists[GLDL_MASKEDWALLSOFS].DrawWalls(this, state, false);
+			state.ClearDepthBias();
+		}
 	}
 
 	screen->mBones->Map();

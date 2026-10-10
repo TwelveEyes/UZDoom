@@ -253,6 +253,13 @@ public:
 	// the interpolation window). Base no-op: only backends with a level-mesh
 	// GPU object set (GL33) implement it.
 	virtual void UploadLevelMeshSlot(FLevelLocals *level, int slot) {}
+	// Ticket 03 (chunk E2): draws the level's level-mesh sub-ranges with the
+	// given render state, replacing the classic wall/flat geometry passes in
+	// HWDrawInfo::RenderScene. Base no-op: only GL33 implements it. Returns
+	// true when the level's geometry was drawn (including an empty draw list)
+	// and false when the backend cannot draw it, so the scene layer falls
+	// back to the classic passes.
+	virtual bool DrawLevelMesh(FRenderState &state, FLevelLocals *level) { return false; }
 
 	// Interface to hardware rendering resources
 	virtual IVertexBuffer *CreateVertexBuffer() { return nullptr; }

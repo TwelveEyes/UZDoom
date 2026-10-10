@@ -604,13 +604,14 @@ void D_Render(std::function<void()> action, bool interpolate)
 		}
 		else Level->HasDynamicLights = false;	// lights are off so effectively we have none.
 		if (interpolate) Level->interpolator.DoInterpolations(I_GetTimeFrac());
-		// [levelmesh] E1: frame build inside the interpolation window - the
+		// [levelmesh] E1/E2: frame build inside the interpolation window - the
 		// sector snapshot reads the tick-blended live values DoInterpolations
 		// just wrote. Order: PackSnapshot -> frustum cull walk over the static
 		// per-(region, texture) sub-range table -> GPU slot upload through the
-		// DFrameBuffer seam. The draw pass is a later chunk; when useLevelMesh
-		// is false (gl_uselevelmesh 0) all of this is skipped and the frame is
-		// byte-for-byte classic.
+		// DFrameBuffer seam; currentSlot records which ring slot the data went
+		// to so the draw pass (HWDrawInfo::RenderScene, chunk E2) can tell the
+		// shader. When useLevelMesh is false (gl_uselevelmesh 0) all of this is
+		// skipped and the frame is byte-for-byte classic.
 		if (lmSlot >= 0 && Level->useLevelMesh && Level->levelMeshData != nullptr)
 		{
 			Clocker c(LevelMeshFrame);
@@ -619,6 +620,7 @@ void D_Render(std::function<void()> action, bool interpolate)
 			float planes[24];
 			levelmesh::LevelMesh_CalcFrustumPlanes(&players[consoleplayer], planes);
 			lm_drawentries = (int)Level->levelMeshFrame.Build(*Level->levelMeshData, planes);
+			Level->levelMeshFrame.currentSlot = slot;
 			if (screen != nullptr) screen->UploadLevelMeshSlot(Level, slot);
 		}
 		P_FindParticleSubsectors(Level);

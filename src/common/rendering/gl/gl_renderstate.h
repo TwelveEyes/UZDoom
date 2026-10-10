@@ -118,6 +118,7 @@ public:
 	void ClearScreen() override;
 	void Draw(int dt, int index, int count, bool apply = true) override;
 	void DrawIndexed(int dt, int index, int count, bool apply = true) override;
+	void DrawLevelMesh(unsigned int vao, int index, int count) override;
 
 	bool SetDepthClamp(bool on) override;
 	void SetDepthMask(bool on) override;
