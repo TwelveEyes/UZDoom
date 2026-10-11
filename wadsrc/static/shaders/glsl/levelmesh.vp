@@ -131,12 +131,19 @@ out vec4  vGlowBottomColor;// bottom glow color (A = height)
 #define LMF_POLYOBJ       1024
 #define LMF_3DFLOOR       4096
 #define LMF_FAKECONTRAST  8192
+#define LMF_SIDE_ABSLIGHT       (1 << 14)
+#define LMF_SIDE_ABSTIER        (1 << 15)
+#define LMF_SIDE_NOFAKECONTRAST (1 << 16)
+#define LMF_SIDE_SMOOTHLIGHT    (1 << 17)
+#define LMF_SIDE_LIGHTFOG       (1 << 18)
 #define LM_PLANEREF_NONE  0xFFFFFFFFu
 
-// LEVEL3_NOLIGHTFADE (g_levellocals.h) and LEVEL2_SMOOTHLIGHTING bit values.
-// These must match the C++ enum; the host also passes the raw flags words.
-#define LEVEL3_NOLIGHTFADE  (1u << 0)
-#define LEVEL2_SMOOTHLIGHTING (1u << 0)
+// LEVEL3_NOLIGHTFADE / LEVEL2_SMOOTHLIGHTING / LEVEL_HASFADETABLE bit values
+// (g_mapinfo.h). These must match the C++ enum; the host passes the raw words.
+#define LEVEL3_NOLIGHTFADE    0x00000008u
+#define LEVEL2_SMOOTHLIGHTING 0x01000000u
+#define LEVEL_HASFADETABLE    0x00000008u
+#define LEVEL3_FORCEFAKECONTRAST 0x00000001u
 
 //
 // TYPES
@@ -241,23 +248,24 @@ LMSurface LMFetchSurface(int index)
 LMSectorState LMFetchSector(int sectorIndex)
 {
 	int idx = uSectorStateSlot * uSectorCount + sectorIndex;
-	vec4 a = texelFetch(uSectorState, idx * 9 + 0);   // floorPlane[4] (nx,ny,nz,D)  [0-3]
-	vec4 b = texelFetch(uSectorState, idx * 9 + 1);   // ceilPlane[4]  (nx,ny,nz,D)  [4-7]
-	vec4 c = texelFetch(uSectorState, idx * 9 + 2);   // floorScroll[2] ceilScroll[2] [8-11]
-	vec4 d = texelFetch(uSectorState, idx * 9 + 3);   // lightlevel planeLight[2] flags [12-15]
-	vec4 e = texelFetch(uSectorState, idx * 9 + 4);   // glowFloorColor[4] ABGR 0-255 [16-19]
-	vec4 f = texelFetch(uSectorState, idx * 9 + 5);   // glowFloorHeight glowCeilColor[3] [20-23]
-	vec4 g = texelFetch(uSectorState, idx * 9 + 6);   // glowCeilColor[3] glowCeilHeight cmLightColor[2] [24-27]
-	vec4 h = texelFetch(uSectorState, idx * 9 + 7);   // cmLightColor[2] cmBlend cmDesat cmFade[1] [28-31]
-	vec4 i = texelFetch(uSectorState, idx * 9 + 8);   // cmFade[2] cmFogDensity reserved [32-35]
+	vec4 a = texelFetch(uSectorState, idx * 10 + 0);   // floorPlane[4] (nx,ny,nz,D)  [0-3]
+	vec4 b = texelFetch(uSectorState, idx * 10 + 1);   // ceilPlane[4]  (nx,ny,nz,D)  [4-7]
+	vec4 c = texelFetch(uSectorState, idx * 10 + 2);   // floorScroll[2] ceilScroll[2] [8-11]
+	vec4 d = texelFetch(uSectorState, idx * 10 + 3);   // lightlevel planeLight[2] flags [12-15]
+	vec4 e = texelFetch(uSectorState, idx * 10 + 4);   // glowFloorColor[4] ABGR 0-255 [16-19]
+	vec4 f = texelFetch(uSectorState, idx * 10 + 5);   // glowFloorHeight glowCeilColor[3] [20-23]
+	vec4 g = texelFetch(uSectorState, idx * 10 + 6);   // glowCeilColor[3] glowCeilHeight cmLightColor[2] [24-27]
+	vec4 h = texelFetch(uSectorState, idx * 10 + 7);   // cmLightColor[2] cmBlend cmDesat cmFade[1] [28-31]
+	vec4 i = texelFetch(uSectorState, idx * 10 + 8);   // cmFade[2] cmFogDensity reserved [32-35]
+	vec4 j = texelFetch(uSectorState, idx * 10 + 9);   // floorTexZ ceilTexZ reserved[2] [36-39]
 
 	LMSectorState s;
 	s.floor.normal = a.xyz;
 	s.floor.D      = a.w;
-	s.floor.texZ   = a.w;   // base TexZ == D for a flat
+	s.floor.texZ   = j.x;   // live GetPlaneTexZ(floor)
 	s.ceil.normal  = b.xyz;
 	s.ceil.D       = b.w;
-	s.ceil.texZ    = b.w;
+	s.ceil.texZ    = j.y;   // live GetPlaneTexZ(ceiling)
 	s.floorScroll  = c.xy;
 	s.ceilScroll   = c.zw;
 	s.lightlevel   = d.x;
@@ -367,11 +375,11 @@ LMSectorState LMFetchPlaneSector(float planeRef)
 	return LMFetchSector(si);
 }
 
-// Plane z at a world (x, y) point: ZatPoint (secplane_t, p_local.h).
-// DOOM space: z = (D - nx*x - ny*y) * negiC where negiC = 1/nz.
+// Plane z at a world (x, y) point: secplane_t::ZatPoint (r_defs.h):
+// z = (D + nx*x + ny*y) * negiC, negiC = -1/nz.
 float LMPlaneZatPoint(LMPlane p, float x, float y)
 {
-	return (p.D - p.normal.x * x - p.normal.y * y) / p.normal.z;
+	return -(p.D + p.normal.x * x + p.normal.y * y) / p.normal.z;
 }
 
 // Convert a DOOM-space plane (nx, ny, nz) + D into the GPU-space glow/gradient
@@ -391,12 +399,17 @@ void main()
 	//
 	float x      = aPosition.x;
 	float y      = aPosition.y;
-	float slotA  = aPosition.z;   // baked z (static) / vparam (dynamic)
+	float slotA  = aPosition.z;   // baked z (static) / z offset from the tracked plane (dynamic)
 	float u      = aTexCoord.x;
-	float slotB  = aTexCoord.y;   // baked v (static) / 0 (dynamic)
+	float slotB  = aTexCoord.y;   // baked v (static) / v addend (dynamic walls) / baked v (dynamic flats)
 	float lmu    = aLightmap.x;
 	float lmv    = aLightmap.y;
-	int   surfIdx = int(aLightmap.z);
+	// The GL repack stores float(surfaceIndex * 4 + corner): corner = the
+	// vertex's emission slot within a wall quad (k0 LOLFT, k1 UPLFT,
+	// k2 LORGT, k3 UPRGT); meaningless for flat fans.
+	int   packedIdx = int(aLightmap.z);
+	int   surfIdx = packedIdx >> 2;
+	int   corner  = packedIdx & 3;
 
 	float flags = 0.0;   // set from the surface record below.
 
@@ -409,27 +422,33 @@ void main()
 	bool isFlat    = (int(flags) & LMF_ISFLAT) != 0;
 	bool isDynamic = (int(flags) & LMF_DYNAMIC) != 0;
 	bool isSky     = (int(flags) & LMF_SKY) != 0;
-	int   tier     = int(int(flags) & LMF_TIER_MASK) >> 8;   // 0 upper, 1 mid, 2 lower
-	bool unpegged  = (int(flags) & LMF_UNPEGGEDLOWER) != 0;
-	int   vparamSlot = tier;                                  // vparam index by tier
 
 	//
 	// 3. Fetch the four reference planes (front floor/ceil, back floor/ceil).
 	//    LM_PLANEREF_NONE slots are left as a zero plane (texZ = 0).
 	//
-	LMPlane pFF = LMFetchPlane(surf.planeRef[0]);
-	LMPlane pFC = LMFetchPlane(surf.planeRef[1]);
-	LMPlane pBF = LMFetchPlane(surf.planeRef[2]);
-	LMPlane pBC = LMFetchPlane(surf.planeRef[3]);
+	LMPlane planes[4];
+	planes[0] = LMFetchPlane(surf.planeRef[0]);
+	planes[1] = LMFetchPlane(surf.planeRef[1]);
+	planes[2] = LMFetchPlane(surf.planeRef[2]);
+	planes[3] = LMFetchPlane(surf.planeRef[3]);
+	LMPlane pFF = planes[0];
+	LMPlane pFC = planes[1];
 
 	//
-	// 4. Compute the vertex z and v.
+	// 4. Compute the vertex z and v (ADR 0002 vertex warp).
 	//
-	//    static  -> baked from the vertex (slotA = z, slotB = v).
-	//    dynamic -> warp (blueprint 5.4): z = trackedPlane.TexZ + vparam[tier].
-	//    The tracked plane is per-surface: front floor for upper/lower, front
-	//    ceiling for middle (levelmesh.cpp wall emission). v is the window
-	//    clamp from the four planes + vparam.
+	//    static -> baked (slotA = z, slotB = v).
+	//    dynamic flat -> z = live ZatPoint of planeRef[vparam[0]] + slotA;
+	//                    v stays baked (world-space flat UVs).
+	//    dynamic wall -> the corner's tracked plane slot is packed 2 bits per
+	//                    corner in vparam[0]; z = live ZatPoint + slotA (the
+	//                    build-time offset, e.g. a texture-clipped mid edge).
+	//                    v = (anchorTexZ + vparam[2] - z) * vparam[3] + slotB:
+	//                    the classic texturetop is one plane's TexZ + a
+	//                    constant (DoTexture / DoMidTexture), FloatToTexV is
+	//                    a division by the render height, and slotB carries
+	//                    the per-corner skew and CheckTexturePosition shift.
 	//
 	float z;
 	float v;
@@ -438,23 +457,18 @@ void main()
 		z = slotA;
 		v = slotB;
 	}
+	else if (isFlat)
+	{
+		z = LMPlaneZatPoint(planes[int(surf.vparam[0]) & 3], x, y) + slotA;
+		v = slotB;
+	}
 	else
 	{
-		// Tracked plane (per-surface, blueprint 5.4).
-		LMPlane tracked = (tier == 1) ? pFC : pFF;
-		z = tracked.texZ + surf.vparam[vparamSlot];
-
-		// Window clamp (hw_walls.cpp DoMidTexture/DoTexture): the texture is
-		// anchored to the reference plane; v = (referenceZ - z) in TexZ units.
-		// referenceZ = the anchor plane's current TexZ (+ vparam offset).
-		float referenceZ;
-		if (tier == 1)
-			referenceZ = pFC.texZ;                 // middle anchors to front ceiling
-		else if (tier == 0)
-			referenceZ = unpegged ? pFF.texZ : pBC.texZ;  // upper: front floor / back ceiling
-		else
-			referenceZ = unpegged ? pBF.texZ : pFF.texZ;  // lower: back floor / front floor
-		v = (referenceZ - z) + surf.vparam[vparamSlot];
+		int slots = int(surf.vparam[0]);
+		int zslot = (slots >> (2 * corner)) & 3;
+		z = LMPlaneZatPoint(planes[zslot], x, y) + slotA;
+		float texturetop = planes[int(surf.vparam[1]) & 3].texZ + surf.vparam[2];
+		v = (texturetop - z) * surf.vparam[3] + slotB;
 	}
 
 	//
@@ -480,7 +494,10 @@ void main()
 	//
 	vTexCoord = vec4(u, v, 0.0, 1.0);
 	pixelpos  = vec4(worldpos.xyz, -eyeCoord.z / eyeCoord.w);
-	vLightmap = vec3(lmu, lmv, 0.0);
+	// vLightmap.z is the lightmap array layer; -1 = no lightmap (the fp adds a
+	// LightMap sample whenever z >= 0, as main.vp's per-vertex aLightmap.z).
+	// TODO(lightmaps): the vertex carries no page index yet; layer 0 is assumed.
+	vLightmap = vec3(lmu, lmv, ((int(flags) & LMF_LIGHTMAP) != 0) ? 0.0 : -1.0);
 
 	// World/eye normal (aNormal is provided in GPU space by the C2 chunk).
 	vWorldNormal = vec4(aNormal.xyz, 0.0);
@@ -511,75 +528,158 @@ void main()
 	vec3  cmFade    = lightSrc.cmFadeColor;
 	float cmFogDen  = lightSrc.cmFogDensity;
 
-	// The builder bakes RescaleLightLevel + CalcRelLight into surf.light /
-	// surf.relSmooth at build time (levelmesh.cpp:288-299), so the VS uses
-	// them directly and only applies the runtime cvar-dependent steps
-	// (CalcLightLevel, CalcLightColor, GetFogDensity).
-	int lightlevel = int(surf.light);
-	int rellight   = (isFlat ? 0 : int(surf.relSmooth)) + uWeaponLight;
+	// Effective light from the LIVE sector record (spec section 6 port list
+	// items 1-5): light thinkers mutate sector lightlevel every tick, so it is
+	// never baked. The light sector is the surface's lightRef (heightsec
+	// transfer-light resolved at build); slot 0/1 = floor/ceiling, 2 = wall.
+	uint lref = uint(surf.lightRef);
+	LMSectorState ls = LMFetchSector(int(lref >> 2u));
+	int lslot = int(lref & 3u);
+	int lightlevel;
+	int rellight;
+	if (surf.lightlistRef >= 0.0)
+	{
+		// 3D-floor light (hw_flats.cpp: RescaleLightLevel(*light->p_lightlevel)).
+		lightlevel = LM_RescaleLightLevel(int(lightSrc.lightlevel), uRExtralight);
+		rellight = uWeaponLight;
+	}
+	else if (lslot != 2)
+	{
+		// GetFloorLight / GetCeilingLight (p_sectors.cpp), then RescaleLightLevel;
+		// flats take the extra light as their whole rel (hw_flats.cpp).
+		int absBit = (lslot == 0) ? 2 : 4;
+		int planeLight = int(ls.planeLight[lslot]);
+		int eff = ((int(ls.flags) & absBit) != 0) ? planeLight : (int(ls.lightlevel) + planeLight);
+		lightlevel = LM_RescaleLightLevel(eff, uRExtralight);
+		rellight = uWeaponLight;
+	}
+	else
+	{
+		// side_t::GetLightLevel(foggy, orglightlevel, tier, false, &rel)
+		// (p_sectors.cpp) -> RescaleLightLevel -> CalcRelLight (hw_walls.cpp).
+		int sflags = int(flags);
+		bool absLight = (sflags & LMF_SIDE_ABSLIGHT) != 0;
+		bool absTier = (sflags & LMF_SIDE_ABSTIER) != 0;
+		int sideLight = int(surf.light);
+		int tierLight = int(surf.tierLight);
+		int orglightlevel = clamp(int(ls.lightlevel), 0, 255);	// hw_ClampLight
+		bool foggy = any(notEqual(cmFade, vec3(0.0))) || (uLevelFlags & LEVEL_HASFADETABLE) != 0u;
+		int base = orglightlevel;
+		if (absTier) base = tierLight;
+		else if (absLight) base = sideLight + tierLight;
+		int rel = 0;
+		if (!foggy || (uLevelFlags3 & LEVEL3_FORCEFAKECONTRAST) != 0u)
+		{
+			if ((sflags & LMF_SIDE_NOFAKECONTRAST) == 0 && uRFakeContrast != 0)
+			{
+				// (not named 'smooth': that is a GLSL interpolation-qualifier keyword)
+				bool useSmoothRel = (uLevelFlags2 & LEVEL2_SMOOTHLIGHTING) != 0u ||
+					(sflags & LMF_SIDE_SMOOTHLIGHT) != 0 || uRFakeContrast == 2;
+				rel = useSmoothRel ? int(surf.relSmooth) : int(surf.relNonSmooth);
+			}
+		}
+		if (!absLight && !absTier && (!foggy || (sflags & LMF_SIDE_LIGHTFOG) != 0))
+			base += sideLight + tierLight;
+		lightlevel = LM_RescaleLightLevel(base, uRExtralight);
+		// walls: rel = rellight + getExtraLight() (hw_walls.cpp)
+		rellight = LM_CalcRelLight(lightlevel, orglightlevel, rel) + uWeaponLight;
+	}
 
-	// CalcLightLevel (hwlightlevel) + CalcLightColor (vColor).
-	int hwlightlevel = int(LM_CalcLightLevel(uLightMode, lightlevel, rellight, 0, int(cmBlend)));
-	vec3 lightColor = LM_CalcLightColor(uLightMode, hwlightlevel, cmLight, int(cmBlend));
+	// SetColor (hw_setcolor.cpp:32-49): CalcLightLevel (hwlightlevel) +
+	// CalcLightColor (vColor); then SetSoftLightLevel / SetNoSoftLightLevel.
+	int blend = int(cmBlend);
+	bool softLight = (uLightMode == 5 || uLightMode == 8 || uLightMode == 16);	// isSoftwareLighting
+	int hwlightlevel = int(LM_CalcLightLevel(uLightMode, lightlevel, rellight, 0, blend));
+	vec3 lightColor = LM_CalcLightColor(uLightMode, hwlightlevel, cmLight, blend);
 	vColor = vec4(lightColor / 255.0, 1.0);
-	vLightLevel = float(hwlightlevel);
+	// uLightLevel (mLightParms[3]): the fp's R_DoomLightingEquation takes the
+	// NORMALIZED level hw_ClampLight(sectorlight + rellight) / 255, and -1
+	// disables the software light path (non-software modes, or blendfactor).
+	vLightLevel = (softLight && blend == 0) ? float(clamp(lightlevel + rellight, 0, 255)) / 255.0 : -1.0;
 	vDesaturation = cmDesat;
 
-	// GetFogDensity.
+	//
+	// 9. SetFog (hw_setcolor.cpp:93-170): density, fog color, enable, light parms.
+	//
 	bool noLightfade = (uLevelFlags3 & LEVEL3_NOLIGHTFADE) == 0u;
 	int fogrgb = int(cmFade.r) | (int(cmFade.g) << 8) | (int(cmFade.b) << 16);
-	vFogDensity = LM_GetFogDensity(uLightMode, lightlevel, fogrgb, 0, int(cmFogDen),
-		int(cmBlend), int(uLevelFogDensity), int(uOutsideFogDensity),
-		int(uOutsideFog & 0xffffffu), int(uOutsideFog >> 24), noLightfade);
-
-	//
-	// 9. Fog color / fog-enabled encoding (SetFog, hw_setcolor.cpp:88-152).
-	//
 	vec4 fogcolor = vec4(cmFade / 255.0, 0.0);
-	int  fogenabled = 0;
+	float fogDensity;
 	if (uRDistanceCullType > 1)
 	{
-		// cullcolor fog.
-		vFogDensity = clamp(19200.0 / max(uCullDist, 1.0), 1.0, 255.0);
+		// cullcolor fog (even when fullbright).
+		fogDensity = clamp(float(int(19200.0 / max(uCullDist, 1.0))), 1.0, 255.0);
 		fogcolor = (fogrgb != 0) ? fogcolor : vec4(uGlCullColor.rgb, 0.0);
 	}
-	if (uInsybox) vFogDensity += vFogDensity / 2.0;
-	if (vFogDensity > 0.0 && uGlFogMode != 0)
+	else if ((uLevelFlags & LEVEL_HASFADETABLE) != 0u)
 	{
-		fogenabled = (fogrgb == 0) ? uGlFogMode : -uGlFogMode;
+		fogDensity = 70.0;
+		fogcolor = vec4(vec3(128.0 / 255.0), 0.0);
 	}
+	else
+	{
+		fogDensity = LM_GetFogDensity(uLightMode, lightlevel, fogrgb, 0, int(cmFogDen),
+			blend, int(uLevelFogDensity), int(uOutsideFogDensity),
+			int(uOutsideFog & 0xffffffu), int(uOutsideFog >> 24), noLightfade);
+	}
+	// Make fog a little denser when inside a skybox.
+	if (uInsybox) fogDensity += fogDensity / 2.0;
+	bool fogIsBlack = all(equal(fogcolor.rgb, vec3(0.0)));
+
+	int fogenabled = 0;
+	vLightFactor = 1.0;	// SetLightParms(1, 0) default
+	vLightDist = 0.0;
+	if ((fogDensity == 0.0 || uGlFogMode == 0) && uRDistanceCullType < 2)
+	{
+		// EnableFog(false) + SetFog(0, 0).
+		fogDensity = 0.0;
+	}
+	else
+	{
+		if ((uLightMode == 2 || (softLight && blend > 0)) && fogIsBlack)
+		{
+			// SetShaderLight(level = CalcLightLevel(weapon=false), olight = sector light).
+			float MAXDIST = 256.0 * (uRVisibility / 8.0);
+			const float THRESHOLD = 96.0;
+			const float FACTOR = 0.75;
+			float level = float(LM_CalcLightLevel(uLightMode, lightlevel, rellight, 0, blend));
+			float olight = float(lightlevel);
+			if (level > 0.0)
+			{
+				float lightdist, lightfactor;
+				if (olight < THRESHOLD)
+				{
+					lightdist = (MAXDIST / 2.0) + (olight * MAXDIST / THRESHOLD / 2.0);
+					olight = THRESHOLD;
+				}
+				else lightdist = MAXDIST;
+				lightfactor = 1.0 + ((olight / level) - 1.0) * FACTOR;
+				if (lightfactor == 1.0) lightdist = 0.0;
+				vLightFactor = lightfactor;
+				vLightDist = lightdist;
+			}
+		}
+		else if (uLightMode == 5)
+		{
+			// Build software lighting emulation.
+			vLightFactor = 0.2 * fogDensity;
+			vLightDist = 1.0 / 31.0;
+		}
+		// EnableFog(true): ApplyShader's fogset = +gl_fogmode for black fog,
+		// -gl_fogmode for colored fog.
+		fogenabled = fogIsBlack ? uGlFogMode : -uGlFogMode;
+	}
+	// SetFog(c, d): mLightParms[2] = d * (-LOG2E / 64000); the fp evaluates
+	// fogfactor = exp2(uFogDensity * fogdist) with this pre-scaled value.
+	// TODO: Level->brightfog (SetSoftLightLevel(255) for colored software fog)
+	// is not plumbed through yet.
+	vFogDensity = fogDensity * (-1.442692 / 64000.0);
 	vFogColor = fogcolor;
 	vFogEnabled = fogenabled;
 
 	//
-	// 10. SetShaderLight (view-distance fade) + glow.
+	// 10. Glow.
 	//
-	{
-		float MAXDIST = 256.0 * (uRVisibility / 8.0);
-		const float THRESHOLD = 96.0;
-		const float FACTOR = 0.75;
-		float level = float(lightlevel);
-		float olight = float(rellight);
-		if (level > 0.0)
-		{
-			float lightdist, lightfactor;
-			if (olight < THRESHOLD)
-			{
-				lightdist = (MAXDIST / 2.0) + (olight * MAXDIST / THRESHOLD / 2.0);
-				olight = THRESHOLD;
-			}
-			else lightdist = MAXDIST;
-			lightfactor = 1.0 + ((olight / level) - 1.0) * FACTOR;
-			if (lightfactor == 1.0) lightdist = 0.0;
-			vLightFactor = lightfactor;
-			vLightDist = lightdist;
-		}
-		else
-		{
-			vLightFactor = 1.0;
-			vLightDist = 0.0;
-		}
-	}
 
 	// Glow planes (frontsector ceiling/floor) + colors/heights from the front
 	// sector's sector state record. GetWallGlow packing: (r,g,b) 0-255 with the

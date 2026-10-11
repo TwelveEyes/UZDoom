@@ -25,8 +25,6 @@
 #include "v_video.h"
 #include "m_png.h"
 
-#include "i_time.h"
-
 #include "gl_interface.h"
 #include "gl_framebuffer.h"
 #include "gl_renderer.h"
@@ -42,7 +40,6 @@
 #include "hw_bonebuffer.h"
 #include "gl_shaderprogram.h"
 #include "gl_debug.h"
-#include "r_videoscale.h"
 #include "gl_buffers.h"
 #include "gl_levelmesh.h"
 #include "gl_postprocessstate.h"
@@ -476,39 +473,33 @@ bool OpenGLFrameBuffer::DrawLevelMesh(FRenderState &state, FLevelLocals *level)
 			continue;   // stale entry: the frame is rebuilt every frame, skip
 		}
 		const levelmesh::LevelMeshTexRange &tr = mesh->texRanges[entry.texRangeIndex];
-		FGameTexture *tex = TexMan.GetGameTexture(FSetTextureID(tr.textureIndex));
+		// The group stores the untranslated texture id; animate = true applies the
+		// current ANIMATED/ANIMDEFS frame exactly like the classic per-draw
+		// lookup (the animator remaps every frame id of an animation together,
+		// so all surfaces of the group advance in lockstep).
+		FGameTexture *tex = TexMan.GetGameTexture(FSetTextureID(tr.textureIndex), true);
 		if (tex == nullptr)
 		{
 			continue;
 		}
 
-		// Classic part 1/part 2 split: masked textures keep the source-over
-		// style of the solid pass and only add the alpha threshold test; truly
-		// translucent ones get STYLE_Translucent without a threshold (what the
-		// classic GLDL_TRANSLUCENT pass does for them, minus sorting). Both
-		// write depth like the classic solid walls (depth mask set by
-		// RenderScene before this call).
-		if (tex->isMasked())
-		{
-			state.SetRenderStyle(STYLE_Source);
-			state.AlphaFunc(Alpha_GEqual, gl_mask_threshold);
-		}
-		else if (tex->GetTranslucency())
-		{
-			state.SetRenderStyle(STYLE_Translucent);
-			state.AlphaFunc(Alpha_GEqual, 0.f);
-		}
-		else
-		{
-			state.SetRenderStyle(STYLE_Source);
-			state.AlphaFunc(Alpha_GEqual, 0.f);
-		}
+		// Classic part 1 / part 2: the mesh only holds surfaces the classic puts
+		// in its plain or masked lists (translucent ones stay on the classic
+		// translucent passes), all drawn STYLE_Source. The masked lists add the
+		// gl_mask_threshold alpha test; which surfaces are masked was decided
+		// at build exactly like HWDrawInfo::AddWall / AddFlat (LMDS_MASKED).
+		state.SetRenderStyle(STYLE_Source);
+		state.AlphaFunc(Alpha_GEqual, (tr.drawState & levelmesh::LMDS_MASKED) ? (float)gl_mask_threshold : 0.f);
 
-		// The baked surface texture; CLAMP_NONE because the sub-range table is
-		// static and per-region clamp state would need a separate pass.
-		state.SetMaterial(tex, UF_Texture, 0, CLAMP_NONE, NO_TRANSLATION, -1, nullptr);
+		// The group's draw state: the sampler clamp the classic passes per wall
+		// (SetMaterial(..., flags & 3), i.e. HWF_CLAMPX/Y == CLAMP_X/Y/XY) and the
+		// TM_CLAMPY texture clamp of two-sided mid textures (RenderTexturedWall).
+		state.SetMaterial(tex, UF_Texture, 0, (int)(tr.drawState & (levelmesh::LMDS_CLAMPX | levelmesh::LMDS_CLAMPY)),
+			NO_TRANSLATION, -1, nullptr);
+		state.SetTextureClamp((tr.drawState & levelmesh::LMDS_TEXCLAMPY) != 0);
 		state.DrawLevelMesh(GLLevelMesh->GetVAO(entry.regionIndex), tr.iboOffset, tr.iboCount);
 	}
+	state.SetTextureClamp(false);
 
 	// mSpecialEffect persists across draws until the next SetEffect: classic
 	// draw functions follow a set-and-restore discipline (HWWall always leaves

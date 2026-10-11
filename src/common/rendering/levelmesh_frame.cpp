@@ -39,16 +39,15 @@ namespace levelmesh
 // the cull frustum must match the classic projection, so keep them in sync
 // if those change.
 //
-// LM_CULL_ZMAX is the generous fixed upper bound used to extrude the
-// 2D sub-range AABBs into 3D for the plane test (see LMAABBInFrustum).
-// Level geometry in practice stays far below it; anything higher would be
-// outside the classic renderer's useful visibility range anyway.
+// LM_CULL_ZMAX bounds the DOOM-z extrusion of the 2D sub-range AABBs into
+// 3D for the plane test (see LMAABBInFrustum): [-ZMAX, ZMAX] covers the
+// full fixed-point height range, so no geometry can fall outside the box.
 //
 //============================================================================
 
 static constexpr float LM_CULL_ZNEAR = 5.f;
 static constexpr float LM_CULL_ZFAR = 65536.f;
-static constexpr float LM_CULL_ZMAX = 16384.f;
+static constexpr float LM_CULL_ZMAX = 32768.f;
 
 static float LM_DEG2RAD(float deg)
 {
@@ -64,52 +63,53 @@ static float LM_RAD2DEG(float rad)
 //
 // LMAABBInFrustum
 //
-// The exact cull test: a sub-range entry's 2D world AABB is extruded to two
-// z-slices (z=0 and z=LM_CULL_ZMAX) in DOOM space, giving eight corner points.
-// The frustum planes are in GPU space - levelmesh.vp transforms vertices as
-// worldpos = (x, z_doom, y_doom) before ViewMatrix - so the plane dot uses
-// pl[1] with the DOOM z and pl[2] with the DOOM y. The entry
-// is kept iff ANY of the eight corners is inside ALL six frustum planes;
-// it is culled only if EVERY corner fails at least one plane. For a convex
-// box this is exact: all-corners-outside implies the whole box is outside,
-// so the test can only ever cull - never keep a box that pokes in. The
-// z=0 / z=zMax extrusion is conservative (real walls span between sector
-// heights), which keeps visible geometry; it only weakens culling for
-// boxes whose real height range is much smaller.
+// The conservative cull test: a sub-range entry's 2D world AABB is extruded
+// to z in [-LM_CULL_ZMAX, LM_CULL_ZMAX] (DOOM space), giving eight corners.
+// The corners are transformed with the same VP product as the vertex shader,
+// in its GPU space: levelmesh.vp uses worldpos = (x, z_doom, y_doom).
+//
+// The box is culled only when all eight corners lie outside the SAME clip
+// plane (x < -w, x > w, y < -w, y > w, z < -w, z > w). Each inequality is
+// linear in the homogeneous clip coordinates, i.e. a half-space in world
+// space, so all-corners-outside-one-plane proves the whole box is outside -
+// this also holds for corners behind the camera (w <= 0). Testing whether
+// any single corner is inside is NOT conservative: a wall crossing the view
+// with both ends off-screen has every corner outside yet is visible.
 //
 //============================================================================
-
-// Clip-space corner test: a point is inside the frustum when its clip coords
-// satisfy |x| <= w, |y| <= w and -w <= z <= w.  This uses the exact same matrix
-// product as the vertex shader (uProj * uView), so no plane-extraction or layout
-// assumptions are needed.
-static bool LMPointInFrustum(VSMatrix &vp, float x, float y, float z)
-{
-	float p[4] = { x, y, z, 1.f };
-	float o[4];
-	vp.multMatrixPoint(p, o);
-	const float w = o[3];
-	if (w <= 0.f) return false; // behind the camera
-	return fabsf(o[0]) <= w && fabsf(o[1]) <= w && o[2] >= -w && o[2] <= w;
-}
 
 static bool LMAABBInFrustum(const float aabbMin[2], const float aabbMax[2], VSMatrix &vp)
 {
 	const float xs[2] = { aabbMin[0], aabbMax[0] };
 	const float ys[2] = { aabbMin[1], aabbMax[1] };
-	const float zs[2] = { 0.f, LM_CULL_ZMAX };
+	const float zs[2] = { -LM_CULL_ZMAX, LM_CULL_ZMAX };
 
+	// One bit per clip plane; a corner clears the bits of the planes it is
+	// inside of. Any bit still set after all corners = all outside that plane.
+	int allOutside = 0x3f;
 	for (int ix = 0; ix < 2; ix++)
 	{
 		for (int iy = 0; iy < 2; iy++)
 		{
 			for (int iz = 0; iz < 2; iz++)
 			{
-				if (LMPointInFrustum(vp, xs[ix], ys[iy], zs[iz])) return true;
+				float p[4] = { xs[ix], zs[iz], ys[iy], 1.f };	// GPU space (x, z, y)
+				float o[4];
+				vp.multMatrixPoint(p, o);
+				const float w = o[3];
+				int out = 0;
+				if (o[0] < -w) out |= 1;
+				if (o[0] > w) out |= 2;
+				if (o[1] < -w) out |= 4;
+				if (o[1] > w) out |= 8;
+				if (o[2] < -w) out |= 16;
+				if (o[2] > w) out |= 32;
+				allOutside &= out;
+				if (allOutside == 0) return true;
 			}
 		}
 	}
-	return false;
+	return allOutside == 0;
 }
 
 //============================================================================
@@ -211,7 +211,7 @@ void LevelMesh_CalcCullVP(player_t *pl, VSMatrix &vp)
 	view.loadIdentity();
 	view.rotate(hwRollDeg, 0.0f, 0.0f, 1.0f);
 	view.rotate(hwPitchDeg, 1.0f, 0.0f, 0.0f);
-	view.rotate(hwYawDeg, 0.0f, -1.0f, 0.0f);
+	view.rotate(hwYawDeg, 0.0f, 1.0f, 0.0f);	// SetViewMatrix: axis (0, mult, 0), mult = 1 (no mirror)
 	view.translate(vx, -vz * pixelstretch, -vy);
 	view.scale(-1.f, pixelstretch, 1.f);
 

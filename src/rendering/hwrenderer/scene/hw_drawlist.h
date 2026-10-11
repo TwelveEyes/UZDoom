@@ -129,7 +129,9 @@ public:
 	void DoDraw(HWDrawInfo *di, FRenderState &state, bool translucent, int i);
 	void Draw(HWDrawInfo *di, FRenderState &state, bool translucent);
 	void DrawWalls(HWDrawInfo *di, FRenderState &state, bool translucent);
+	void DrawPolyobjWalls(HWDrawInfo *di, FRenderState &state);	// levelmesh path: moving polyobject walls only
 	void DrawFlats(HWDrawInfo *di, FRenderState &state, bool translucent);
+	void DrawHackFlats(HWDrawInfo *di, FRenderState &state);	// levelmesh path: view-dependent fills only
 
 	void DrawSorted(HWDrawInfo *di, FRenderState &state, SortNode * head);
 	void DrawSorted(HWDrawInfo *di, FRenderState &state);

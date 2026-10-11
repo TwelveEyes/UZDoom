@@ -59,6 +59,30 @@ enum ESurfaceFlags : uint32_t
 constexpr uint32_t LMF_LOADDYN = LMF_DYNAMIC;	// vertex slotA holds a vparam, not a baked z
 constexpr uint32_t LMF_FAKECONTRAST = 1u << 13;	// internal free bit: fake-contrast rel pair baked below
 
+// Wall light ingredients for the VS port of side_t::GetLightLevel (spec
+// section 6 port list item 2): the side's static light flags, copied at build.
+// The live sector light comes from the sector state ring (lightRef sector).
+constexpr uint32_t LMF_SIDE_ABSLIGHT = 1u << 14;	// WALLF_ABSLIGHTING
+constexpr uint32_t LMF_SIDE_ABSTIER = 1u << 15;	// WALLF_ABSLIGHTING_TIER << tier
+constexpr uint32_t LMF_SIDE_NOFAKECONTRAST = 1u << 16;	// WALLF_NOFAKECONTRAST
+constexpr uint32_t LMF_SIDE_SMOOTHLIGHT = 1u << 17;	// WALLF_SMOOTHLIGHTING
+constexpr uint32_t LMF_SIDE_LIGHTFOG = 1u << 18;	// WALLF_LIGHT_FOG
+
+// Per-group draw state (sub-range key next to the texture): the classic sets
+// these per wall draw, so the levelmesh groups by them and binds them once per
+// group. Bits 0-1 are the sampler clamp passed to SetMaterial exactly like the
+// classic `flags & 3` (HWF_CLAMPX = 1 / HWF_CLAMPY = 2 == CLAMP_X / CLAMP_Y /
+// CLAMP_XY); bit 2 is the TM_CLAMPY texture clamp of two-sided mid textures
+// (HWWall::RenderTexturedWall: SetTextureClamp for M2S, unwarped textures).
+constexpr uint32_t LMDS_CLAMPX = 1u;
+constexpr uint32_t LMDS_CLAMPY = 2u;
+constexpr uint32_t LMDS_TEXCLAMPY = 4u;
+// Masked pass: alpha test at gl_mask_threshold. The classic only routes
+// passflag-2 walls (two-sided mid, 3D blocks) and 3D-floor flats with a masked
+// texture to its masked lists; every other surface draws in the plain pass
+// (threshold 0) even with a masked texture (HWDrawInfo::AddWall / AddFlat).
+constexpr uint32_t LMDS_MASKED = 8u;
+
 //============================================================================
 //
 // planeRef[4] / lightRef encodings (spec section 3):
@@ -89,8 +113,8 @@ struct LevelMeshVertex
 	float x;			// 0
 	float y;			// 4
 	float slotA;		// 8
-	float slotB;		// 12
-	float u;			// 16
+	float u;			// 12  (u before slotB so aTexCoord can bind the adjacent
+	float slotB;		// 16   pair (u, slotB); the GL VAO binds vec2 attributes)
 	float lmu;		// 20
 	float lmv;		// 24
 	uint32_t surfaceIndex;	// 28
@@ -114,10 +138,10 @@ struct LevelMeshSurface
 	uint32_t flags;			// 28
 	float vparam[4];			// 32  [0] lower unpegged offset rel. front floor, [1] middle window,
 							//     [2] upper window offset, [3] reserved (spec: V = z - TexZ + vparam)
-	int16_t light;				// 48  baked static light level
-	int16_t tierLight;		// 50
-	int16_t relSmooth;		// 52  fake-contrast rel (smooth)
-	int16_t relNonSmooth;		// 54  fake-contrast rel (non-smooth)
+	int16_t light;				// 48  walls: side_t::Light (raw); flats: unused
+	int16_t tierLight;		// 50  walls: side_t::TierLights[tier]; flats: unused
+	int16_t relSmooth;		// 52  raw fake-contrast rel, smooth formula (non-smooth when delta.X == 0)
+	int16_t relNonSmooth;		// 54  raw fake-contrast rel, non-smooth formula
 	int16_t lightlistRef;		// 56  -1 for statics
 	uint16_t bandOffset;		// 58  offset into the per-level band table
 	uint16_t bandCount;		// 60
@@ -143,6 +167,7 @@ struct LevelMeshSubRange
 	float aabbMin[2];
 	float aabbMax[2];
 	uint32_t bandIndex;		// 0 = the surface's own band
+	uint32_t drawState;		// LMDS_* bits (group key next to the texture)
 };
 
 //============================================================================
@@ -165,6 +190,7 @@ struct LevelMeshTexRange
 	float aabbMax[2];
 	uint32_t firstSurface;	// first per-surface sub-range of the group
 	uint32_t surfaceCount;	// per-surface sub-ranges in the group
+	uint32_t drawState;		// LMDS_* bits shared by every surface of the group
 };
 
 //============================================================================

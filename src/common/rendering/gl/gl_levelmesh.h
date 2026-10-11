@@ -67,8 +67,8 @@ public:
 	// fetches it. Static: uploaded once per level load.
 	GLuint GetSurfaceTexture() const { return mSurfaceTex; }
 	// Texture bound to the sector state ring: HW_MAX_PIPELINE_BUFFERS slots of
-	// sectorCount 36-float (9 float4) records, slot-major layout (record r of
-	// slot s at float offset s*sectorCount*36 + r*36). GL_DYNAMIC_DRAW.
+	// sectorCount 40-float (10 float4) records, slot-major layout (record r of
+	// slot s at float offset s*sectorCount*40 + r*40). GL_DYNAMIC_DRAW.
 	GLuint GetSectorStateTexture() const { return mSectorStateTex; }
 	// Texture bound to the 3D light buffer: one 12-float (3 float4) record
 	// per light. Grow-only capacity, re-uploaded every frame by chunk E.
@@ -84,7 +84,7 @@ public:
 	//
 
 	// Repack one ring slot (bytes = FLevelMeshState::GetSectorSlot(slot),
-	// size = SectorSlotSize() = sectorCount*96) into the 36-float layout and
+	// size = SectorSlotSize() = sectorCount*96) into the 40-float layout and
 	// glBufferSubData it at its slot offset. No per-frame allocation: the
 	// work area is a member array sized once.
 	void UploadSectorSlot(int slot, const uint8_t *bytes);
@@ -119,7 +119,7 @@ private:
 	// GL_TEXTURE_BUFFER binding point.
 	GLuint mSurfaceBuf = 0;		// surface records: surfaceCount * 24 floats, static
 	GLuint mSurfaceTex = 0;
-	GLuint mSectorStateBuf = 0;	// sector state ring: HW_MAX_PIPELINE_BUFFERS * sectorCount * 36 floats
+	GLuint mSectorStateBuf = 0;	// sector state ring: HW_MAX_PIPELINE_BUFFERS * sectorCount * 40 floats
 	GLuint mSectorStateTex = 0;
 	GLuint mLightBuf = 0;		// 3D lights: capacity * 12 floats, grow-only
 	GLuint mLightTex = 0;

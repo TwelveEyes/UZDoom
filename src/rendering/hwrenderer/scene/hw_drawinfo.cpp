@@ -568,6 +568,14 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 	// stays byte-for-byte classic.
 	if (Level->useLevelMesh && screen->DrawLevelMesh(state, Level))
 	{
+		// View-dependent classic fills (missing upper/lower textures, deep
+		// water) stay on the classic flat lists; draw just those, in the same
+		// pass order as the classic (plain, then masked with the threshold).
+		drawlists[GLDL_PLAINWALLS].DrawPolyobjWalls(this, state);
+		drawlists[GLDL_PLAINFLATS].DrawHackFlats(this, state);
+		state.AlphaFunc(Alpha_GEqual, gl_mask_threshold);
+		drawlists[GLDL_MASKEDWALLS].DrawPolyobjWalls(this, state);
+		drawlists[GLDL_MASKEDFLATS].DrawHackFlats(this, state);
 	}
 	else
 	{

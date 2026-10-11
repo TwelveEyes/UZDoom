@@ -133,7 +133,8 @@ LevelMeshPackedState FLevelMeshState::PackSnapshot(FLevelLocals &level, int slot
 		rec.glowCeilHeight = (float)sec.planes[sector_t::ceiling].GlowHeight;
 		LM_PackColormap(rec.colormap, sec.Colormap);
 		memset(rec.reserved, 0, sizeof(rec.reserved));
-		memset(rec.reservedF, 0, sizeof(rec.reservedF));
+		rec.texZ[0] = (float)sec.GetPlaneTexZ(sector_t::floor);
+		rec.texZ[1] = (float)sec.GetPlaneTexZ(sector_t::ceiling);
 		rec.reservedU32 = 0;
 	}
 

@@ -83,7 +83,7 @@ static void LM_ExpandABGR(uint32_t c, float *o)
 //==========================================================================
 //
 // Repack one ring slot: sectorCount * 96-byte LevelMeshSectorState records
-// into sectorCount * 36 floats, in the exact slot order LMFetchSector fetches:
+// into sectorCount * LM_SECTOR_FLOATS floats, in the exact slot order LMFetchSector fetches:
 //   [0..3]   floorPlane[4] (nx,ny,nz,D)
 //   [4..7]   ceilPlane[4]
 //   [8..9]   floorScroll[2]  [10..11] ceilScroll[2]
@@ -92,8 +92,12 @@ static void LM_ExpandABGR(uint32_t c, float *o)
 //   [21..24] glowCeilColor r,g,b,a  [25] glowCeilHeight
 //   [26..34] colormap[0..8] (LightColor rgb, BlendFactor, Desaturation,
 //            FadeColor rgb, FogDensity)  [35] 0 reserved
+//   [36] floor TexZ  [37] ceiling TexZ  [38..39] 0 reserved
 //
 //==========================================================================
+
+// Floats per repacked sector record (10 float4 texels; LMFetchSector).
+static constexpr int LM_SECTOR_FLOATS = 40;
 
 static void RepackSectorSlot(const uint8_t *bytes, int sectorCount, TArray<float> &out)
 {
@@ -101,7 +105,7 @@ static void RepackSectorSlot(const uint8_t *bytes, int sectorCount, TArray<float
 	{
 		levelmesh::LevelMeshSectorState st;
 		memcpy(&st, bytes + r * sizeof(st), sizeof(st));
-		float *o = &out[r * 36];
+		float *o = &out[r * LM_SECTOR_FLOATS];
 		int p = 0;
 		for (int i = 0; i < 4; i++) o[p++] = st.floorPlane[i];	// [0..3]
 		for (int i = 0; i < 4; i++) o[p++] = st.ceilPlane[i];	// [4..7]
@@ -117,6 +121,9 @@ static void RepackSectorSlot(const uint8_t *bytes, int sectorCount, TArray<float
 		o[p++] = st.glowCeilHeight;			// [25]
 		for (int i = 0; i < 9; i++) o[p++] = float(st.colormap[i]);	// [26..34]
 		o[p++] = 0.0f;					// [35] reserved
+		o[p++] = st.texZ[0];				// [36]
+		o[p++] = st.texZ[1];				// [37]
+		o[p++] = 0.0f; o[p++] = 0.0f;			// [38..39] reserved
 	}
 }
 
@@ -229,14 +236,19 @@ void FGLLevelMesh::SetMesh(const levelmesh::FLevelMesh *mesh)
 	if (mesh == nullptr) return;
 
 	// Repack the 32-byte pool for the GL attribute layout: byte 28 carries
-	// float(surfaceIndex) — GLSL 330 cannot bit-cast the raw uint32 through
-	// a float attribute, and the VS recovers the index with int(). The float
-	// value is exact for indices below 2^24.
+	// float(surfaceIndex * 4 + corner) — GLSL 330 cannot bit-cast the raw
+	// uint32 through a float attribute, and the VS recovers both with int().
+	// corner is the vertex's slot within its surface (a surface's vertices are
+	// emitted contiguously; wall quads have exactly 4, flat fans use only the
+	// low bits). The float value is exact below 2^24, i.e. 4M surfaces.
 	mGpuPool.Resize(mesh->vertices.Size());
+	uint32_t corner = 0;
 	for (size_t i = 0; i < mGpuPool.Size(); i++)
 	{
 		mGpuPool[i] = mesh->vertices[i];
-		float fidx = float(mesh->vertices[i].surfaceIndex);
+		const uint32_t si = mesh->vertices[i].surfaceIndex;
+		corner = (i > 0 && mesh->vertices[i - 1].surfaceIndex == si) ? corner + 1 : 0;
+		float fidx = float(si * 4u + (corner & 3u));
 		memcpy(&mGpuPool[i].surfaceIndex, &fidx, sizeof(float));
 	}
 	IVertexBuffer &vbo = mVertexPool;
@@ -262,7 +274,8 @@ void FGLLevelMesh::SetMesh(const levelmesh::FLevelMesh *mesh)
 		static_cast<GLBuffer &>(mVertexPool).Bind();
 		glVertexAttribPointer(VATTR_VERTEX, 3, GL_FLOAT, GL_FALSE, (GLsizei)stride, (const void *)(uintptr_t)0);	// aPosition.xyz = x, y, slotA
 		glEnableVertexAttribArray(VATTR_VERTEX);
-		glVertexAttribPointer(VATTR_TEXCOORD, 2, GL_FLOAT, GL_FALSE, (GLsizei)stride, (const void *)(uintptr_t)16);	// aTexCoord.xy = u, slotB
+		glVertexAttribPointer(VATTR_TEXCOORD, 2, GL_FLOAT, GL_FALSE, (GLsizei)stride, (const void *)(uintptr_t)12);	// aTexCoord.xy = u, slotB (adjacent since the layout fix)
+		glEnableVertexAttribArray(VATTR_TEXCOORD);	// without this the VS reads the constant (0,0): every surface samples one texel
 		glVertexAttribPointer(VATTR_LIGHTMAP, 3, GL_FLOAT, GL_FALSE, (GLsizei)stride, (const void *)(uintptr_t)20);	// aLightmap = lmu, lmv, float(surfaceIndex)
 		glEnableVertexAttribArray(VATTR_LIGHTMAP);
 		// VATTR_NORMAL is left unbound, see the table in the file header.
@@ -318,18 +331,18 @@ void FGLLevelMesh::SetMesh(const levelmesh::FLevelMesh *mesh)
 		CreateRecordPool(mSurfaceBuf, mSurfaceTex, surfRepack.Size() * sizeof(float), surfRepack.Data(), GL_STATIC_DRAW);
 	}
 
-	// Sector state ring: HW_MAX_PIPELINE_BUFFERS slots of sectorCount 36-float
-	// records, slot-major (record r of slot s at float offset s*sectorCount*36
-	// + r*36; the VS computes idx = uSectorStateSlot*uSectorCount + sectorIndex).
+	// Sector state ring: HW_MAX_PIPELINE_BUFFERS slots of sectorCount LM_SECTOR_FLOATS-float
+	// records, slot-major (record r of slot s at float offset s*sectorCount*LM_SECTOR_FLOATS
+	// + r*LM_SECTOR_FLOATS; the VS computes idx = uSectorStateSlot*uSectorCount + sectorIndex).
 	// Allocated once with null data; slot 0 is filled below so the buffer is
 	// valid before chunk E's first per-frame upload.
 	mSectorCount = mesh->state.sectorCount;
 	{
-		const size_t slotBytes = (size_t)mSectorCount * 36 * sizeof(float);
+		const size_t slotBytes = (size_t)mSectorCount * LM_SECTOR_FLOATS * sizeof(float);
 		CreateRecordPool(mSectorStateBuf, mSectorStateTex, HW_MAX_PIPELINE_BUFFERS * slotBytes, nullptr, GL_DYNAMIC_DRAW);
 		if (mSectorCount > 0)
 		{
-			mRepackWork.Resize((size_t)mSectorCount * 36);
+			mRepackWork.Resize((size_t)mSectorCount * LM_SECTOR_FLOATS);
 			RepackSectorSlot(mesh->state.GetSectorSlot(0), mSectorCount, mRepackWork);
 			glBindBuffer(GL_TEXTURE_BUFFER, mSectorStateBuf);
 			glBufferSubData(GL_TEXTURE_BUFFER, 0, (GLsizeiptr)slotBytes, mRepackWork.Data());
@@ -362,7 +375,7 @@ void FGLLevelMesh::SetMesh(const levelmesh::FLevelMesh *mesh)
 // Per-frame upload of one sector state ring slot (chunk E, right after
 // PackSnapshot). bytes = FLevelMeshState::GetSectorSlot(slot), size =
 // SectorSlotSize() = sectorCount*96. Repacks every 96-byte record into the
-// 36-float layout and glBufferSubData's the one slot at its offset; the work
+// LM_SECTOR_FLOATS-float layout and glBufferSubData's the one slot at its offset; the work
 // area is a member array sized once, so there is no per-frame allocation.
 //
 //==========================================================================
@@ -373,7 +386,7 @@ void FGLLevelMesh::UploadSectorSlot(int slot, const uint8_t *bytes)
 	if (slot < 0 || slot >= HW_MAX_PIPELINE_BUFFERS) return;
 	if (bytes == nullptr) return;
 
-	const size_t floats = (size_t)mSectorCount * 36;
+	const size_t floats = (size_t)mSectorCount * LM_SECTOR_FLOATS;
 	mRepackWork.Resize(floats);
 	RepackSectorSlot(bytes, mSectorCount, mRepackWork);
 	const GLsizeiptr bytesize = (GLsizeiptr)(floats * sizeof(float));

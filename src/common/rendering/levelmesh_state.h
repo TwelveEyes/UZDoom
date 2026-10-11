@@ -91,7 +91,8 @@ struct LevelMeshSectorState
 	float glowCeilHeight;		// 68
 	uint8_t colormap[9];		// 72  packed FColormap
 	uint8_t reserved[3];		// 81
-	float reservedF[2];		// 84  0
+	float texZ[2];			// 84  [0] floor / [1] ceiling GetPlaneTexZ (texture anchor of
+							//     load-dynamic walls; the vertex warp reads it, spec ADR 0002)
 	uint32_t reservedU32;		// 92  0
 };
 static_assert(sizeof(LevelMeshSectorState) == 96, "LevelMeshSectorState must be 96 bytes");
@@ -107,7 +108,7 @@ static_assert(offsetof(LevelMeshSectorState, glowCeilColor) == 64, "LevelMeshSec
 static_assert(offsetof(LevelMeshSectorState, glowCeilHeight) == 68, "LevelMeshSectorState layout");
 static_assert(offsetof(LevelMeshSectorState, colormap) == 72, "LevelMeshSectorState layout");
 static_assert(offsetof(LevelMeshSectorState, reserved) == 81, "LevelMeshSectorState layout");
-static_assert(offsetof(LevelMeshSectorState, reservedF) == 84, "LevelMeshSectorState layout");
+static_assert(offsetof(LevelMeshSectorState, texZ) == 84, "LevelMeshSectorState layout");
 static_assert(offsetof(LevelMeshSectorState, reservedU32) == 92, "LevelMeshSectorState layout");
 
 //============================================================================
