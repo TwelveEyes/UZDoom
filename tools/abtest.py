@@ -357,6 +357,10 @@ set vid_contrast 1
 set vid_saturation 1
 set vid_preferbackend {backend}
 set gl_uselevelmesh {cvar}
+// Dynamic lights pinned off on BOTH paths: levelmesh dynlights are a
+// separate clustered forward+ design (.scratch/levelmesh-impl/issues/
+// 12-dynlights-clustered-forward.md); remove this pin when 12 lands.
+set r_dynlights 0
 set language english
 set uiscale 1
 set screenshot_quiet 1
