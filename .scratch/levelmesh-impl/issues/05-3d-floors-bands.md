@@ -28,3 +28,9 @@ layers; in-game multi-layer 3D-floor tour with active 3D lights.
 - [ ] MAP07 + MAP30 A/B GL33 zero-tolerance, incl. moving 3D-floor layers.
 - [ ] Per-band draws match the classic split: plane refs, light/colormap merge order (the 3D light's extra colormap first, then the wall's own fade/fog), early-break semantics.
 - [ ] 3D-light state buffer carries live values — light thinkers on 3D lights mutate flats per frame, frame-locked in the A/B runs.
+
+## Comments
+
+- 2026-10-11 (from ticket 03): 3D-floor boundary walls are an approximation (one DoTexture quad
+  per front-only F3DFloor); the BuildFFBlock port is this ticket's. 3D-floor flats are drawn
+  double-sided (LMDS_NOCULL).

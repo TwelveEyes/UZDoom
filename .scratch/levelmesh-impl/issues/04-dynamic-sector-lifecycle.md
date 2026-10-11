@@ -35,3 +35,13 @@ the current subset — zero tolerance; in-game a door mid-transit is pixel-ident
 - [ ] Write rules hold: per-frame full copy = current ring slot only; flip/re-bake/texture-swap sub-uploads = all ring slots.
 
 **Note:** The all-ring-slot write rule for rare small writes is the ADR 0003 pipeline-hazard rule; the snapshot pass runs inside the interpolation window and the classic path keeps its own machinery untouched.
+
+## Comments
+
+- 2026-10-11 (from ticket 03): the load-dynamic VS warp is in place and is what 04's flip should
+  reuse. The sector record grew to 40 floats on GL (live floor/ceil TexZ at [36..37], 96-byte C++
+  record: `texZ[2]` at 84). Dynamic walls: per-corner tracked plane slot packed in `vparam[0]`,
+  anchor slot in `vparam[1]`, anchor offset in `vparam[2]`, 1/renderHeight in `vparam[3]`; slotA =
+  z offset from the live plane, slotB = v addend; the GL repack packs the corner index with the
+  surface index. Dynamic flats track their own plane (`vparam[0]`) and keep baked v. Dynamic walls
+  skip the gl_seamless edge splits. Not runtime-verified (no dynamic sectors in the A/B set yet).

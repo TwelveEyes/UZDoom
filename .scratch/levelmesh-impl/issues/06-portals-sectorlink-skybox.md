@@ -59,3 +59,9 @@ committed allowlist (ADR 0004); in-game portal tour.
 **Note:**
 1. The acceptance bar is myhouse MAP01 (user decision 2026-10-06): 20PAM (60 line portals + sector_link) goes green first as the bring-up — MAP01 (410 line portals, 5 skyboxes, 3D floors, fake contrast) is the bar, and it needs 05 because it stacks 3D floors.
 2. The spec's §5 vs §7 disagree on the query-issue position; follow §5: the queries are issued after the main-region pass and BEFORE the portal views — they must test against the main region's depth, not portal-cleared depth.
+
+## Comments
+
+- 2026-10-11 (from ticket 03): the builder skips line-portal and horizon lines and sky walls; the
+  sky still renders through the classic BSP walk's sky portals on the levelmesh path. Back-face
+  culling is fixed CW; mirrored region views need the region `frontFace` honoured.
