@@ -82,6 +82,12 @@ constexpr uint32_t LMDS_TEXCLAMPY = 4u;
 // texture to its masked lists; every other surface draws in the plain pass
 // (threshold 0) even with a masked texture (HWDrawInfo::AddWall / AddFlat).
 constexpr uint32_t LMDS_MASKED = 8u;
+// Double-sided group (no back-face culling). Everything else is culled with
+// clockwise front faces: the classic draws a side / plane only from its
+// front (HWDrawInfo::AddLine back-face reject, floors from above, ceilings
+// from below), and the mesh must not show the back of a one-sided wall.
+// 3D-floor flats are viewable from both sides.
+constexpr uint32_t LMDS_NOCULL = 16u;
 
 //============================================================================
 //

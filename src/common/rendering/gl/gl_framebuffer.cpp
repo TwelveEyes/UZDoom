@@ -497,9 +497,13 @@ bool OpenGLFrameBuffer::DrawLevelMesh(FRenderState &state, FLevelLocals *level)
 		state.SetMaterial(tex, UF_Texture, 0, (int)(tr.drawState & (levelmesh::LMDS_CLAMPX | levelmesh::LMDS_CLAMPY)),
 			NO_TRANSLATION, -1, nullptr);
 		state.SetTextureClamp((tr.drawState & levelmesh::LMDS_TEXCLAMPY) != 0);
+		// Clockwise front faces (levelmesh.h LMDS_NOCULL): the classic never
+		// draws the back of a side or plane.
+		state.SetCulling((tr.drawState & levelmesh::LMDS_NOCULL) ? Cull_None : Cull_CW);
 		state.DrawLevelMesh(GLLevelMesh->GetVAO(entry.regionIndex), tr.iboOffset, tr.iboCount);
 	}
 	state.SetTextureClamp(false);
+	state.SetCulling(Cull_None);	// the classic lists drawn after this pass do not cull
 
 	// mSpecialEffect persists across draws until the next SetEffect: classic
 	// draw functions follow a set-and-restore discipline (HWWall always leaves

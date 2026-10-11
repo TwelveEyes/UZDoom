@@ -64,3 +64,10 @@ class on the same frame build).
 
 **Note:**
 1. The BSP raycast is a small independent deterministic utility (static tree, origin, predicate heights) — it can be verified in isolation before the exposure pass is wired up.
+
+## Comments
+
+- 2026-10-11 (from ticket 03 demo A/B): with the camera in the void (DOOM2
+  MAP23 demo, ticks ~2010-2040), classic shows black where the levelmesh draws
+  rooms in the frustum - classic BSP clipping from an OOB viewpoint has no mesh
+  equivalent yet. Track under this ticket's OOB view rules.

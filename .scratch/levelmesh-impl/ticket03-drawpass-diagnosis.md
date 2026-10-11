@@ -293,3 +293,23 @@ Work the suspects in order of likelihood given Phase 1 data:
 - Test: `python3 tools/abtest.py run --map DOOM2_MAP01 --mode static --backend gl33`, read `b/stdout.log` + `b/png/MAP01_8.png` from the newest run dir.
 - Shader edits only take effect after a rebuild (PK3 repack).
 - Do not trust `%f` prints of int16 fields; use byte dumps or matching formats.
+
+### FINDINGS (2026-10-11 session 7) — demo A/B (moving player)
+
+Demo A/B on DOOM2 exposed whole-view diffs on ticks while moving. Fixed:
+- D_Render pre-cull used mo.Z() + viewz (viewz is already absolute).
+- RenderScene now re-culls with the view's actual VPUniforms (interpolated
+  position, camera actor incl. spy cameras / camera textures, pitch/roll, exact
+  projection) before DrawLevelMesh.
+- FLevelMeshFrame::Build restores the list size each build (a Clamp from one
+  view capped every later build).
+- **Back-face culling** (the main one): classic only draws a side's front
+  (AddLine back-face reject); the mesh drew both, so backs of one-sided walls
+  occluded the view. GL Cull_CW for all groups; flat triangles oriented per
+  plane at build (floors CW / ceilings CCW in map space); 3D-floor flats
+  LMDS_NOCULL. Culling reset to none before the classic lists draw.
+
+Result: MAP01 demo worst tick 290 px >24 (was 1.9M); MAP23 one remaining
+stretch (ticks ~2010-2040) with the camera OUT OF BOUNDS: classic BSP clipping
+blacks out the void, the mesh draws everything in the frustum -> ticket 07
+(OOB view cull rules), not a ticket 03 bug.

@@ -15,6 +15,8 @@
 **
 */
 
+#include "levelmesh.h"
+#include "levelmesh_frame.h"
 #include "a_sharedglobal.h"
 #include "r_utility.h"
 #include "r_sky.h"
@@ -566,6 +568,17 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 	// no frame built yet - falls back to the classic passes so the level is
 	// always drawn. With gl_uselevelmesh 0 none of this runs and the frame
 	// stays byte-for-byte classic.
+	// The D_Render pre-cull uses the un-interpolated player view; re-cull here
+	// with this view's actual matrices (interpolated position, camera actor,
+	// exact projection) - the same product the levelmesh VS uses - so the
+	// list can never drop a sub-range that is visible in this view.
+	if (Level->useLevelMesh && Level->levelMeshData != nullptr)
+	{
+		VSMatrix cullVP;
+		cullVP.loadMatrix(VPUniforms.ProjectionMatrix.get());
+		cullVP.multMatrix(VPUniforms.ViewMatrix);
+		Level->levelMeshFrame.Build(*Level->levelMeshData, cullVP);
+	}
 	if (Level->useLevelMesh && screen->DrawLevelMesh(state, Level))
 	{
 		// View-dependent classic fills (missing upper/lower textures, deep

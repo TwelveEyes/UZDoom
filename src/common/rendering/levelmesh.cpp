@@ -72,6 +72,7 @@ using levelmesh::LMDS_CLAMPX;
 using levelmesh::LMDS_CLAMPY;
 using levelmesh::LMDS_TEXCLAMPY;
 using levelmesh::LMDS_MASKED;
+using levelmesh::LMDS_NOCULL;
 
 //============================================================================
 //
@@ -1292,6 +1293,18 @@ struct Builder
 				ibo.Push(base + k);
 			}
 		}
+		// Front-face orientation for back-face culling (LMDS_NOCULL docs):
+		// clockwise on screen. Seen from above with map +y up, the screen
+		// equals map space, so floors are clockwise in map space (negative
+		// signed area); ceilings are seen from below (mirrored), so they are
+		// counter-clockwise. Earcut / fan output is normalized per triangle.
+		const bool wantNegative = (planeSlot == 0);
+		for (uint32_t t = start; t + 2 < ibo.Size(); t += 3)
+		{
+			const LevelMeshVertex &a = mesh.vertices[ibo[t]], &b = mesh.vertices[ibo[t + 1]], &c = mesh.vertices[ibo[t + 2]];
+			const double area = ((double)b.x - a.x) * ((double)c.y - a.y) - ((double)c.x - a.x) * ((double)b.y - a.y);
+			if (area != 0 && (area < 0) != wantNegative) std::swap(ibo[t + 1], ibo[t + 2]);
+		}
 		mesh.subRanges[surfaceIndex].iboCount = ibo.Size() - start;
 		RecordSurfaceVerts(surfaceIndex, base, (uint32_t)n);
 	}
@@ -1375,7 +1388,7 @@ struct Builder
 				uint32_t planeRefs[4] = { LM_PlaneRef(model, sector_t::floor),
 					LM_PlaneRef(model, sector_t::ceiling), LM_PLANEREF_NONE, LM_PLANEREF_NONE };
 				uint32_t surf = AddSurface(ftex, model->GetTexture(sector_t::floor), r, flags, planeRefs,
-					LM_LightRef(model, LM_LIGHT_SLOT_FLOOR), ftex->isMasked() ? LMDS_MASKED : 0u);
+					LM_LightRef(model, LM_LIGHT_SLOT_FLOOR), LMDS_NOCULL | (ftex->isMasked() ? LMDS_MASKED : 0u));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
 				mesh.surfaces[surf].tierLight = model->planes[sector_t::floor].Light;
 				EmitFlatFan(sub, model->floorplane, lmuv, surf, 0);
@@ -1389,7 +1402,7 @@ struct Builder
 				uint32_t planeRefs[4] = { LM_PlaneRef(model, sector_t::floor),
 					LM_PlaneRef(model, sector_t::ceiling), LM_PLANEREF_NONE, LM_PLANEREF_NONE };
 				uint32_t surf = AddSurface(ctex, model->GetTexture(sector_t::ceiling), r, flags, planeRefs,
-					LM_LightRef(model, LM_LIGHT_SLOT_CEILING), ctex->isMasked() ? LMDS_MASKED : 0u);
+					LM_LightRef(model, LM_LIGHT_SLOT_CEILING), LMDS_NOCULL | (ctex->isMasked() ? LMDS_MASKED : 0u));
 				mesh.surfaces[surf].light = (int16_t)RescaleLightLevel(model->lightlevel);
 				mesh.surfaces[surf].tierLight = model->planes[sector_t::ceiling].Light;
 				EmitFlatFan(sub, model->ceilingplane, lmuv, surf, 1);

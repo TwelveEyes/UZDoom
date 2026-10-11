@@ -136,6 +136,11 @@ uint32_t FLevelMeshFrame::Build(const FLevelMesh &mesh, VSMatrix &vp)
 {
 	Prepare(mesh);	// lazy: allocates at most once per level (re)load
 	if (bound == 0) return 0;
+	// The previous Build (or the previous view's re-cull) clamped Count to its
+	// survivor count; restore the full size before writing, or every later
+	// build stays capped at the smallest count ever seen (a single fully culled
+	// view would black out the level). Capacity >= bound, so no allocation.
+	drawList.Resize(bound);
 
 	uint32_t count = 0;
 	const uint32_t nregions = mesh.regions.Size();
@@ -194,7 +199,7 @@ void LevelMesh_CalcCullVP(player_t *pl, VSMatrix &vp)
 	const DVector3 pos = mo.Pos();
 	const float vx = (float)pos.X;
 	const float vy = (float)pos.Y;
-	const float vz = (float)(mo.Z() + pl->viewz);
+	const float vz = (float)pl->viewz;	// player_t::viewz is absolute (P_CalcHeight)
 
 	// HW angles: same derivation as R_SetupFrame's pixelstretch-scaled pitch
 	// and FRenderViewpoint::SetViewAngle's 270-degree yaw offset.
