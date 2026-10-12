@@ -1,0 +1,35 @@
+# 19: Dynamic lights (clustered forward+), shadowmaps, SSAO normals
+
+**Map:** `../map.md`: Acceptance policy DC4.
+**Type:** task
+**Status:** needs-triage (pending the 05 gate)
+**Blocked by:** 10
+
+## What to build
+
+The classic path builds a per-surface light list (`HWWall::SetupLights`, flats likewise) and sets
+`uLightIndex` per draw. That cannot work with batched indirect draws. Instead:
+
+- **Gather.** Per frame, collect the visible `FDynamicLight`s (point / spot; additive, subtractive,
+  attenuated; shadowmap index) in the units `main.fp` expects.
+- **Binning.** A compute pass bins lights into view-space clusters (froxels: tile grid × log depth
+  slices), per view (portal views included), into an SSBO light-index list.
+- **Fragment side.** The levelmesh fragment path looks up its froxel and iterates that froxel's
+  lights. The per-light math (`lightContribution`, shadowmap sampling, material variants) is shared
+  with the classic code through the common include. Sprites, models, and decals keep classic lists.
+- **Selection parity.** The classic culls per surface: radius, plane side, portal group. Match the
+  plane-side and portal-group rules in the fragment test where cheap; classify the rest under DC4.
+- **Shadowmaps.** The existing `hw_shadowmap` (LevelAABBTree) is unchanged. Bind it in the
+  levelmesh set.
+- **SSAO normals.** Write correct normals to the G-buffer pass (`gl_ssao`) from the per-surface
+  normals.
+- **Re-enable lights in A/B.** The `r_dynlights 0` pin in `tools/abtest.py` is removed for levelmesh
+  maps once this lands.
+
+## Acceptance
+
+- [ ] DOOM2 MAP01 with `lights.pk3`, plus a dynlight-heavy map: A/B passes, only DC1 / DC2 / DC4.
+- [ ] Light count scaling (GPU time vs visible lights) measured on a stress vantage.
+- [ ] SSAO on: A/B passes.
+
+## Comments

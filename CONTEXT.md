@@ -1,225 +1,137 @@
 # UZDoom Levelmesh Rendering
 
-Domain glossary for the overhaul of UZDoom's level rasterization: replacing the per-frame BSP-traversal
-rasterizer with a static GPU levelmesh (Helion-style). Terms are defined as they are locked by the
-`.scratch/levelmesh-rendering/` effort; do not reuse them for unrelated concepts.
+Domain glossary for the GPU-driven levelmesh effort. It defines the terms used by
+`.scratch/levelmesh-impl/map.md` and `docs/adr/0001`–`0003`. Do not reuse these terms for unrelated
+concepts.
 
 ## Language
 
 **Levelmesh path**:
-The planned primary rasterization pipeline. The level is drawn as a static z-buffered mesh built once at
-map load; per-frame CPU work is minimal, and visibility is resolved by the depth buffer.
+The Vulkan-only rasterization pipeline. The whole level is baked once at map load into clusters. Each
+view is culled on the GPU (frustum + two-phase Hi-Z), which writes indirect draw commands; materials
+are bound bindlessly. Per-frame CPU cost does not depend on level size. The GL backend never uses it.
 _Avoid_: GPU renderer, new renderer, mesh renderer
 
-**DoomLevelMesh**:
-The existing class (`src/rendering/hwrenderer/doom_levelmesh.*`) that already builds whole-level geometry
-at map load and is consumed only by the Vulkan raytracer. It is the seed of the levelmesh path, not the
-levelmesh path itself.
-_Avoid_: levelmesh (the path), static mesh
-
 **Classic path**:
-The legacy per-frame front-to-back BSP-traversal rasterizer (`hw_bsp.cpp` → drawsegs → batches). Retained
-as a selectable fallback and the A/B reference until the levelmesh path is proven.
+The per-frame front-to-back BSP-traversal rasterizer (`hw_bsp.cpp` → `HWWall`/`HWFlat` → draw lists).
+It is the only path on GL, the fallback on Vulkan devices without the required features, and the A/B
+reference.
 _Avoid_: legacy renderer, BSP renderer, old path
 
-**Dynamic sector**:
-A sector whose state (floor/ceiling heights or planes, light, textures) can change at runtime — doors,
-lifts, 3D floor models. Topology is static in Doom: no runtime re-triangulation is ever needed.
-_Avoid_: moving sector, animated sector, dynamic geometry
+**DoomLevelMesh**:
+The existing class (`src/rendering/hwrenderer/doom_levelmesh.*`) that builds triangle geometry for the
+Vulkan raytracer (`VkRaytrace`). It is unrelated to the levelmesh path's bake.
+_Avoid_: levelmesh (the path)
 
-**Sector state buffer**:
-The per-sector dynamic attribute buffer: tilted floor/ceiling planes, scroll offsets, **lighting
-ingredients** (raw lightlevel, per-plane light offsets, the 9-byte `FColormap`), glow color/height, and
-the transdoor flag — one 96-byte record per sector, full-copied to the GPU **every frame** into a ring of
-`HW_MAX_PIPELINE_BUFFERS` slots; each record carries the single *current* CPU-interpolated plane values.
-Evaluated in the vertex shader to warp dynamic surfaces **and** to shade every surface (07 locked
-fetch-by-all).
-_Avoid_: instance buffer, dynamic buffer (too generic)
+**Bake**:
+The load-time construction of the levelmesh. It runs the classic emitters (`HWWall::Process` through
+`HWWallDispatcher`'s mesh-helper mode, plus the classic static flat builder) and converts their output
+into plane-anchored surfaces (ADR 0003). Bake outputs that depend on the view (portal walls,
+translucent surfaces, missing-texture fills) go to side lists instead of the mesh.
+_Avoid_: build, reimplementation
 
-**Snapshot pass**:
-The per-frame CPU pass, run inside levelmesh frame setup after `DoInterpolations`, that packs every
-sector's state record into the current ring slot and diffs each record against last frame to drive the
-static↔dynamic lifecycle (first movement → flip dynamic; N=2 unchanged frames → settled → re-bake).
-_Avoid_: dirty check, update pass (too generic)
-
-**Dynamic surface**:
-A surface whose plane is evaluated in the vertex shader from the sector state buffer (via its plane
-refs) instead of drawing baked z. The complement is a *static surface*, which draws its baked z
-untouched. Selection is the surface record's dynamic flag, driven by the snapshot pass.
-_Avoid_: animated surface, moving surface
-
-**Full parity**:
-The levelmesh path reproduces every visual behavior of the classic path: portals/sector_link, fake flats,
-sky portals, dynamic lights, and all sector effects. It is the acceptance bar, not a stretch goal.
-_Avoid_: feature-complete, equivalent
-
-**Proven**:
-The state in which the levelmesh path has passed the acceptance bar: A/B pass (every acceptance
-map × mode × both backends, zero tolerance outside the frozen known-diff allowlist) ∧ perf pass (≤
-classic × 1.05 on every map + `SOS_Boom` ≤ 50% of classic median frame time) ∧ soak pass (the
-in-game checklist) ∧ no open levelmesh-only bug of severity ≥ S2 (S1 crash/hang/memory growth, S2
-visible artifact or broken behavior on an acceptance map, S3 cosmetic/rare). Declared by the map
-owner after the implementer runs the tool and posts results; the `gl_uselevelmesh` default flip
-ships with that declaration. It is the gate for making levelmesh the default.
-_Avoid_: stable, done
-
-**Level vertex pool**:
-The single whole-level 32-byte vertex store built once at map load, ordered per region then per piece
-(subsector fan, line quad). Write-once except for re-bake patches; the first-movement flag flip rewrites
-the in-vertex dual-purpose slot.
-_Avoid_: VBO (backend-specific), mesh buffer
-
-**Dual-purpose slot**:
-The 8-byte `(slotA, slotB)` pair in every vertex: `(baked z, baked v)` for static surfaces,
-`(vparam, 0)` for dynamic surfaces. The surface record's dynamic flag selects the interpretation.
-_Avoid_: generic slot, variant data
-
-**Surface record**:
-The 64-byte CPU-writable SSBO record per wall quad / per subsector fan: mutable texture index and
-dynamic flag; static plane refs, light ref, region index, opening/unpegged/window parameters; and the
-per-wall shading statics (side tier + Light/tierLight, baked fake-contrast rel pair, side light flags,
-lightmap num, 3D-light ref, 3D band range). The wall-shading/sky block (16 B) came with 07; the record
-was 48 B under 04. Reached from vertices through a per-vertex uint32 surface index.
-_Avoid_: surface struct (too generic), surface attributes
-
-**Light chain**:
-The classic per-surface CPU light computation (effective light → rescale → rel light → lightmode
-transform → colormap → vColor, plus fog/desaturation/glow setup). The levelmesh runs it **in the
-vertex shader** as a formula-for-formula bit-exact port (C++ stays the source of truth; int32 on
-integer paths, C++ op order in float32 on float paths; fake-contrast `rel` baked at build — no GPU
-atan); its per-draw results ride to the fragment as per-vertex varyings, so `main.fp` is reused
-unchanged (promoted uniforms `#define`d to varyings).
-_Avoid_: shading, lighting pass (too generic)
-
-**3D light band**:
-The sub-draw of a wall that lies inside a 3D-floor volume, clipped to one layer's z-band — the
-levelmesh's expression of the classic's split-plane draws (hw_walls.cpp). Band records (per-level
-static table: light ref + split top/bottom plane refs) give IBO sub-ranges a third dimension:
-(region, texture, **band**). Band planes are read from sector records at draw time, so they track
-moving 3D floors.
-_Avoid_: light slice, lightlist (that is the per-level 3D-light state buffer)
-
-**levelSkyPos**:
-The per-level per-frame sky scroll triple (`hw_sky1pos`, `hw_sky2pos`, `hw_skymistpos`), the only
-dynamic sky state. Sky surfaces carry a static `skyScrollKind` (which scroll drives them, incl.
-doublesky's second layer); all other sky properties (texture, angle, MBF line-texture transfer) are
-resolved at build — so scrolling skies write zero sector-record bytes per frame.
-_Avoid_: sky offset (05's reserved record slot), sky portal (that is 06's portal-view mechanism)
+**Plane-anchored vertex**:
+A vertex stored as `(x, y, zOffset, anchor)`. Its z is `ZatPoint(anchor plane) + zOffset`, evaluated
+every frame from the sector state, so moving sectors need no vertex updates and there is no
+static/dynamic lifecycle.
+_Avoid_: dynamic vertex, baked z
 
 **Plane ref**:
-A `(sector index, floor|ceiling)` pointer into the sector state buffer. Includes refs to control /
-3D-floor model sectors — that is how fake-flat surfaces move.
+A `(sector index, floor|ceiling)` reference into the sector state buffer. It can point at a 3D-floor
+model sector, which is how 3D-floor surfaces move with their model.
 _Avoid_: plane pointer, height reference
 
-**Re-bake**:
-Restoring a dynamic surface's static vertices to the new resting height and clearing its dynamic flag
-once movement completes. A surface is re-bake-eligible only when every plane it references has settled.
-_Avoid_: static bake, geometry update
+**Surface record**:
+The integer std430 record for each baked wall piece or flat. It holds plane refs, light ref,
+side-state ref, untranslated texture id, draw-state bits (bucket, mask, clamp, cull), flags, baked
+static light ingredients, lightmap page/UV, and normal.
+_Avoid_: surface struct (too generic)
 
-**Fake-flat surface**:
-An extra static flat surface in the vertex pool referencing a 3D-floor model sector's (`heightsec`)
-plane — the levelmesh's expression of `hw_FakeFlat`. No second pass, no runtime copies.
-_Avoid_: fake flat (the classic `hw_FakeFlat` runtime mechanism), 3D-floor plane
+**Cluster**:
+A spatial group of surfaces cut from a BSP subtree at a triangle budget. It carries an xy AABB, a
+z-range that is refreshed when back-linked sectors move, and an index range. It is the unit of GPU
+culling. Clusters are spatial only; they know nothing about portal topology.
+_Avoid_: region (old design), chunk, meshlet (unless it really is one)
 
-**Main region**:
-The level region containing the player's start. The only region the main view draws — portal regions are
-reachable only through portals, so they are never directly visible in the main view.
-_Avoid_: main level, base region
+**Bucket**:
+A draw-pipeline class of surfaces: opaque, masked, sky, portal window, or a material shader variant.
+The cull writes indirect commands per bucket. A texture swap can move a surface to another bucket by
+rewriting its bucket bits.
+_Avoid_: texture group, sub-range
 
-**Portal region**:
-A self-contained vertex + index block drawn under a region view transform, front-face flag, and
-scissor/stencil — the levelmesh's unit of portal rendering. The level partitions into regions by a global
-flood-fill over the sector graph: adjacency = two sectors sharing a two-sided *non-portal* line (portal
-lines are barriers; one-sided lines never connect); each connected component is a region. A portal's
-target is the region behind its destination line (line portals) or its destination sector (sector_link).
-04 locked the storage container; 06 locked the semantics.
-_Avoid_: portal mesh, region chunk
+**Two-phase Hi-Z cull**:
+The per-view GPU visibility scheme. Phase 1 draws the clusters that were visible last frame
+(frustum-tested). A depth pyramid is then built from that depth. Phase 2 tests the remaining clusters
+against the frustum and the pyramid and draws the ones that pass. Last, the view's persistent
+visibility bitset is updated.
+_Avoid_: occlusion query (that is only a fallback concept), PVS
 
-**Portal view**:
-A region-scoped view that draws exactly one portal region (its target) plus any nested sub-views, under the
-portal's own view transform + view clip, stencil-masked. Not per-portal mesh baking — the target region's
-per-texture IBO sub-ranges (04) are drawn under a per-portal transform. Sky/skybox are instances of the
-same mechanism.
-_Avoid_: portal mesh, secondary viewport
+**State buffers**:
+Device-local SSBOs indexed by game objects: sector state (planes, light ingredients, colormap, glow),
+side state (texture id, offsets, scales per tier), plane xform, polyobject transforms, 3D-light state,
+and the texture translation table. Each one is updated only when its contents change, through a staging
+ring. None of them is streamed in full every frame.
+_Avoid_: sector ring, snapshot
 
-**Portal visibility query**:
-The GPU occlusion query that decides whether a portal is drawn: a depth-only draw of the portal's window
-polygon (under the main view) with a depth-pass test. Issued one frame ahead for the *predicted candidate
-set* (portals inside the predicted frustum — N+1 camera = current + measured velocity × dt, generous
-margin), so the result is one frame stale; a prediction miss is a bounded 1–2 frame delay. The result gates
-both the portal draw and its depth clear (no spurious un-occlude).
-_Avoid_: LOS ray, P_CheckSight (that is gameplay sight, not portal visibility)
+**Texture translation table**:
+The per-frame map from untranslated texture id to bindless slot. It follows frame animation, so
+surface records keep untranslated ids and animation never touches geometry.
+_Avoid_: animation table
 
-**Render worker (levelmesh)**:
-The async render thread the levelmesh path runs on (Vulkan only): it owns the 3D world pass only —
-per-frame uploads, the full levelmesh 3D issue, and per-slot completion fences. The game thread keeps the
-sim, the frame build (inside the interpolation window), the 2D stack, and presentation; the worker consumes
-frozen handoff-slot contents and never touches playsim state. An explicit deviation from both Helion and
-UZDoom's current synchronous behavior.
-_Avoid_: render thread (the classic `r_thread.*` is the software renderer's span drawer — different thing),
-async renderer
+**Shading resolve**:
+The compute pass that runs once per visible surface per view. It evaluates the ported classic light
+chain (effective light → rescale → rel light → lightmode → colormap, fog, desaturation, glow) into a
+compact resolved record. The vertex stage reads that record through a `flat` surface index. Light is
+never evaluated per vertex.
+_Avoid_: light chain in VS, lighting pass (too generic)
 
-**Handoff slot**:
-One entry of the 05 sector-state ring, extended to be the per-frame record the game thread builds and the
-worker consumes: sector-state records, 3D-light state, levelSkyPos, per-viewpoint values, the portal-view
-list, the culled draw list, sprite/model vertex slot references, and the query results to apply. In-order,
-fence-gated, no frame skipping — the game thread 2D-composes per frame in order, so every built frame's 3D
-pass must complete.
-_Avoid_: frame buffer, command queue
+**Light band**:
+One draw of a wall inside a 3D-floor light volume, clipped to a single light layer by split-plane clip
+distances. Bands are recorded at bake time; ticket 12 covers them.
+_Avoid_: lightlist (that is the 3D-light state)
 
-**Window polygon**:
-The per-portal 2D quad (portal-adjacent endpoints × current portal-adjacent sector heights) drawn
-depth-only under the main view to feed the portal visibility query. A small dynamic buffer, one quad per
-portal, updated per frame during the portal-transform step.
-_Avoid_: portal frustum, view frustum
+**Visibility feedback**:
+The per-view cluster and surface visibility bits that the GPU cull produces. They are copied to a
+host-readable ring and read by CPU consumers (actor/decal gather, exposure, dither, translucent set)
+at most one pipeline depth later.
+_Avoid_: readback (too generic), occlusion results
 
-**Exposure pass**:
-The per-frame per-view levelmesh pass that reproduces the classic's automap fog-of-war writes (per-
-subsector `SSECMF_DRAWN`, per-line `ML_MAPPED`) and the `cullcolor` latch. Candidates = the subsectors in
-the view's culled draw list; each not-yet-exposed candidate is tested with 2.5D occlusion rays from the
-camera to its static fan-vertex test points (BSP raycast under the classic's solidness rules — standard or
-radar mode); any unoccluded ray exposes the subsector. Marks are monotonic. View-mode rules replicate the
-classic exactly: normal views test; OOB non-radar views mark from the suplex-pitch-window culled list;
-OOB radar views (dev cvar `r_radarclipper`) radar-gate per subsector (the gate also culls the draw); ortho
-no-fog views use the viewbox; undiscovered secret sectors are gated in OOB views for both draw and
-exposure.
-_Avoid_: fog-of-war pass, culling pass (that is 08's cull walk)
+**Side list**:
+A bake output for surfaces the opaque mesh cannot own: translucent and fog-boundary surfaces, portal
+windows, and missing-texture/flood fills. The CPU-driven passes in tickets 15 and 16 draw them.
+_Avoid_: leftovers, classic lists
 
-**Dither fragment**:
-The per-frame draw-list entry that re-issues a normal sub-range with the `DITHERTRANS` shader variant —
-the levelmesh's expression of the classic's dither-transparency feedback loop (visible actor →
-`P_CheckSight` → `SetDitherTransFlags` traces → tier flags → dithered draws). Fragments are appended
-during the cull walk, reading flags written by that frame's dither tail plus last frame's residue; flags
-are cleared on consumption, with `dithertranscount` decremented by the line's seg count in the sub-range.
-_Avoid_: dither pass, transparency variant
+**Transitional period**:
+The span of tickets 08–19. During it, the classic BSP walk still runs on levelmesh levels and draws
+whatever the levelmesh does not yet own. Ticket 20 removes the walk from the levelmesh frame. Perf bars
+apply only after ticket 20.
+_Avoid_: hybrid mode
+
+**Delta class**:
+A reviewed, documented category of acceptable A/B difference between classic and levelmesh (ADR 0002):
+DC1 z-fight, DC2 float-z rounding, DC3 feedback latency, DC4 dynamic-light selection, DC5 visibility
+precision (game-state sets). An unclassified diff fails. Adding a class requires amending ADR 0002.
+_Avoid_: whitelist, tolerance budget
 
 **A/B capture mode**:
-The always-compiled, cvar-gated (default off) engine mode that makes rendering deterministic for the A/B
-tool: a synthetic clock (exactly one tick per rendered frame, real-time paced; interpolation fraction
-pinned, sky scroll / texture animation / FOV computed from tick time — `I_GetTimeFrac()` is wall-clock
-even under `-timedemo`/`cl_capfps`, so determinism cannot be emulated externally) plus tick-list PNG
-capture of the final composed framebuffer, reusing the `M_ScreenShot` writer.
+The always-compiled, cvar-gated (default off) engine mode that makes rendering deterministic for the
+A/B tool. It runs a synthetic clock (one tick per rendered frame, pinned interpolation fraction, sky,
+texture animation, and FOV derived from tick time) and captures the final composed framebuffer as PNGs
+per tick.
 _Avoid_: screenshot mode, frame grab
 
-**Acceptance matrix**:
-The A/B tool's run space: the acceptance map list (doom1 + doom2 + Hexen + Heretic + classic ports +
-`SOS_Boom`, per ticket 09) × modes {static tick lists, demo replay} × backends {GL33, Vulkan — both must
-pass, same-backend pairs only} × resolutions {1080p head, 320×200 clean, stress widescreen}, plus the
-cvar sweep (gamma × glow) on the stress maps. Every combination must pass parity for the levelmesh.
-_Avoid_: test suite (there is no unit test suite — this is the deterministic half of acceptance),
-matrix (too generic)
+**Stress vantage**:
+A fixed camera scenario in the perf kit (ticket 02) placed on a large, open, portal-dense, or
+3D-floor-dense view. It measures real rendering cost, unlike wandering-camera medians.
+_Avoid_: benchmark, demo
 
-**Known-diff allowlist**:
-The per-map(+mode+resolution) frozen list of pixel-diff clusters tolerated by the A/B tool, recorded at
-first bring-up and human-reviewed — only z-fighting clusters (classic's normalized per-view depth range
-vs the levelmesh's true z; either winner legitimate) are allowlisted; real bugs get fixed. Committed to
-the repo; any NEW diff fails; entries can only be removed. Zero tolerance applies everywhere else.
-_Avoid_: tolerance budget (that would be a numeric allowance), whitelist
+**Proven**:
+The state reached when A/B passes (acceptance matrix on Vulkan, delta-class policy), perf passes (the
+bars in the map), soak passes, and no levelmesh-only bug of severity S2 or higher is open. The user
+declares it. The `gl_uselevelmesh` default flip on Vulkan ships with that declaration.
+_Avoid_: stable, done
 
 **Soak**:
-The human-driven in-game checklist (ticket 09: two full campaigns + Heretic E1, portal/3D-floor mod
-tours, the `SOS_Boom` fast-camera fly, the scripted save/load/automap/secret walk, a deathmatch session,
-the light-thinker/fog/fake-contrast tour, and a stability watch incl. one 1 h+ session) run with the
-levelmesh path on — the project standard's verification, since there is no unit test suite. A clause of
-the PROVEN gate.
+The human-driven in-game checklist run with the levelmesh on (ticket 21): campaigns, mod tours, a
+save/load and automap walk, deathmatch, and a stability watch of 1 h or more.
 _Avoid_: stress test, playtesting (too generic)
