@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Perf bars. Audit §1, §7.
 **Type:** task
-**Status:** in-review (awaiting the human contact-sheet review; everything else done)
+**Status:** resolved
 **Blocked by:** None
 
 ## What to build
@@ -37,8 +37,8 @@ so it measures real rendering:
 
 ## Acceptance
 
-- [ ] Every demo passes the non-empty-view check (**done**: all 26 tours + 11 vantages, both
-      backends). Contact sheets are reviewed by a human (**pending**: agent-reviewed only).
+- [x] Every demo passes the non-empty-view check (all 26 tours + 11 vantages, both backends).
+      Contact sheets are reviewed by a human (user, 2026-10-12: "the sheets are fine").
 - [x] Stress vantage set defined (≥ 8 vantages across ≥ 5 maps) and run on Vulkan (+ GL33 for
       reference).
 - [x] `results/baseline-v2.{md,json}` written. The old baseline is moved to
@@ -91,3 +91,23 @@ and `run_matrix.sh` rejects that case. Build commands and test runs are separate
     - myhouse MAP01 tour: 3 of 26 frames fully dark.
     - DOOM2 MAP31 V1 faces a maze wall.
     - DOOM2 MAP23's sheet missed 2 capture ticks (a capture quirk, not perf data).
+- 2026-10-12 (resolved): the user reviewed the contact sheets ("the sheets are fine").
+  - **Vulkan bug found in-game during the review.** The frame covered only the top-left of the
+    window.
+    - Cause: the window is created at 1536×864 and then resized to 2560×1440, and the
+      swapchain stayed clamped to its creation-time extent of 1536×864. `AcquireImage`
+      recreates the swapchain only when the client size changes, and the engine's client
+      size read 2560×1440 from the start. The present-box clamp from `45b2ba4` had masked
+      it.
+    - Fix (`vk_framebuffer.{h,cpp}`, outside the ZVulkan subtree): while the swapchain is
+      smaller than the client area, retry its creation every 30 frames; log the clamp and the
+      recovery.
+    - Verified: every Vulkan run log shows "swapchain clamped to 1536x864 ... retrying"
+      followed by "resized to 2560x1440".
+  - **Re-measured.** All Vulkan sets (tours, vantages, monsters) were re-measured after the fix.
+    The pre-fix logs are kept locally in `logs/pre_swapfix/`.
+    - Change: tours within ~2 % (SOS MAP12 9 %), vantages within ~5 %.
+    - `baseline-v2.{md,json}` regenerated. Bars B1–B4 unchanged; their quoted classic
+      values are refreshed.
+  - **Timedemo auto-exit** (user request): `run_matrix.sh` terminates the engine at the end
+    dialog. It is the only script that uses `-timedemo`.

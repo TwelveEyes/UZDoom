@@ -213,13 +213,13 @@ are included.
   - Headroom: the stages the levelmesh replaces cover 93–96 % of the classic render window on
     SOS/planisf (scene build `pr` + wall/flat submission `wr`/`fr`) and ~85 % on myhouse (adds
     the `SetCoverage` portal BSP walk).
-  - The ceiling is therefore ~10× on SOS MAP32 V1 (classic 49.8 ms wall p50); 50 % is the
+  - The ceiling is therefore ~10× on SOS MAP32 V1 (classic 47.9 ms wall p50); 50 % is the
     floor.
 - **B3 Level-size independence:** levelmesh render CPU excluding the sprite stages
   (`r − ss − sr`) p95 ≤ 1.0 ms at every vantage and on every tour. The classic value for this is
-  44 ms on SOS MAP32 V1 and 5.8 ms on myhouse MAP01 V1.
+  42 ms on SOS MAP32 V1 and 5.8 ms on myhouse MAP01 V1.
 - **B4 Tails:** on every tour, levelmesh `wall` p99 ≤ classic `wall` p99. On the SOS MAP32 and
-  planisf tours, levelmesh p99 ≤ 50 % of classic (classic 28.5 / 21.2 ms).
+  planisf tours, levelmesh p99 ≤ 50 % of classic (classic 28.9 / 21.1 ms).
 - **GPU visibility:** per-phase GPU timestamps (cull, draw, Hi-Z) arrive with tickets 05/08 and
   are reported alongside these bars, without a separate bar. The `wall` bars already catch a
   GPU-bound regression.
@@ -288,3 +288,8 @@ ticket file, and decisions that change this map are written back here, under Dec
     dialog.
   - Finding for ticket 15: the classic `SetCoverage` walks the whole BSP per sector-stack portal;
     on myhouse that is 4.9 of 5.9 ms.
+- 2026-10-12: ticket 02 closed after the human sheet review.
+  - Fixed a Vulkan bug found during the review: the swapchain stayed clamped to the initial
+    1536×864 window, so only the top-left of the window showed the frame
+    (`vk_framebuffer.cpp`).
+  - All Vulkan baseline sets re-measured after the fix (≤ ~5 % change); bars unchanged.

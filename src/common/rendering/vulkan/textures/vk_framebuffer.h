@@ -55,4 +55,6 @@ private:
 	bool CurrentVSync = false;
 	bool CurrentHdr = false;
 	bool CurrentExclusiveFullscreen = false;
+	int ClampedRetryFrames = 0;	// frames since the last retry of a clamped swapchain
+	bool ClampedReported = false;	// a clamped swapchain was logged
 };
