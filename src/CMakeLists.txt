@@ -1049,9 +1049,6 @@ set (PCH_SOURCES
 	common/rendering/r_thread.cpp
 	common/rendering/r_videoscale.cpp
 	common/rendering/stb_include.cpp
-	common/rendering/levelmesh.cpp
-	common/rendering/levelmesh_state.cpp
-	common/rendering/levelmesh_frame.cpp
 	common/rendering/hwrenderer/hw_draw2d.cpp
 	common/rendering/hwrenderer/data/hw_clock.cpp
 	common/rendering/hwrenderer/data/hw_skydome.cpp
@@ -1079,7 +1076,6 @@ set (PCH_SOURCES
 	common/rendering/gl/gl_postprocessstate.cpp
 	common/rendering/gl/gl_debug.cpp
 	common/rendering/gl/gl_buffers.cpp
-	common/rendering/gl/gl_levelmesh.cpp
 	common/rendering/gl/gl_hwtexture.cpp
 	common/rendering/gl/gl_samplers.cpp
 	common/rendering/gl/gl_shader.cpp
@@ -1297,7 +1293,6 @@ include_directories(
 	gamedata/fonts
 	rendering
 	rendering/hwrenderer
-	rendering/hwrenderer/scene
 	rendering/2d
 	r_data
 	sound

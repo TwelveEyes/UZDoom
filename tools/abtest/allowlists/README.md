@@ -1,7 +1,10 @@
-# Known-diff allowlists (levelmesh A/B, ADR 0004)
+# Known-diff allowlists (levelmesh A/B)
 
 Frozen per-map lists of tolerated pixel-diff clusters for the A/B
-comparator (`tools/abtest.py`). The policy is spec section 9 / ADR 0004:
+comparator (`tools/abtest.py`). The policy below is the retired
+zero-tolerance policy that the tool still implements; ticket 03
+(`.scratch/levelmesh-impl/issues/03-ab-tooling-v2.md`) replaces it with
+tolerance + delta classes (`docs/adr/0002-delta-class-acceptance.md`):
 
 - **Zero tolerance outside the allowlist.** Any diff pixel not covered by
   an entry fails the run.

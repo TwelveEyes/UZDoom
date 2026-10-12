@@ -37,8 +37,6 @@
 #include "vectors.h"
 
 struct FPortalSceneState;
-struct FLevelLocals;
-namespace levelmesh { struct FLevelMesh; }
 class FSkyVertexBuffer;
 class IIndexBuffer;
 class IVertexBuffer;
@@ -243,23 +241,6 @@ public:
 	virtual void BlurScene(float amount) {}
 
 	virtual void InitLightmap(int LMTextureSize, int LMTextureCount, TArray<uint16_t>& LMTextureData) {}
-	// Uploads the level's backend-neutral level-mesh model to the backend's
-	// vertex GPU objects (GL33: pool VBO + per-region VAOs). Called at level
-	// load and with null at level unload. Distinct from SetLevelMesh, which
-	// is the per-frame raytrace adapter hook.
-	virtual void SetLevelMeshData(levelmesh::FLevelMesh *mesh) {}
-	// Uploads the frame's sector state ring slot + 3D light data for the
-	// level's level-mesh model (called from D_Render's frame build, inside
-	// the interpolation window). Base no-op: only backends with a level-mesh
-	// GPU object set (GL33) implement it.
-	virtual void UploadLevelMeshSlot(FLevelLocals *level, int slot) {}
-	// Ticket 03 (chunk E2): draws the level's level-mesh sub-ranges with the
-	// given render state, replacing the classic wall/flat geometry passes in
-	// HWDrawInfo::RenderScene. Base no-op: only GL33 implements it. Returns
-	// true when the level's geometry was drawn (including an empty draw list)
-	// and false when the backend cannot draw it, so the scene layer falls
-	// back to the classic passes.
-	virtual bool DrawLevelMesh(FRenderState &state, FLevelLocals *level) { return false; }
 
 	// Interface to hardware rendering resources
 	virtual IVertexBuffer *CreateVertexBuffer() { return nullptr; }

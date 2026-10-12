@@ -1,6 +1,8 @@
 # A/B + baseline manifest (levelmesh)
 
-Protocol: `.scratch/levelmesh-rendering/issues/09-verification-acceptance.md`.
+Protocol: `.scratch/levelmesh-impl/map.md` (Acceptance policy, Perf bars); the
+original wayfinder protocol document was retired 2026-10-11. Tickets 02/03 in
+`.scratch/levelmesh-impl/issues/` revise this manifest.
 Matrix: maps × {demo replay, static tick lists} × {gl33, vulkan} @ 2560×1440
 host-native (+ gamma×glow sweep for tick lists). The resolution axis was
 dropped 2026-10-05 (user decision; see Resolutions below).

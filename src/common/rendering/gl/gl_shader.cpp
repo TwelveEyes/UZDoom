@@ -436,14 +436,8 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 	i_data += "#define NPOT_EMULATION\nuniform vec2 uNpotEmulation;\n";
 #endif
 
-	int vp_lump = -1;
-	if (vert_prog_lump[0] != '#')
-	{
-		// A leading '#' marks inline source rather than a lump name, mirroring
-		// the fragment proc source convention below.
-		vp_lump = fileSystem.CheckNumForFullName(vert_prog_lump, 0);
-		if (vp_lump == -1) I_Error("Unable to load '%s'", vert_prog_lump);
-	}
+	int vp_lump = fileSystem.CheckNumForFullName(vert_prog_lump, 0);
+	if (vp_lump == -1) I_Error("Unable to load '%s'", vert_prog_lump);
 
 	int fp_lump = fileSystem.CheckNumForFullName(frag_prog_lump, 0);
 	if (fp_lump == -1) I_Error("Unable to load '%s'", frag_prog_lump);
@@ -487,10 +481,7 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 	vp_comb << "#line 1\n";
 	fp_comb << "#line 1\n";
 
-	if (vert_prog_lump[0] == '#')
-		vp_comb << vert_prog_lump + 1 << "\n";
-	else
-		vp_comb << GetStringFromLump(vp_lump).GetChars() << "\n";
+	vp_comb << GetStringFromLump(vp_lump).GetChars() << "\n";
 	fp_comb << GetStringFromLump(fp_lump).GetChars() << "\n";
 	FString placeholder = "\n";
 	TArray<FString> filenames_for_error;
@@ -751,7 +742,6 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 	muTextureModulateColor.Init(hShader, "uTextureModulateColor");
 	muTextureBlendColor.Init(hShader, "uTextureBlendColor");
 	muTimer.Init(hShader, "timer");
-	lmU.Init(hShader);
 
 	lights_index = glGetUniformLocation(hShader, "lights");
 	modelmatrix_index = glGetUniformLocation(hShader, "ModelMatrix");
@@ -785,15 +775,6 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 
 	int lightmapindex = glGetUniformLocation(hShader, "LightMap");
 	if (lightmapindex != -1) glUniform1i(lightmapindex, 17);
-
-	// Ticket 03 (level-mesh): fixed units for the three record-pool
-	// samplerBuffers. Material layers own units 0-11 (the texture%d loop
-	// above), ShadowMap owns 16 and LightMap 17, so 12-14 cannot collide with
-	// per-draw material textures. The locations are -1 on non-levelmesh
-	// shaders; glUniform1i on -1 is a no-op.
-	if (lmU.uSurface != -1) glUniform1i(lmU.uSurface, 12);
-	if (lmU.uSectorState != -1) glUniform1i(lmU.uSectorState, 13);
-	if (lmU.uLightState != -1) glUniform1i(lmU.uLightState, 14);
 
 	glUseProgram(0);
 	return true;
@@ -1005,19 +986,7 @@ bool FShaderCollection::CompileNextShader()
 	else if (mCompileState == 3)
 	{ // effect shaders
 		FShader *eff = new FShader(effectshaders[i].ShaderName);
-		const char *vpsrc = effectshaders[i].vp;
-		FString prelude_vp;
-		if (effectshaders[i].prelude != nullptr)
-		{
-			int prelude_lump = fileSystem.CheckNumForFullName(effectshaders[i].prelude, 0);
-			if (prelude_lump == -1) I_Error("Unable to load '%s'", effectshaders[i].prelude);
-			int vp_lump = fileSystem.CheckNumForFullName(effectshaders[i].vp, 0);
-			if (vp_lump == -1) I_Error("Unable to load '%s'", effectshaders[i].vp);
-			// A leading '#' marks inline source rather than a lump name, see FShader::Load.
-			prelude_vp << '#' << GetStringFromLump(prelude_lump).GetChars() << "\n" << GetStringFromLump(vp_lump).GetChars();
-			vpsrc = prelude_vp.GetChars();
-		}
-		if (!eff->Load(effectshaders[i].ShaderName, vpsrc, effectshaders[i].fp1,
+		if (!eff->Load(effectshaders[i].ShaderName, effectshaders[i].vp, effectshaders[i].fp1,
 						effectshaders[i].fp2, effectshaders[i].fp3, effectshaders[i].defines, (mPassType == GBUFFER_PASS), static_cast<AllShaderIndex>(i + FIRST_EFFECT_SHADER)))
 		{
 			delete eff;

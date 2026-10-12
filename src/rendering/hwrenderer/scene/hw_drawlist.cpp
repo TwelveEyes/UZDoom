@@ -850,27 +850,6 @@ void HWDrawList::DrawWalls(HWDrawInfo *di, FRenderState &state, bool translucent
 
 //==========================================================================
 //
-// Levelmesh path (ticket 03): polyobject walls move at runtime and are drawn
-// from the per-subsector polyobject BSP (hw_bsp.cpp AddPolyobjs), so they are
-// not in the static mesh; draw just those walls of the list, as the classic.
-//
-//==========================================================================
-
-void HWDrawList::DrawPolyobjWalls(HWDrawInfo *di, FRenderState &state)
-{
-	HWWallDispatcher dis(di);
-	RenderWall.Clock();
-	for (auto &item : drawitems)
-	{
-		HWWall *wall = walls[item.index];
-		if (wall->seg && wall->seg->sidedef && (wall->seg->sidedef->Flags & WALLF_POLYOBJ))
-			wall->DrawWall(&dis, state, false);
-	}
-	RenderWall.Unclock();
-}
-
-//==========================================================================
-//
 //
 //
 //==========================================================================
@@ -880,26 +859,6 @@ void HWDrawList::DrawFlats(HWDrawInfo *di, FRenderState &state, bool translucent
 	for (unsigned i = 0; i<drawitems.Size(); i++)
 	{
 		flats[drawitems[i].index]->DrawFlat(di, state, translucent);
-	}
-	RenderFlat.Unclock();
-}
-
-//==========================================================================
-//
-// Levelmesh path (ticket 03): the static mesh replaces the plain/masked flat
-// passes, but the missing-texture / deep-water fills (SSRF_PLANEHACK /
-// SSRF_FLOODHACK, hw_renderhacks.cpp) are view-dependent and cannot be baked,
-// so only those flats of the list are drawn, exactly as the classic does.
-//
-//==========================================================================
-
-void HWDrawList::DrawHackFlats(HWDrawInfo *di, FRenderState &state)
-{
-	RenderFlat.Clock();
-	for (unsigned i = 0; i < drawitems.Size(); i++)
-	{
-		HWFlat *flat = flats[drawitems[i].index];
-		if (flat->hacktype & (SSRF_PLANEHACK | SSRF_FLOODHACK)) flat->DrawFlat(di, state, false);
 	}
 	RenderFlat.Unclock();
 }

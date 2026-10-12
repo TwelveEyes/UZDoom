@@ -1,8 +1,10 @@
 # levelmesh A/B & baseline tooling
 
-Tooling for tickets 09/10 of `.scratch/levelmesh-rendering/`: the classic
-performance baseline (ticket 10) and, later, the A/B capture + comparison
-driver (implemented with ticket 09's tooling). This directory is the
+Tooling for the levelmesh effort (`.scratch/levelmesh-impl/map.md`): the
+classic performance baseline and the A/B capture + comparison driver.
+The old wayfinder ticket numbers (09/10) below are historical; the current
+work is tickets 02 (perf baseline v2) and 03 (A/B tooling v2) in
+`.scratch/levelmesh-impl/issues/`. This directory is the
 committed home for demos, manifests, allowlists, and scripts; large perf
 logs stay local (`logs/`, `runs/` are gitignored).
 

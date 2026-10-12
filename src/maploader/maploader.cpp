@@ -54,9 +54,6 @@
 #include "version.h"
 #include "fs_decompress.h"
 
-// [levelmesh] Latched per level at setup; the draw path is skipped when 0.
-EXTERN_CVAR(Bool, gl_uselevelmesh)
-
 enum
 {
 	MISSING_TEXTURE_WARN_LIMIT = 20
@@ -3251,22 +3248,7 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 		Level->FinalizePortals();	// finalize line portals after polyobjects have been initialized. This info is needed for properly flagging them.
 
 	Level->aabbTree = new DoomLevelAABBTree(Level);
-	// [levelmesh] Build the backend-neutral static level-mesh model. The build
-	// site produces the whole-level vertex pool, per-region IBOs, surface/region
-	// records, bands, and the per-region actor list. Both the new draw path and
-	// the raytrace adapter consume this. DoomLevelMesh is a thin adapter over it:
-	// it repacks the frozen load-time positions + indices for VkRaytrace, which
-	// is itself unchanged. The classic scene path does not touch this model.
-	if (Level->levelMeshData) delete Level->levelMeshData;
-	Level->levelMeshData = new levelmesh::FLevelMesh(levelmesh::FLevelMesh::Build(*Level));
-	if (Level->levelMesh) delete Level->levelMesh;
-	Level->levelMesh = new DoomLevelMesh(*Level->levelMeshData);
-	// [levelmesh] D1: upload the GL33 vertex GPU objects (pool VBO + per-region
-	// VAOs) for the new draw path. The classic path does not read them.
-	screen->SetLevelMeshData(Level->levelMeshData);
-	// [levelmesh] E1: latch the draw-path selection once at level setup; a
-	// mid-game gl_uselevelmesh toggle applies at the next map load.
-	Level->useLevelMesh = gl_uselevelmesh != 0;
+	Level->levelMesh = new DoomLevelMesh(*Level);
 
 	// [DVR] Populate subsector->bbox for alternative space culling in orthographic projection with no fog of war
 	subsector_t* sub = &Level->subsectors[0];

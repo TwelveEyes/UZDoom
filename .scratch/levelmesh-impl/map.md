@@ -254,3 +254,7 @@ ticket file, and decisions that change this map are written back here, under Dec
 ## Decisions log
 
 - 2026-10-11: map created from the audit's Option B (user-approved decisions above).
+- 2026-10-11: ticket 01 resolved. `src/`/`wadsrc/` are back at `8cf10772`, except the
+  `gl_uselevelmesh` comment (now a no-op until ticket 08). `DoomLevelMesh` is on its classic
+  builder again, and the A/B and perf tooling are kept. Note for runs: with `vk_raytrace 1` the
+  engine stays open after a timedemo until a user closes it, so scripted runs need a timeout.

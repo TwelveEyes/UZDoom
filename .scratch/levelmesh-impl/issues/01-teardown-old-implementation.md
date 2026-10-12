@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Locked decisions ("Existing code"), Standing constraints.
 **Type:** task
-**Status:** ready-for-agent
+**Status:** resolved
 **Blocked by:** None
 
 ## What to build
@@ -44,13 +44,13 @@ Specifically:
 
 ## Acceptance
 
-- [ ] Clean RelWithDebInfo build. No new warnings in touched files.
-- [ ] `git diff 8cf10772 -- src wadsrc` shows only intentional leftovers (the cvar and its comment),
+- [x] Clean RelWithDebInfo build. No new warnings in touched files.
+- [x] `git diff 8cf10772 -- src wadsrc` shows only intentional leftovers (the cvar and its comment),
       each listed in the ticket's Comments.
-- [ ] Classic A/B self-check (classic vs classic, Vulkan + GL33, static tick list) is byte-identical.
+- [x] Classic A/B self-check (classic vs classic, Vulkan + GL33, static tick list) is byte-identical.
       The capture tooling still works.
-- [ ] `VkRaytrace` smoke run (a lightmapped map, or the raytrace path on DOOM2 MAP01) runs clean.
-- [ ] Map load no longer builds or uploads anything levelmesh-related.
+- [x] `VkRaytrace` smoke run (a lightmapped map, or the raytrace path on DOOM2 MAP01) runs clean.
+- [x] Map load no longer builds or uploads anything levelmesh-related.
 
 ## Notes
 
@@ -58,3 +58,25 @@ The audit (`../audit-2026-10-11.md` §5) lists the defects being removed. Do not
 that code into later tickets: ticket 06 rebuilds the data layer from scratch.
 
 ## Comments
+
+- 2026-10-11 (resolved):
+  - **Method.** The 17 levelmesh commits after `8cf10772` touched only levelmesh code under
+    `src/`/`wadsrc/`. The 11 added files were deleted and the 25 modified files restored to
+    `8cf10772` (raw `git checkout`, because the git MCP has no file-restore tool). This also
+    restores `DoomLevelMesh` to its classic builder and removes the `lmfb`/`lmdc` perflog
+    columns. `parse_perflog.py` never read those columns.
+  - **Intentional leftover.** `git diff --stat 8cf10772 -- src wadsrc` now shows one file:
+    `hw_cvars.cpp`. That is the `gl_uselevelmesh` comment, rewritten to say the cvar is
+    Vulkan-only and a no-op until ticket 08. The cvar itself predates `8cf10772`.
+  - **Tooling references.** `tools/abtest.py` (docstring, `r_dynlights` pin, staging notes),
+    `tools/abtest/README.md`, `manifest.md`, and `allowlists/README.md` now point at
+    `.scratch/levelmesh-impl/`, ticket 03, and ADR 0002. They note that the comparator
+    still implements the old zero-tolerance policy until ticket 03.
+  - **Build.** Clean; the only warnings are the pre-existing ones in untouched files.
+  - **A/B.** `abtest.py run --determinism --mode static` passed on GL33 and Vulkan:
+    30/30 ticks byte-identical each (run `20261012T035642Z-det`).
+  - **Raytrace smoke.** Vulkan with `vk_raytrace 1`, DOOM2 MAP01 timedemo, on the real GPU
+    (RADV Navi31). It played all 2600 tics and logged no errors. With raytrace on, the
+    engine stays open at the end of the demo until a user closes it, while the
+    raytrace-off run exits on its own (code 255). The user confirmed this is not a
+    process error.

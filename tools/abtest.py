@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-abtest.py — levelmesh A/B capture + pixel-diff driver (ticket 01).
+abtest.py — levelmesh A/B capture + pixel-diff driver.
+
+Effort: .scratch/levelmesh-impl/map.md (Acceptance policy).
+NOTE: the comparator below still implements the retired zero-tolerance
+policy; ticket 03 (.scratch/levelmesh-impl/issues/03-ab-tooling-v2.md)
+moves it to tolerance + delta classes (docs/adr/0002-delta-class-acceptance.md)
+and to Vulkan-only pairs.
 
 Drives the engine's always-compiled A/B capture mode (r_ab_capture,
-src/d_abcapture.cpp) to measure classic-vs-levelmesh pixel parity at
-zero tolerance, per spec .scratch/levelmesh-rendering/spec.md §9:
+src/d_abcapture.cpp) to measure classic-vs-levelmesh pixel parity:
 
   per map x mode x backend: TWO fresh-level-load launches (path A
   gl_uselevelmesh 0, path B gl_uselevelmesh 1), same-backend pairs only,
   config applied per run via a temp config (-config) + pin script
   (-exec). Comparator: per-pixel diff of each tick's PNG pair,
   connected-component clusters, any pixel outside the frozen per-map
-  allowlist fails the run (ADR 0004: z-fighting only, human-reviewed,
+  allowlist fails the run (old policy: z-fighting only, human-reviewed,
   shrink-only).
 
 The tool proves itself before any levelmesh work is measured:
@@ -359,7 +364,7 @@ set vid_preferbackend {backend}
 set gl_uselevelmesh {cvar}
 // Dynamic lights pinned off on BOTH paths: levelmesh dynlights are a
 // separate clustered forward+ design (.scratch/levelmesh-impl/issues/
-// 12-dynlights-clustered-forward.md); remove this pin when 12 lands.
+// 19-dynamic-lights.md); remove this pin when 19 lands.
 set r_dynlights 0
 set language english
 set uiscale 1
@@ -643,7 +648,7 @@ def cmd_record(args):
                 "cx": s["cx"],
                 "cy": s["cy"],
                 "radius": s["radius"],
-                "reason": "PENDING human review — z-fighting? (ADR 0004: z-fighting only; "
+                "reason": "PENDING human review — z-fighting? (z-fighting only until ticket 03; "
                           "fix real bugs, then promote to allowlists/<map>.json)",
             })
     if not new_entries:
@@ -664,7 +669,7 @@ def cmd_record(args):
     keys = {(e["mode"], e["tick"]) for e in new_entries}
     existing = [e for e in existing if (e["mode"], e["tick"]) not in keys]
     doc = {"format": "ab-allowlist/1", "map": args.map, "frozen": False,
-           "note": "STAGING — review every entry (z-fighting only, ADR 0004), write a "
+           "note": "STAGING — review every entry (z-fighting only until ticket 03), write a "
                   "concrete reason, then promote to allowlists/<map>.json (frozen). "
                   "Never commit this file.",
            "entries": existing + new_entries}

@@ -574,28 +574,6 @@ CVAR(Float, m_yaw, 1.f, CVAR_GLOBALCONFIG | CVAR_ARCHIVE)
 
 void D_Render(std::function<void()> action, bool interpolate)
 {
-	// [levelmesh] E1: one sector state ring slot per frame for the level-mesh
-	// frame build; -1 when no level this frame needs it. The counter is
-	// file-scope here: it only drives the HW_MAX_PIPELINE_BUFFERS ring
-	// rotation, nothing else reads it. One shared slot keeps every level's
-	// ring in lockstep within a frame (each ring is independent, but a single
-	// counter makes the rotation trivially auditable). The gamestate guard
-	// mirrors the D_Render call site below (GS_LEVEL/GS_TITLELEVEL only).
-	static uint64_t LevelMeshSlotCounter = 0;
-	lm_drawentries = 0; // fresh per-frame value for the r_perflog line (ResetProfilingData runs later, inside action())
-	int lmSlot = -1;
-	if (interpolate && (gamestate == GS_LEVEL || gamestate == GS_TITLELEVEL))
-	{
-		for (auto Lm : AllLevels())
-		{
-			if (Lm->useLevelMesh && Lm->levelMeshData != nullptr)
-			{
-				lmSlot = levelmesh::FLevelMeshFrame::NextSlot(LevelMeshSlotCounter);
-				break;
-			}
-		}
-	}
-
 	for (auto Level : AllLevels())
 	{
 		// Check for the presence of dynamic lights at the start of the frame once.
@@ -605,25 +583,6 @@ void D_Render(std::function<void()> action, bool interpolate)
 		}
 		else Level->HasDynamicLights = false;	// lights are off so effectively we have none.
 		if (interpolate) Level->interpolator.DoInterpolations(I_GetTimeFrac());
-		// [levelmesh] E1/E2: frame build inside the interpolation window - the
-		// sector snapshot reads the tick-blended live values DoInterpolations
-		// just wrote. Order: PackSnapshot -> frustum cull walk over the static
-		// per-(region, texture) sub-range table -> GPU slot upload through the
-		// DFrameBuffer seam; currentSlot records which ring slot the data went
-		// to so the draw pass (HWDrawInfo::RenderScene, chunk E2) can tell the
-		// shader. When useLevelMesh is false (gl_uselevelmesh 0) all of this is
-		// skipped and the frame is byte-for-byte classic.
-		if (lmSlot >= 0 && Level->useLevelMesh && Level->levelMeshData != nullptr)
-		{
-			Clocker c(LevelMeshFrame);
-			int slot = lmSlot;
-			Level->levelMeshData->state.PackSnapshot(*Level, slot);
-			VSMatrix cullVP;
-			levelmesh::LevelMesh_CalcCullVP(&players[consoleplayer], cullVP);
-			lm_drawentries = (int)Level->levelMeshFrame.Build(*Level->levelMeshData, cullVP);
-			Level->levelMeshFrame.currentSlot = slot;
-			if (screen != nullptr) screen->UploadLevelMeshSlot(Level, slot);
-		}
 		P_FindParticleSubsectors(Level);
 		PO_LinkToSubsectors(Level);
 	}

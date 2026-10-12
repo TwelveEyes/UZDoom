@@ -15,8 +15,6 @@
 **
 */
 
-#include "levelmesh.h"
-#include "levelmesh_frame.h"
 #include "a_sharedglobal.h"
 #include "r_utility.h"
 #include "r_sky.h"
@@ -560,53 +558,21 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 
 	state.EnableTexture(gl_texture);
 	state.EnableBrightmap(true);
+	drawlists[GLDL_PLAINWALLS].DrawWalls(this, state, false);
+	drawlists[GLDL_PLAINFLATS].DrawFlats(this, state, false);
 
-	// Ticket 03 (chunk E2): the prebuilt level-mesh path. When the level was
-	// built for it, the per-frame culled sub-range table replaces all three
-	// classic geometry passes below; the draw walks it through the
-	// DFrameBuffer seam (GL33 only). A false return - GL objects not ready or
-	// no frame built yet - falls back to the classic passes so the level is
-	// always drawn. With gl_uselevelmesh 0 none of this runs and the frame
-	// stays byte-for-byte classic.
-	// The D_Render pre-cull uses the un-interpolated player view; re-cull here
-	// with this view's actual matrices (interpolated position, camera actor,
-	// exact projection) - the same product the levelmesh VS uses - so the
-	// list can never drop a sub-range that is visible in this view.
-	if (Level->useLevelMesh && Level->levelMeshData != nullptr)
-	{
-		VSMatrix cullVP;
-		cullVP.loadMatrix(VPUniforms.ProjectionMatrix.get());
-		cullVP.multMatrix(VPUniforms.ViewMatrix);
-		Level->levelMeshFrame.Build(*Level->levelMeshData, cullVP);
-	}
-	if (Level->useLevelMesh && screen->DrawLevelMesh(state, Level))
-	{
-		// View-dependent classic fills (missing upper/lower textures, deep
-		// water) stay on the classic flat lists; draw just those, in the same
-		// pass order as the classic (plain, then masked with the threshold).
-		drawlists[GLDL_PLAINWALLS].DrawPolyobjWalls(this, state);
-		drawlists[GLDL_PLAINFLATS].DrawHackFlats(this, state);
-		state.AlphaFunc(Alpha_GEqual, gl_mask_threshold);
-		drawlists[GLDL_MASKEDWALLS].DrawPolyobjWalls(this, state);
-		drawlists[GLDL_MASKEDFLATS].DrawHackFlats(this, state);
-	}
-	else
-	{
-		drawlists[GLDL_PLAINWALLS].DrawWalls(this, state, false);
-		drawlists[GLDL_PLAINFLATS].DrawFlats(this, state, false);
 
-		// Part 2: masked geometry. This is set up so that only pixels with alpha>gl_mask_threshold will show
-		state.AlphaFunc(Alpha_GEqual, gl_mask_threshold);
-		drawlists[GLDL_MASKEDWALLS].DrawWalls(this, state, false);
-		drawlists[GLDL_MASKEDFLATS].DrawFlats(this, state, false);
+	// Part 2: masked geometry. This is set up so that only pixels with alpha>gl_mask_threshold will show
+	state.AlphaFunc(Alpha_GEqual, gl_mask_threshold);
+	drawlists[GLDL_MASKEDWALLS].DrawWalls(this, state, false);
+	drawlists[GLDL_MASKEDFLATS].DrawFlats(this, state, false);
 
-		// Part 3: masked geometry with polygon offset. This list is empty most of the time so only waste time on it when in use.
-		if (drawlists[GLDL_MASKEDWALLSOFS].Size() > 0)
-		{
-			state.SetDepthBias(-1, -128);
-			drawlists[GLDL_MASKEDWALLSOFS].DrawWalls(this, state, false);
-			state.ClearDepthBias();
-		}
+	// Part 3: masked geometry with polygon offset. This list is empty most of the time so only waste time on it when in use.
+	if (drawlists[GLDL_MASKEDWALLSOFS].Size() > 0)
+	{
+		state.SetDepthBias(-1, -128);
+		drawlists[GLDL_MASKEDWALLSOFS].DrawWalls(this, state, false);
+		state.ClearDepthBias();
 	}
 
 	screen->mBones->Map();

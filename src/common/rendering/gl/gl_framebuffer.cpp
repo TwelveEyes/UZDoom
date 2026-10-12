@@ -25,6 +25,8 @@
 #include "v_video.h"
 #include "m_png.h"
 
+#include "i_time.h"
+
 #include "gl_interface.h"
 #include "gl_framebuffer.h"
 #include "gl_renderer.h"
@@ -40,8 +42,8 @@
 #include "hw_bonebuffer.h"
 #include "gl_shaderprogram.h"
 #include "gl_debug.h"
+#include "r_videoscale.h"
 #include "gl_buffers.h"
-#include "gl_levelmesh.h"
 #include "gl_postprocessstate.h"
 #include "v_draw.h"
 #include "printf.h"
@@ -49,23 +51,11 @@
 
 #include "flatvertices.h"
 #include "hw_cvars.h"
-#include "g_levellocals.h"
-#include "texturemanager.h"
-#include "hw_portal.h"
-#include "r_utility.h"
 
 EXTERN_CVAR (Bool, vid_vsync)
 EXTERN_CVAR(Int, gl_tonemap)
 EXTERN_CVAR(Bool, cl_capfps)
 EXTERN_CVAR(Int, gl_pipeline_depth);
-// Ticket 03 (level-mesh): cvars feeding the levelmesh uniforms.
-// (gl_mask_threshold and gl_fogmode come from hw_cvars.h.)
-EXTERN_CVAR(Color, gl_cullcolor);
-EXTERN_CVAR(Int, r_distance_cull_type);
-EXTERN_CVAR(Float, r_visibility);
-EXTERN_CVAR(Int, r_extralight);
-EXTERN_CVAR(Int, gl_weaponlight);
-EXTERN_CVAR(Int, r_fakecontrast);
 
 void gl_LoadExtensions();
 void gl_PrintStartupLog();
@@ -107,11 +97,6 @@ OpenGLFrameBuffer::~OpenGLFrameBuffer()
 	if (mBones != nullptr) delete mBones;
 	mShadowMap.Reset();
 
-	if (GLLevelMesh)
-	{
-		delete GLLevelMesh;
-		GLLevelMesh = nullptr;
-	}
 	if (GLRenderer)
 	{
 		delete GLRenderer;
@@ -180,7 +165,6 @@ void OpenGLFrameBuffer::InitializeState()
 	mBones = new BoneBuffer(screen->mPipelineNbr);
 	GLRenderer = new FGLRenderer(this);
 	GLRenderer->Initialize(GetWidth(), GetHeight());
-	GLLevelMesh = new FGLLevelMesh;
 	static_cast<GLDataBuffer*>(mLights->GetBuffer())->BindBase();
 	static_cast<GLDataBuffer*>(mBones->GetBuffer())->BindBase();
 
@@ -351,166 +335,6 @@ void OpenGLFrameBuffer::PrecacheMaterial(FMaterial *mat, int translation)
 	// unbind everything.
 	FHardwareTexture::UnbindAll();
 	gl_RenderState.ClearLastMaterial();
-}
-
-void OpenGLFrameBuffer::SetLevelMeshData(levelmesh::FLevelMesh *mesh)
-{
-	if (GLLevelMesh)
-		GLLevelMesh->SetMesh(mesh);
-}
-
-void OpenGLFrameBuffer::UploadLevelMeshSlot(FLevelLocals *level, int slot)
-{
-	// Called from D_Render's frame build right after PackSnapshot. The F-level
-	// draw list is already in level->levelMeshFrame; chunk E2 consumes it.
-	if (GLLevelMesh != nullptr && GLLevelMesh->IsRecordsReady() &&
-	    level != nullptr && level->levelMeshData != nullptr)
-	{
-		GLLevelMesh->UploadSectorSlot(slot, level->levelMeshData->state.GetSectorSlot(slot));
-		GLLevelMesh->UploadLightData(level->levelMeshData->state.GetLightData(),
-		    level->levelMeshData->state.LightDataSize());
-	}
-}
-
-//==========================================================================
-//
-// Ticket 03 (chunk E2): first GL33 draw of the prebuilt level-mesh.
-//
-// Walks the per-frame culled sub-range list built by D_Render's frame build
-// and draws each (region, texture) sub-range as one indexed draw from the
-// region VAO. The material is the baked surface texture; masked sub-ranges
-// keep the solid pass's source-over style with the gl_mask_threshold test,
-// and truly translucent ones use STYLE_Translucent without a threshold -
-// mirroring the classic part 1/part 2 split for masks, and approximating the
-// GLDL_TRANSLUCENT treatment without per-segment sorting (a later chunk).
-// The record pools stay bound on units 12-14 for the whole pass; their unit
-// assignments live in FShader::Load because they are program-local.
-//
-//==========================================================================
-
-bool OpenGLFrameBuffer::DrawLevelMesh(FRenderState &state, FLevelLocals *level)
-{
-	levelmesh::FLevelMesh *mesh = level->levelMeshData;
-	if (GLLevelMesh == nullptr || !GLLevelMesh->IsReady() || !GLLevelMesh->IsRecordsReady() ||
-	    mesh == nullptr)
-	{
-		return false;   // classic fallback: geometry passes still draw the level
-	}
-
-	const levelmesh::FLevelMeshFrame &frame = level->levelMeshFrame;
-	if (frame.EntryCount() == 0)
-	{
-		return true;    // culled out entirely: nothing to draw, no fallback
-	}
-	// No frame built for this level yet (first frame before the first
-	// D_Render build): fall back to the classic passes for that one frame.
-	if (frame.currentSlot < 0)
-	{
-		return false;
-	}
-
-	// The levelmesh effect for the whole pass; restored to EFF_NONE at the end
-	// of the pass because mSpecialEffect persists across draws.
-	state.SetEffect(EFF_LEVELMESH);
-
-	// Record pools: bind once; they are constant for the level frame. The
-	// sampler units were fixed at 12-14 in FShader::Load for the active
-	// program, so binding the textures to those units here is all that is
-	// left. Material layers own units 0-11 and nothing else uses 12-15.
-	glActiveTexture(GL_TEXTURE12);
-	glBindTexture(GL_TEXTURE_BUFFER, GLLevelMesh->GetSurfaceTexture());
-	glActiveTexture(GL_TEXTURE13);
-	glBindTexture(GL_TEXTURE_BUFFER, GLLevelMesh->GetSectorStateTexture());
-	glActiveTexture(GL_TEXTURE14);
-	glBindTexture(GL_TEXTURE_BUFFER, GLLevelMesh->GetLightTexture());
-	glActiveTexture(GL_TEXTURE0);   // leave the unit the rest of the pass expects
-
-	// Per-frame levelmesh parameters: constant across every sub-range of this
-	// frame; pushed into the shader once by SetLevelMeshParams (the GL render
-	// state forwards it on each ApplyShader, cheaply buffered).
-	LevelMeshDrawParams p;
-	p.sectorStateSlot = frame.currentSlot;
-	p.surfaceCount = (int)mesh->SurfaceCount();
-	p.sectorCount = (int)mesh->state.sectorCount;
-	p.fogDensity = level->fogdensity;
-	p.outsideFogDensity = level->outsidefogdensity;
-	p.outsideFog = level->outsidefog;
-	p.flags3 = level->flags3;
-	p.flags2 = level->flags2;
-	p.flags = level->flags;
-	p.skyfog = level->skyfog;
-	p.culldist = level->culldist;
-	p.skyPos[0] = (float)level->hw_sky1pos;   // per-frame sky scroll: the VS
-	p.skyPos[1] = (float)level->hw_sky2pos;   // adds uLevelSkyPos[kind] to the
-	p.skyPos[2] = (float)level->hw_skymistpos;// baked sky UVs, replacing the
-	                                          // classic texture-matrix scroll.
-	// The real light mode: FLevelLocals stores the user setting, the classic
-	// pass resolves it through getRealLightmode (hardware path, for3d=true).
-	p.lightMode = (int)getRealLightmode(level, true);
-	p.distanceCullType = r_distance_cull_type;
-	PalEntry cullcolor = (uint32_t)gl_cullcolor;
-	p.cullColor[0] = cullcolor.r * (1.f / 255.f);
-	p.cullColor[1] = cullcolor.g * (1.f / 255.f);
-	p.cullColor[2] = cullcolor.b * (1.f / 255.f);
-	p.cullColor[3] = cullcolor.a * (1.f / 255.f);
-	p.fogMode = gl_fogmode;
-	p.visibility = r_visibility;
-	p.extralight = r_extralight;
-	p.weaponLight = (r_viewpoint.extralight > 0) ? (int)(r_viewpoint.extralight * gl_weaponlight) : 0;
-	p.fakeContrast = r_fakecontrast;
-	p.wallHorizLight = level->WallHorizLight;
-	p.wallVertLight = level->WallVertLight;
-	p.insybox = portalState.inskybox;
-	state.SetLevelMeshParams(p);
-
-	const TArray<levelmesh::LevelMeshDrawEntry> &drawList = frame.drawList;
-	for (size_t i = 0; i < drawList.Size(); ++i)
-	{
-		const levelmesh::LevelMeshDrawEntry &entry = drawList[i];
-		if (entry.regionIndex >= GLLevelMesh->RegionCount() ||
-		    entry.texRangeIndex >= mesh->texRanges.Size())
-		{
-			continue;   // stale entry: the frame is rebuilt every frame, skip
-		}
-		const levelmesh::LevelMeshTexRange &tr = mesh->texRanges[entry.texRangeIndex];
-		// The group stores the untranslated texture id; animate = true applies the
-		// current ANIMATED/ANIMDEFS frame exactly like the classic per-draw
-		// lookup (the animator remaps every frame id of an animation together,
-		// so all surfaces of the group advance in lockstep).
-		FGameTexture *tex = TexMan.GetGameTexture(FSetTextureID(tr.textureIndex), true);
-		if (tex == nullptr)
-		{
-			continue;
-		}
-
-		// Classic part 1 / part 2: the mesh only holds surfaces the classic puts
-		// in its plain or masked lists (translucent ones stay on the classic
-		// translucent passes), all drawn STYLE_Source. The masked lists add the
-		// gl_mask_threshold alpha test; which surfaces are masked was decided
-		// at build exactly like HWDrawInfo::AddWall / AddFlat (LMDS_MASKED).
-		state.SetRenderStyle(STYLE_Source);
-		state.AlphaFunc(Alpha_GEqual, (tr.drawState & levelmesh::LMDS_MASKED) ? (float)gl_mask_threshold : 0.f);
-
-		// The group's draw state: the sampler clamp the classic passes per wall
-		// (SetMaterial(..., flags & 3), i.e. HWF_CLAMPX/Y == CLAMP_X/Y/XY) and the
-		// TM_CLAMPY texture clamp of two-sided mid textures (RenderTexturedWall).
-		state.SetMaterial(tex, UF_Texture, 0, (int)(tr.drawState & (levelmesh::LMDS_CLAMPX | levelmesh::LMDS_CLAMPY)),
-			NO_TRANSLATION, -1, nullptr);
-		state.SetTextureClamp((tr.drawState & levelmesh::LMDS_TEXCLAMPY) != 0);
-		// Clockwise front faces (levelmesh.h LMDS_NOCULL): the classic never
-		// draws the back of a side or plane.
-		state.SetCulling((tr.drawState & levelmesh::LMDS_NOCULL) ? Cull_None : Cull_CW);
-		state.DrawLevelMesh(GLLevelMesh->GetVAO(entry.regionIndex), tr.iboOffset, tr.iboCount);
-	}
-	state.SetTextureClamp(false);
-	state.SetCulling(Cull_None);	// the classic lists drawn after this pass do not cull
-
-	// mSpecialEffect persists across draws until the next SetEffect: classic
-	// draw functions follow a set-and-restore discipline (HWWall always leaves
-	// EFF_NONE behind) and sprites/models/decals rely on that ambient state.
-	state.SetEffect(EFF_NONE);
-
-	return true;
 }
 
 IVertexBuffer *OpenGLFrameBuffer::CreateVertexBuffer()
