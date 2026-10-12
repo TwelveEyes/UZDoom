@@ -6,3 +6,5 @@
 # Game assets (commercial IWADs / user mods) are never committed.
 /wads/
 __pycache__/
+# Contact sheets (regenerate with contact_sheet.py)
+/sheets/

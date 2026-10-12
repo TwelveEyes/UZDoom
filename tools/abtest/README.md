@@ -8,6 +8,46 @@ work is tickets 02 (perf baseline v2) and 03 (A/B tooling v2) in
 committed home for demos, manifests, allowlists, and scripts; large perf
 logs stay local (`logs/`, `runs/` are gitignored).
 
+## Perf baseline v2 (current; ticket 02 of `.scratch/levelmesh-impl/`)
+
+Results: `results/baseline-v2.{md,json}`. The v1 baseline below is archived and invalid
+(`results/archive/README.md`): its cameras saw nothing, and `total` missed most of the frame.
+The sections after this one describe the v1 kit; they still apply to the tools, apart from the
+changes listed here.
+
+- **Pacing:** `baseline.cfg` pins `r_ticstability 0`. The engine default busy-waits on every
+  frame without a new sim tic.
+- **Perflog:** `r_perflog v2` adds `wall`, the real interval between logged frames. Use it, not
+  `total`, as the frame time.
+- **Demos:** `make_demo.py --path tour` (default) warps the camera to 26 stops in the map's main
+  playable area, with a 360° pan per stop; god + noclip. Output is in `demos/v2/`. `--path
+  vantage --at x,y --turn N` holds a single view. The v1 spiral is kept as `--path spiral` only
+  for the A/B demo mode, which still uses `demos/*.lmp` until ticket 03.
+- **Vantages:** `select_vantages.py` picks the costliest sustained tour view per target map from
+  `logs/v2_<MAP>_vulkan.perflog`, writes `demos/vantage/*.lmp`, and records them in
+  `vantages.json`.
+- **Runs:**
+  ```sh
+  ./run_matrix.sh --demos demos/v2 --tag v2                                 # tours, both backends
+  ./run_matrix.sh --demos demos/vantage --tag vant --tics 1050              # vantages
+  ./run_matrix.sh --demos demos/v2 --tag mon --monsters --only SOS_MAP32    # monsters
+  ```
+  The driver detects the end of a timedemo from the perflog and terminates the engine at the end
+  dialog, which would otherwise wait for a user. The engine runs under `stdbuf -oL` so its
+  stdout survives that kill.
+- **Parse:**
+  ```sh
+  python3 parse_perflog.py --min-geom 5 --max-empty 0.10 --json out.json logs/v2_*_vulkan.perflog
+  ```
+  Vantages need `--warmup 105 --window 945`. The parser reports p50/p95/p99/max and exits 1 on a
+  failed non-empty-view check.
+- **Review:**
+  ```sh
+  contact_sheet.py --demo demos/v2/X.lmp --map MAPxx --iwad DOOM2.WAD [--pwad ...] --out sheets/X.png
+  ```
+  This replays the demo in the A/B capture mode and tiles sampled frames for human review.
+  `sheets/` is gitignored.
+
 ## What exists now (ticket 10: classic baseline)
 
 - **`r_perflog <path>` cvar** — engine-side (see `hw_clock.cpp`): opens a

@@ -1,28 +1,38 @@
 #!/usr/bin/env python3
-"""Parse r_perflog output into median/p95 tables (ticket 09 protocol).
+"""Parse r_perflog output into p50/p95/p99/max tables (perf baseline v2).
 
-Protocol: 10 s warmup (350 tics) + 60 s measurement window (2100 tics),
-median + p95 of total frame, CPU render window (r = RenderView), and GPU
-3D window (fin = finish/present). The full per-field table is available in
-the JSON output. Stdlib only.
+Effort: .scratch/levelmesh-impl/issues/02-perf-baseline-v2.md.
 
-Perflog format: see the '# r_perflog v1' header written at the top of each
-file (hw_clock.cpp). 'L' lines precede the 'F' frames of their level.
+A run's frames are windowed by demo tic: --warmup tics are skipped (counted
+from the first logged frame), then --window tics are measured. For every
+time field the result carries p50/p95/p99/max; for every count field
+p50/p95/max. `wall` (r_perflog v2) is the real wall-clock interval between
+two logged frames; `total` only brackets D_Display, so `wall` is the honest
+frame time and `total` the display share of it.
+
+Non-empty-view check (--min-geom N --max-empty F): a run passes only if the
+median of wl+fl (walls + flats processed per frame) over the window is >= N
+and at most a fraction F of the frames process no wall or flat at all. A
+run whose camera looks at nothing measures present/2D overhead, not
+rendering. Protocol values: --min-geom 5 --max-empty 0.10.
+
+Perflog format: see the '# r_perflog v2' header (hw_clock.cpp). 'L' lines
+precede the 'F' frames of their level. v1 logs (no wall column) still parse.
 
 Usage:
-  parse_perflog.py [--warmup 350] [--window 2100]
+  parse_perflog.py [--warmup 350] [--window 2100] [--min-geom 0]
                    [--md out.md] [--json out.json] FILE...
+Exit status: 1 if any file fails --min-geom (or has no usable frames).
 """
 import argparse
 import contextlib
 import json
 import math
-import statistics
 import sys
 
-TIME_FIELDS = ("total", "r", "bsp", "clip", "wr", "ws", "fr", "fs", "sr",
-               "ss", "2d", "f3d", "fin", "pg", "pr", "dcms")
-COUNT_FIELDS = ("wl", "fl", "sp")
+TIME_FIELDS = ("wall", "total", "r", "bsp", "clip", "wr", "ws", "fr", "fs",
+               "sr", "ss", "2d", "f3d", "fin", "pg", "pr", "dcms")
+COUNT_FIELDS = ("wl", "fl", "sp", "dec", "portals", "wv", "fv", "cbuf")
 
 
 def parse_file(path):
@@ -78,11 +88,28 @@ def summarize(frames, warmup, window):
            "tic_start": sel[0]["tic"], "tic_end": sel[-1]["tic"]}
     for k in TIME_FIELDS:
         vals = sorted(x[k] for x in sel if k in x)
-        res[k + "_med"] = statistics.median(vals)
+        if not vals:
+            continue
+        res[k + "_p50"] = percentile(vals, 50)
         res[k + "_p95"] = percentile(vals, 95)
+        res[k + "_p99"] = percentile(vals, 99)
+        res[k + "_max"] = vals[-1]
     for k in COUNT_FIELDS:
-        vals = [x[k] for x in sel if k in x]
-        res[k + "_med"] = statistics.median(vals) if vals else 0.0
+        vals = sorted(x[k] for x in sel if k in x)
+        if not vals:
+            continue
+        res[k + "_p50"] = percentile(vals, 50)
+        res[k + "_p95"] = percentile(vals, 95)
+        res[k + "_max"] = vals[-1]
+    geom = sorted(x.get("wl", 0.0) + x.get("fl", 0.0) for x in sel)
+    res["geom_p50"] = percentile(geom, 50)
+    res["empty_frac"] = sum(1 for g in geom if g == 0) / len(geom)
+    # Wall-clock coverage: how much of the real frame D_Display brackets.
+    if "wall_p50" in res:
+        walls = [x["wall"] for x in sel if "wall" in x]
+        totals = [x["total"] for x in sel if "wall" in x and "total" in x]
+        res["wall_sum_s"] = sum(walls) / 1000.0
+        res["total_sum_s"] = sum(totals) / 1000.0
     return res
 
 
@@ -90,13 +117,26 @@ def fmt(x):
     return f"{x:.3f}" if isinstance(x, float) else str(x)
 
 
+COLS = [("file", "file"), ("map", "map"), ("frames", "frames"),
+        ("geom_p50", "wl+fl p50"), ("empty_frac", "empty"), ("wall_p50", "wall p50"),
+        ("wall_p95", "wall p95"), ("wall_p99", "wall p99"),
+        ("total_p50", "total p50"), ("total_p95", "total p95"),
+        ("r_p50", "r p50"), ("r_p95", "r p95"), ("r_p99", "r p99"),
+        ("fin_p50", "fin p50"), ("fin_p95", "fin p95")]
+
+
 def main():
     ap = argparse.ArgumentParser(
-        description="Parse r_perflog files into median/p95 tables.")
+        description="Parse r_perflog files into p50/p95/p99/max tables.")
     ap.add_argument("--warmup", type=int, default=350,
                     help="warmup tics to skip (default 350 = 10 s)")
     ap.add_argument("--window", type=int, default=2100,
                     help="measurement window tics (default 2100 = 60 s)")
+    ap.add_argument("--min-geom", type=float, default=0.0,
+                    help="fail a run whose median wl+fl is below this")
+    ap.add_argument("--max-empty", type=float, default=1.0,
+                    help="fail a run whose fraction of frames with wl+fl == 0 "
+                         "exceeds this (camera outside the map / in the void)")
     ap.add_argument("--md", default=None, help="append a markdown table here")
     ap.add_argument("--json", dest="json_out", default=None,
                     help="write full per-file stats here")
@@ -104,37 +144,41 @@ def main():
     args = ap.parse_args()
 
     results = []
+    failed = 0
     for path in args.files:
         parsed = parse_file(path)
         if parsed is None:
+            failed += 1
             continue
         level, frames = parsed
         s = summarize(frames, args.warmup, args.window)
         if s is None:
             print(f"warning: no usable frames in {path}", file=sys.stderr)
+            failed += 1
             continue
         s["file"] = path
         s["level"] = level
+        s["nonempty"] = (s["geom_p50"] >= args.min_geom
+                         and s["empty_frac"] <= args.max_empty)
+        if not s["nonempty"]:
+            print(f"FAIL non-empty check: {path}: median wl+fl "
+                  f"{s['geom_p50']:.0f} (min {args.min_geom:.0f}), empty frames "
+                  f"{s['empty_frac']:.1%} (max {args.max_empty:.0%})", file=sys.stderr)
+            failed += 1
         results.append(s)
 
-    # Console table: the fields ticket 09 reads, plus context.
-    cols = [("file", "file"), ("map", "map"), ("sectors", "sectors"),
-            ("frames", "frames"), ("total_med", "med total"),
-            ("total_p95", "p95 total"), ("r_med", "med render"),
-            ("r_p95", "p95 render"), ("fin_med", "med 3d-fin"),
-            ("fin_p95", "p95 3d-fin")]
     rows = []
     for s in results:
         row = {}
-        for key, label in cols:
+        for key, label in COLS:
             v = s[key] if key in s else s["level"].get(key, "-")
             row[label] = fmt(v) if isinstance(v, (int, float)) else str(v)
         rows.append(row)
 
-    width = max(len(label) for _, label in cols)
-    print("  ".join(label.ljust(width) for _, label in cols))
+    width = max(len(label) for _, label in COLS)
+    print("  ".join(label.ljust(width) for _, label in COLS))
     for row in rows:
-        print("  ".join(str(row[label]).ljust(width) for _, label in cols))
+        print("  ".join(str(row[label]).ljust(width) for _, label in COLS))
 
     if args.json_out:
         try:
@@ -146,16 +190,16 @@ def main():
     if args.md:
         try:
             with open(args.md, "a") as f:
-                f.write("\n| " + " | ".join(label for _, label in cols) +
-                        " |\n")
-                f.write("|" + "---|" * len(cols) + "\n")
+                f.write("\n| " + " | ".join(label for _, label in COLS) + " |\n")
+                f.write("|" + "---|" * len(COLS) + "\n")
                 for row in rows:
-                    f.write("| " + " | ".join(str(row[label])
-                                               for _, label in cols) +
-                            " |\n")
+                    f.write("| " + " | ".join(str(row[label]) for _, label in COLS)
+                            + " |\n")
         except OSError as e:
             raise SystemExit(f"{args.md}: {e}") from e
 
+    return 1 if failed else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

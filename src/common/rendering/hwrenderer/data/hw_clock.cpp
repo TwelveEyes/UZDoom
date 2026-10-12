@@ -22,6 +22,8 @@
 */
 
 
+#include <chrono>
+
 #include "c_console.h"
 #include "c_dispatch.h"
 #include "v_video.h"
@@ -232,17 +234,28 @@ static FILE *PerfLogFile = nullptr;
 static FString PerfLogOpenPath;
 static FString PerfLogLastMap;
 static uint64_t PerfLogFrame = 0;
+static uint64_t PerfLogLastNS = 0;
+
+// Real wall-clock time (steady_clock, never the A/B capture fake clock), so
+// the wall= column measures the true interval between two logged frames.
+static uint64_t PerfLogNowNS()
+{
+	using namespace std::chrono;
+	return (uint64_t)duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+}
 
 static void PerfLogHeader(FILE *f)
 {
-	fprintf(f, "# r_perflog v1\n");
+	fprintf(f, "# r_perflog v2\n");
 	fprintf(f, "# F <frame> tic=<gametic> total=<D_Display ms> r=<RenderView window ms> "
 		"bsp=<traversal ms, incl clip> clip=<wall clip ms> wr=<wall render ms> ws=<wall setup ms> "
 		"fr=<flat render ms> fs=<flat setup ms> sr=<sprite render ms> ss=<sprite setup ms> "
 		"2d=<2D ms> f3d=<3D flush ms> fin=<finish/present ms> pg=<portal ms> pr=<job processing ms> "
 		"dcms=<drawcall submission ms> wl=<wall count> wsp=<wall vertex splits> wv=<wall vertices> "
 		"fl=<flat count> fp=<flat primitives> fv=<flat vertices> sp=<sprite count> "
-		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count>\n");
+		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count> "
+		"wall=<wall-clock ms since the previous logged frame: the whole main-loop iteration, "
+		"incl. sim tics and input; 0 on the first frame>\n");
 	fprintf(f, "# L map=<name> sectors=<n> lines=<n> subsectors=<n> sprites=<n> polyobjs=<n> "
 		"lineportals=<n> portalgroups=<n> ffloors=<n>\n");
 }
@@ -296,6 +309,7 @@ void PerfLogUpdate()
 		PerfLogOpenPath = FString(want);
 		PerfLogLastMap.Truncate(0);
 		PerfLogFrame = 0;
+		PerfLogLastNS = 0;
 		doBench++;
 		PerfLogHeader(PerfLogFile);
 	}
@@ -318,15 +332,18 @@ void PerfLogUpdate()
 		PerfLogLastMap = Level->MapName;
 		PerfLogWriteLevel(Level);
 	}
+	const uint64_t nowNS = PerfLogNowNS();
+	const double wallMS = PerfLogLastNS != 0 ? (nowNS - PerfLogLastNS) / 1e6 : 0.0;
+	PerfLogLastNS = nowNS;
 	fprintf(PerfLogFile, "F %llu tic=%d total=%.3f r=%.3f bsp=%.3f clip=%.3f wr=%.3f ws=%.3f "
 		"fr=%.3f fs=%.3f sr=%.3f ss=%.3f 2d=%.3f f3d=%.3f fin=%.3f pg=%.3f pr=%.3f dcms=%.3f "
-		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d\n",
+		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d wall=%.3f\n",
 		(unsigned long long)PerfLogFrame++, gametic, FrameCycles.TimeMS(), All.TimeMS(),
 		Bsp.TimeMS(), ClipWall.TimeMS(), RenderWall.TimeMS(), SetupWall.TimeMS(),
 		RenderFlat.TimeMS(), SetupFlat.TimeMS(), RenderSprite.TimeMS(), SetupSprite.TimeMS(),
 		twoD.TimeMS(), Flush3D.TimeMS(), Finish.TimeMS(), PortalAll.TimeMS(),
 		ProcessAll.TimeMS(), drawcalls.TimeMS(), rendered_lines, render_vertexsplit,
 		vertexcount, rendered_flats, flatprimitives, flatvertices, rendered_sprites,
-		rendered_decals, rendered_portals, rendered_commandbuffers);
+		rendered_decals, rendered_portals, rendered_commandbuffers, wallMS);
 	fflush(PerfLogFile);
 }

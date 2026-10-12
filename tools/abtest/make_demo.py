@@ -105,6 +105,8 @@ MINVER = 0x0203          # 515, as written by G_BeginRecording
 DEM_USERCMD = 1
 DEM_STOP = 7
 DEM_GENERICCHEAT = 10
+DEM_WARPCHEAT = 35       # i16be x, y, z (d_net.cpp Net_DoCommand)
+ONFLOORZ_I16 = -32768    # c_cmds.cpp warp: ONFLOORZ/65536 -> lands on floorz
 
 UCMDF_BUTTONS = 0x01
 UCMDF_PITCH = 0x02
@@ -121,6 +123,7 @@ CHEATS = {
     # bitmask values (0x20/0x40): DEM_GENERICCHEAT is followed by the enum index.
     "noclip2": 50,  # CHT_NOCLIP2 (fly through walls)
     "noclip": 1,    # CHT_NOCLIP
+    "god": 0,       # CHT_GOD
 }
 
 # --- engine movement model (see docstring; exact binary fractions) -----------
@@ -295,6 +298,203 @@ def load_geometry(iwad: str, mapname: str):
     return None, None
 
 
+# --- full line/side/sector geometry (tour path) -------------------------------
+
+def udmf_blocks(data: bytes):
+    """Generic UDMF block parser: returns {type: [props dict, ...]} in file
+    order (sidedef/vertex/sector indices are their order of appearance)."""
+    txt = data.decode("latin-1", "replace")
+    out = {}
+    cur, props = None, {}
+    for raw in txt.splitlines():
+        ln = raw.strip()
+        if not ln or ln.startswith("//"):
+            continue
+        if ln == "}":
+            if cur is not None:
+                out.setdefault(cur, []).append(props)
+            cur, props = None, {}
+            continue
+        if ln == "{":
+            continue
+        if ln.endswith("{"):
+            ln = ln[:-1].strip()
+            if not ln:
+                continue
+        if cur is None:
+            m = re.match(r"^(\w+)\s*(//.*)?$", ln)
+            if m:
+                cur = m.group(1).lower()
+                props = {}
+            continue
+        if "=" in ln:
+            k, _, v = ln.partition("=")
+            props[k.strip().lower()] = _udmf_val(v)
+    return out
+
+
+def load_level(iwad: str, mapname: str):
+    """Return (lines, sectors) or (None, None).
+    lines: [(x1, y1, x2, y2, front_sector, back_sector)], sector -1 = none.
+    sectors: [(floor_h, ceil_h)] (flat heights; slopes ignored)."""
+    files = open_archive(iwad)
+    for file in files:
+        blocks, _phantoms = map_blocks(file[3])
+        for mname, blk in blocks:
+            if mname != mapname:
+                continue
+            if blk.get("TEXTMAP") is not None:
+                b = udmf_blocks(lump_bytes(file, blk["TEXTMAP"]))
+                verts = [(float(v.get("x", 0)), float(v.get("y", 0)))
+                         for v in b.get("vertex", [])]
+                sides = [int(s.get("sector", -1)) for s in b.get("sidedef", [])]
+                secs = [(float(s.get("heightfloor", 0)), float(s.get("heightceiling", 0)))
+                        for s in b.get("sector", [])]
+                lines = []
+                for ld in b.get("linedef", []):
+                    try:
+                        v1, v2 = int(ld["v1"]), int(ld["v2"])
+                        sf = int(ld.get("sidefront", -1))
+                        sb = int(ld.get("sideback", -1))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if not (0 <= v1 < len(verts) and 0 <= v2 < len(verts)):
+                        continue
+                    fs = sides[sf] if 0 <= sf < len(sides) else -1
+                    bs = sides[sb] if 0 <= sb < len(sides) else -1
+                    lines.append((*verts[v1], *verts[v2], fs, bs))
+                return lines, secs
+            if blk.get("VERTEXES") is None or blk.get("LINEDEFS") is None:
+                continue
+            vdata = lump_bytes(file, blk["VERTEXES"])
+            nv = len(vdata) // 4
+            v = struct.unpack(f"<{2 * nv}h", vdata)
+            sdata = lump_bytes(file, blk["SIDEDEFS"]) if blk.get("SIDEDEFS") else b""
+            sides = [struct.unpack_from("<H", sdata, i * 30 + 28)[0]
+                     for i in range(len(sdata) // 30)]
+            secdata = lump_bytes(file, blk["SECTORS"]) if blk.get("SECTORS") else b""
+            secs = [struct.unpack_from("<hh", secdata, i * 26)
+                    for i in range(len(secdata) // 26)]
+            ldata = lump_bytes(file, blk["LINEDEFS"])
+            # engine rule: BEHAVIOR present -> 16 B Hexen linedefs
+            st = 16 if "BEHAVIOR" in blk else 14
+            o1, o2 = (12, 14) if st == 16 else (10, 12)
+            lines = []
+            for i in range(len(ldata) // st):
+                v1, v2 = struct.unpack_from("<HH", ldata, i * st)
+                s1 = struct.unpack_from("<H", ldata, i * st + o1)[0]
+                s2 = struct.unpack_from("<H", ldata, i * st + o2)[0]
+                if v1 >= nv or v2 >= nv:
+                    continue
+                fs = sides[s1] if s1 < len(sides) else -1
+                bs = sides[s2] if s2 < len(sides) else -1
+                lines.append((v[2 * v1], v[2 * v1 + 1], v[2 * v2], v[2 * v2 + 1], fs, bs))
+            return lines, [(float(f), float(c)) for f, c in secs]
+    return None, None
+
+
+def tour_stops(lines, secs, count, offset=32.0, min_len=64.0, min_height=72.0):
+    """Pick `count` camera stops spread over the map's main playable area.
+
+    Main area = the largest sector component connected through two-sided
+    lines (by line count). Control / dummy sectors (3D-floor models, sky
+    boxes, script rooms) are usually closed one-sided boxes and fall out.
+    Candidates: points `offset` units in front of a line (Doom front side =
+    right of v1->v2) whose front sector is in the main area and is at least
+    `min_height` tall (excludes closed doors). Stops are chosen by
+    deterministic farthest-point sampling from the candidate nearest the
+    candidates' median, so they spread across the whole area."""
+    nsec = len(secs)
+    parent = list(range(nsec))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for (_x1, _y1, _x2, _y2, fs, bs) in lines:
+        if 0 <= fs < nsec and 0 <= bs < nsec:
+            ra, rb = find(fs), find(bs)
+            if ra != rb:
+                parent[ra] = rb
+    weight = {}
+    for ln in lines:
+        if 0 <= ln[4] < nsec:
+            r = find(ln[4])
+            weight[r] = weight.get(r, 0) + 1
+    if not weight:
+        return [], 0
+    main = max(weight, key=lambda r: (weight[r], -r))
+    cands = []
+    for (x1, y1, x2, y2, fs, _bs) in lines:
+        if not (0 <= fs < nsec) or find(fs) != main:
+            continue
+        f, c = secs[fs]
+        if c - f < min_height:
+            continue
+        dx, dy = x2 - x1, y2 - y1
+        ln = math.hypot(dx, dy)
+        if ln < min_len:
+            continue
+        nx, ny = dy / ln, -dx / ln  # right-hand normal = front side
+        px = (x1 + x2) / 2.0 + nx * offset
+        py = (y1 + y2) / 2.0 + ny * offset
+        if -32000 < px < 32000 and -32000 < py < 32000:
+            cands.append((px, py))
+    if not cands:
+        return [], weight[main]
+    mx = statistics.median(p[0] for p in cands)
+    my = statistics.median(p[1] for p in cands)
+    first = min(range(len(cands)),
+                key=lambda i: ((cands[i][0] - mx) ** 2 + (cands[i][1] - my) ** 2, i))
+    chosen = [first]
+    dist = [(p[0] - cands[first][0]) ** 2 + (p[1] - cands[first][1]) ** 2 for p in cands]
+    while len(chosen) < min(count, len(cands)):
+        nxt = max(range(len(cands)), key=lambda i: (dist[i], -i))
+        chosen.append(nxt)
+        q = cands[nxt]
+        for i, p in enumerate(cands):
+            d = (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2
+            if d < dist[i]:
+                dist[i] = d
+    return [cands[i] for i in chosen], weight[main]
+
+
+def build_tour(stops, T, hold):
+    """Per-tic commands for a warp tour: at the first tic of each stop a
+    DEM_WARPCHEAT to (x, y, ONFLOORZ) is emitted (the player lands on that
+    sector's floor); during the stop the view pans one full turn at a
+    constant yaw rate. No forward/side movement. Returns (cmds, warps)
+    where warps maps tic index -> (x, y)."""
+    yaw_fp = int(round(ANGLE_FPP / hold))
+    cmds, warps = [], {}
+    for t in range(T):
+        s = t // hold
+        if t % hold == 0 and s < len(stops):
+            warps[t] = stops[s]
+        cmds.append((0, 0, yaw_fp if (t // hold) < len(stops) else 0, 0, 0, 0))
+    return cmds, warps
+
+
+TURN_TIC = 10
+
+
+def build_vantage(at, turn_fp, T):
+    """Per-tic commands for a fixed stress vantage: warp to `at` on tic 0,
+    turn by `turn_fp` angle units (relative to the player start angle) on
+    tic 0, then hold position and view for the rest of the demo.
+    A tour view at tic t has angle start + t * yaw_fp (every tour tic applies
+    the same yaw), so turn_fp = t * yaw_fp reproduces it exactly."""
+    turn = ((int(turn_fp) + 32768) % 65536) - 32768  # wrap into int16
+    # The turn goes on tic TURN_TIC, not tic 0: input is zeroed while the
+    # player is frozen (player.zs CheckFrozen), which includes the first tic
+    # of a level, so a tic-0 turn is silently dropped.
+    cmds = [(0, 0, 0, 0, 0, 0)] * T
+    cmds[TURN_TIC] = (0, 0, turn, 0, 0, 0)
+    return cmds, {0: at}
+
+
 # --- path building ------------------------------------------------------------
 
 def _clamp(v: int, lo: int, hi: int) -> int:
@@ -406,7 +606,7 @@ def pack_cmd(c, basis) -> bytes:
     return bytes([flags]) + bytes(out)
 
 
-def build(mapname: str, cmds, seed: int, cheats: list) -> bytes:
+def build(mapname: str, cmds, seed: int, cheats: list, warps=None) -> bytes:
     # ZDHD
     zdh = (struct.pack(">HH", DEMOGAMEVERSION, MINVER)
            + mapname.encode("ascii") + b"\x00"
@@ -419,7 +619,11 @@ def build(mapname: str, cmds, seed: int, cheats: list) -> bytes:
     for c in cheats:
         body += bytes([DEM_GENERICCHEAT, CHEATS[c]])
     basis = None
-    for cmd in cmds:
+    for t, cmd in enumerate(cmds):
+        if warps and t in warps:
+            x, y = warps[t]
+            body += bytes([DEM_WARPCHEAT]) + struct.pack(
+                ">hhh", int(round(x)), int(round(y)), ONFLOORZ_I16)
         body += bytes([DEM_USERCMD]) + pack_cmd(cmd, basis)
         basis = cmd
     body += bytes([DEM_STOP])
@@ -455,13 +659,71 @@ def main() -> int:
     p.add_argument("--seed", type=int, default=0xA1B2C3D4,
                    help="RNG seed baked into the demo (default 0xA1B2C3D4)")
     p.add_argument("--cheat", action="append", choices=sorted(CHEATS),
-                   default=["noclip2"],
-                   help="cheat to apply at tic 0 (default: noclip2)")
+                   default=None,
+                   help="cheat to apply at tic 0 (default: tour = god + noclip, "
+                        "spiral = noclip2)")
+    p.add_argument("--at", default="",
+                   help="vantage: warp position 'x,y' (with --turn)")
+    p.add_argument("--turn", type=int, default=0,
+                   help="vantage: view turn from the start angle, angle units "
+                        "(65536 = full circle)")
+    p.add_argument("--path", choices=("tour", "spiral", "vantage"), default="tour",
+                   help="tour (default): warp to stops inside the main playable "
+                        "area, one full view pan per stop; spiral: the retired "
+                        "v1 path (cameras left the map; see perf baseline v2)")
+    p.add_argument("--hold", type=int, default=100,
+                   help="tour: tics per stop (one full pan; default 100)")
     a = p.parse_args()
 
-    if a.tics < 500:
+    if a.tics < 500 and a.path != "vantage":
         p.error("--tics must be >= 500 (window 350..2450 needs 2600 for the "
                 "production set; smaller values are for probing only)")
+    if a.cheat is None:
+        a.cheat = ["noclip2"] if a.path == "spiral" else ["god", "noclip"]
+
+    if a.path == "vantage":
+        try:
+            vx, vy = (float(x) for x in a.at.split(","))
+        except ValueError:
+            p.error("--path vantage needs --at 'x,y'")
+        cmds, warps = build_vantage((vx, vy), a.turn, a.tics)
+        data = build(a.map, cmds, a.seed, a.cheat, warps)
+        try:
+            with open(a.out, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            print(f"error: cannot write {a.out}: {e}", file=sys.stderr)
+            return 1
+        print(f"wrote {a.out} ({len(data)} bytes): map={a.map} tics={a.tics} "
+              f"path=vantage at=({vx:.0f},{vy:.0f}) turn={a.turn}")
+        return 0
+
+    if a.path == "tour":
+        lines, secs = load_level(a.iwad, a.map)
+        if not lines:
+            print(f"error: no geometry for {a.map} in {a.iwad}", file=sys.stderr)
+            return 1
+        nstops = (a.tics + a.hold - 1) // a.hold
+        stops, mainlines = tour_stops(lines, secs, nstops)
+        if not stops:
+            print(f"error: no tour candidates for {a.map}", file=sys.stderr)
+            return 1
+        cmds, warps = build_tour(stops, a.tics, a.hold)
+        data = build(a.map, cmds, a.seed, a.cheat, warps)
+        try:
+            with open(a.out, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            print(f"error: cannot write {a.out}: {e}", file=sys.stderr)
+            return 1
+        print(f"wrote {a.out} ({len(data)} bytes): map={a.map} tics={a.tics} "
+              f"path=tour stops={len(stops)} hold={a.hold} seed={a.seed:#x} "
+              f"cheats={a.cheat}")
+        print(f"  geometry: {len(lines)} lines, {len(secs)} sectors; main area "
+              f"{mainlines} lines")
+        for i, (x, y) in enumerate(stops):
+            print(f"  stop {i:2d} tic {i * a.hold:4d}: ({x:.0f},{y:.0f})")
+        return 0
 
     mids, p1 = load_geometry(a.iwad, a.map)
     if not mids:

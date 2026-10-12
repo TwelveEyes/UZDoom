@@ -193,15 +193,37 @@ tracked, but the perf bars only apply after ticket 20 removes the walk from the 
     approximations. This affects game-state sets (exposure / dither eligibility), not pixels.
 - Game state (exposure flags, savegames) is compared by set-diff, with DC5 differences classified.
 
-## Perf bars (set in ticket 02; placeholders until then)
+## Perf bars (set in ticket 02, 2026-10-12)
 
-- **No regression:** levelmesh p50 and p95 total frame time ≤ classic × 1.05 on every acceptance
-  map, measured on Vulkan.
-- **Payoff:** on the stress vantage set (large maps, open vistas, portal-dense, 3D-floor-dense),
-  levelmesh p95 ≤ 50 % of classic p95. The levelmesh's own render-CPU window must not grow with
-  level size.
-- Measured on real views (ticket 02 fixes the camera problem in the old baseline), on the reference
-  machine, and on one low-end GPU when available.
+Source: `tools/abtest/results/baseline-v2.{md,json}`. All bars are measured with the v2 protocol
+(`baseline.cfg` incl. `r_ticstability 0`; tours from `demos/v2/`, vantages from
+`demos/vantage/`). They compare Vulkan against Vulkan on the reference machine and apply
+after ticket 20. They are stated on `wall` (the real frame interval), so GPU cost and sync waits
+are included.
+
+- **B1 No regression (all 26 tours):** levelmesh `wall` p50 and p95 ≤
+  max(classic × 1.05, classic + 0.10 ms).
+  - Why the additive slack: the small maps' classic render window is 0.06–0.14 ms, so a
+    pure 5 % bar would be 3–7 µs. The GPU-driven path has a fixed per-view cost
+    (cull/Hi-Z dispatches, render-pass split).
+  - Ticket 05 measures that cost. If it exceeds 0.10 ms, this bar is re-decided there.
+- **B2 Payoff (heavy vantages):** the vantages whose classic Vulkan `r` p50 ≥ 5 ms are SOS MAP32
+  V1/V2, planisf V1/V2, Pirates MAP54 V1, and myhouse MAP01 V1/V2. On each, levelmesh `wall` p95
+  ≤ 50 % of classic `wall` p95.
+  - Headroom: the stages the levelmesh replaces cover 93–96 % of the classic render window on
+    SOS/planisf (scene build `pr` + wall/flat submission `wr`/`fr`) and ~85 % on myhouse (adds
+    the `SetCoverage` portal BSP walk).
+  - The ceiling is therefore ~10× on SOS MAP32 V1 (classic 49.8 ms wall p50); 50 % is the
+    floor.
+- **B3 Level-size independence:** levelmesh render CPU excluding the sprite stages
+  (`r − ss − sr`) p95 ≤ 1.0 ms at every vantage and on every tour. The classic value for this is
+  44 ms on SOS MAP32 V1 and 5.8 ms on myhouse MAP01 V1.
+- **B4 Tails:** on every tour, levelmesh `wall` p99 ≤ classic `wall` p99. On the SOS MAP32 and
+  planisf tours, levelmesh p99 ≤ 50 % of classic (classic 28.5 / 21.2 ms).
+- **GPU visibility:** per-phase GPU timestamps (cull, draw, Hi-Z) arrive with tickets 05/08 and
+  are reported alongside these bars, without a separate bar. The `wall` bars already catch a
+  GPU-bound regression.
+- A low-end GPU run is reported when one is available. It is informational, not a gate.
 
 ## Standing constraints (every ticket)
 
@@ -258,3 +280,11 @@ ticket file, and decisions that change this map are written back here, under Dec
   `gl_uselevelmesh` comment (now a no-op until ticket 08). `DoomLevelMesh` is on its classic
   builder again, and the A/B and perf tooling are kept. Note for runs: with `vk_raytrace 1` the
   engine stays open after a timedemo until a user closes it, so scripted runs need a timeout.
+- 2026-10-12: ticket 02 implemented; the human contact-sheet review is open.
+  - New baseline: `tools/abtest/results/baseline-v2.*`. The v1 baseline is archived as invalid:
+    its cameras saw nothing, and `r_ticstability` padded the frames.
+  - Perf bars B1–B4 set above.
+  - All timedemo runs now go through `run_matrix.sh`, which terminates the engine at the end
+    dialog.
+  - Finding for ticket 15: the classic `SetCoverage` walks the whole BSP per sector-stack portal;
+    on myhouse that is 4.9 of 5.9 ms.
