@@ -324,3 +324,12 @@ ticket file, and decisions that change this map are written back here, under Dec
     - 10 / 17: depend on Hi-Z visibility.
   - `run_matrix.sh` / `contact_sheet.py` gained `--set`.
   - Tickets 06–21 → `ready-for-agent`.
+- 2026-10-13: ticket 06 resolved → `hw_levelmeshbake.{h,cpp}`. Plane-anchored bake via the classic
+  emitters.
+  - 0 round-trip mismatches beyond 1 ulp on 26 maps; about 3.4k vertices are within 1 ulp, not
+    bit-exact (user call; ticket 09 note).
+  - Bake time is linear (0.15–0.30 µs/tri; myhouse MAP01 349 ms).
+  - The bake has no effect on classic frames (pixel-identical with the cvar 0 vs 1).
+  - New tools: `lm_bake_survey.py`, `lm_obj_compare.py`, and an `ABCAPTURE view` line.
+  - Amended tickets: 07, 09, 12, 16.
+

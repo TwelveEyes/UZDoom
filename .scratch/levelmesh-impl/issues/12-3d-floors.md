@@ -35,3 +35,12 @@
 - [ ] 3D-light refresh cost is O(changed). The old O(n²) dedup is gone.
 
 ## Comments
+
+- 2026-10-13 (from 06): 3D-floor sides are baked as `RENDERWALL_FFBLOCK` surfaces with
+  `LMSF_3DFLOOR`. Their `vRef` is a heuristic: the top-left vertex's anchor, because HWWall does
+  not keep the rover. It fired 39k times on myhouse MAP01; verify it or pass the rover through
+  HWMeshHelper.
+  - Banded walls are flagged `LMSF_LIGHTLIST` with `lightList = -1`. The classic draws them
+    once per light layer with split planes.
+  - 3D-floor flats are baked double-sided on the target sector's triangulation. Translucent ones
+    are in `TranslucentFlats`.

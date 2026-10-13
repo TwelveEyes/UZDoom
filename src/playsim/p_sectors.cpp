@@ -1599,23 +1599,7 @@ int side_t::GetLightLevel (bool foggy, int baselight, int which, bool is3dlight,
 	{
 		if (!(Flags & WALLF_NOFAKECONTRAST) && r_fakecontrast != 0)
 		{
-			DVector2 delta = linedef->Delta();
-			int rel;
-			if (((sector->Level->flags2 & LEVEL2_SMOOTHLIGHTING) || (Flags & WALLF_SMOOTHLIGHTING) || r_fakecontrast == 2) &&
-				delta.X != 0)
-			{
-				rel = RoundHalfUp // OMG LEE KILLOUGH LIVES! :/
-					(
-						sector->Level->WallHorizLight
-						+ fabs(atan(delta.Y / delta.X) / 1.57079)
-						* (sector->Level->WallVertLight - sector->Level->WallHorizLight)
-					);
-			}
-			else
-			{
-				rel = delta.X == 0 ? sector->Level->WallVertLight :
-					  delta.Y == 0 ? sector->Level->WallHorizLight : 0;
-			}
+			int rel = GetFakeContrastRel((sector->Level->flags2 & LEVEL2_SMOOTHLIGHTING) || (Flags & WALLF_SMOOTHLIGHTING) || r_fakecontrast == 2);
 			if (pfakecontrast != NULL)
 			{
 				*pfakecontrast = rel;
@@ -1631,6 +1615,29 @@ int side_t::GetLightLevel (bool foggy, int baselight, int which, bool is3dlight,
 		baselight += this->Light + this->TierLights[which];
 	}
 	return baselight;
+}
+
+//==========================================================================
+//
+// Fake-contrast relative light. 'smooth' selects the angle-interpolated
+// variant (it falls back to the classic one for vertical lines).
+//
+//==========================================================================
+
+int side_t::GetFakeContrastRel(bool smooth) const
+{
+	DVector2 delta = linedef->Delta();
+	if (smooth && delta.X != 0)
+	{
+		return RoundHalfUp // OMG LEE KILLOUGH LIVES! :/
+			(
+				sector->Level->WallHorizLight
+				+ fabs(atan(delta.Y / delta.X) / 1.57079)
+				* (sector->Level->WallVertLight - sector->Level->WallHorizLight)
+			);
+	}
+	return delta.X == 0 ? sector->Level->WallVertLight :
+		   delta.Y == 0 ? sector->Level->WallHorizLight : 0;
 }
 
 //==========================================================================

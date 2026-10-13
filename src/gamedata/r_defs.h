@@ -1269,6 +1269,8 @@ struct side_t
 	int dithertranscount;
 
 	int GetLightLevel (bool foggy, int baselight, int which, bool is3dlight=false, int *pfakecontrast_usedbygzdoom=NULL) const;
+	// Fake-contrast relative light of this side's line, smooth or classic variant (see GetLightLevel).
+	int GetFakeContrastRel(bool smooth) const;
 
 	void SetLight(int16_t l)
 	{

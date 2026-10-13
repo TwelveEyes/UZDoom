@@ -57,3 +57,8 @@
   `VkBufferCopy` regions. The staging ring here should allow for that.
 
 ## Comments
+
+- 2026-10-13 (from 06): the bake is `LevelMeshBake` (`hw_levelmeshbake.h`). Vertex 36 B, surface
+  96 B (std430). Gate it on the capability check instead of `IsVulkan()` in `LevelMeshBake_Create`.
+  Free `Vertices` / `Indices` after upload; keep `Surfaces` (or a slim CPU copy) and the side lists.
+  myhouse MAP01 has 2.4M vertices / 1.24M triangles, so plan the buffer sizes for it.

@@ -83,6 +83,8 @@ struct VertexContainer
 using VertexContainers = TArray<VertexContainer>;
 
 VertexContainers BuildVertices(TArray<sector_t> &sectors);
+// Classic subsector triangulation (also used by the levelmesh bake).
+void CreateVerticesForSubsector(subsector_t *sub, VertexContainer &gen, int qualifier);
 
 class FFlatVertexBuffer;
 void CheckUpdate(FFlatVertexBuffer* fvb, sector_t* sector);

@@ -45,6 +45,8 @@
 #include "r_data/r_interpolate.h"
 #include "doom_aabbtree.h"
 #include "doom_levelmesh.h"
+
+class LevelMeshBake;
 #include "p_visualthinker.h"
 #include <memory>
 
@@ -527,6 +529,7 @@ public:
 	EventManager *localEventManager = nullptr;
 	DoomLevelAABBTree* aabbTree = nullptr;
 	DoomLevelMesh* levelMesh = nullptr;
+	LevelMeshBake* levelMeshBake = nullptr;	// levelmesh path only (gl_uselevelmesh on Vulkan)
 
 	// [ZZ] Destructible geometry information
 	TMap<int, FHealthGroup> healthGroups;

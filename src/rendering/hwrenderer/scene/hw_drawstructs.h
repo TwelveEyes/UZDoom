@@ -167,6 +167,14 @@ public:
 		LORGT,
 	};
 
+	// Vertex roles reported by CreateVertices for the levelmesh bake.
+	enum
+	{
+		VR_BOTTOM,		// lower edge (corners and gl_seamless lower-edge splits)
+		VR_TOP,			// upper edge (corners and gl_seamless upper-edge splits)
+		VR_SIDE,		// gl_seamless left/right edge split (a neighbor plane's height)
+	};
+
 	friend struct HWDrawList;
 	friend class HWPortal;
 
@@ -281,7 +289,8 @@ public:
 	void ProcessDecal(HWDrawInfo* di, DBaseDecal* decal, const FVector3& normal);
 	void ProcessDecals(HWDrawInfo* di);
 
-	int CreateVertices(FFlatVertex*& ptr, bool nosplit);
+	// roles (optional, levelmesh bake): one HWWall::VR_* per written vertex
+	int CreateVertices(FFlatVertex*& ptr, bool nosplit, uint8_t* roles = nullptr);
 	void SplitLeftEdge(FFlatVertex*& ptr);
 	void SplitRightEdge(FFlatVertex*& ptr);
 	void SplitUpperEdge(FFlatVertex*& ptr);

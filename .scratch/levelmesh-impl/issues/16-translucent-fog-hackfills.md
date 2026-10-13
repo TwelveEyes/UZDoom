@@ -35,3 +35,8 @@ These are the small, order-dependent or view-dependent sets that stay CPU-driven
 - [ ] The translucent set's CPU time per frame is logged and stays small on the stress vantages.
 
 ## Comments
+
+- 2026-10-13 (from 06): the inputs are `LevelMeshBake::{TranslucentWalls, FogWalls, UpperMissing,
+  LowerMissing, TranslucentFlats}`, with counts per map in `tools/abtest/results/lm_bake_survey.md`.
+  Heightsec surfaces are baked unfaked and flagged `LMSF_HEIGHTSEC`. The classic fake-flat
+  depends on the view area, so they need the classic path or a per-view variant.

@@ -184,21 +184,35 @@ void HWWall::SplitRightEdge(FFlatVertex *&ptr)
 //
 //==========================================================================
 
-int HWWall::CreateVertices(FFlatVertex *&ptr, bool split)
+int HWWall::CreateVertices(FFlatVertex *&ptr, bool split, uint8_t *roles)
 {
 	auto oo = ptr;
+	auto mark = [&](FFlatVertex *from, uint8_t role)
+	{
+		if (roles) for (auto p = from; p < ptr; p++) roles[p - oo] = role;
+	};
+	FFlatVertex *from = ptr;
 	ptr->Set(glseg.x1, zbottom[0], glseg.y1, tcs[LOLFT].u, tcs[LOLFT].v, lightuv[LOLFT].u, lightuv[LOLFT].v, lindex);
 	ptr++;
+	mark(from, VR_BOTTOM);
+	from = ptr;
 	if (split && glseg.fracleft == 0) SplitLeftEdge(ptr);
+	mark(from, VR_SIDE);
+	from = ptr;
 	ptr->Set(glseg.x1, ztop[0], glseg.y1, tcs[UPLFT].u, tcs[UPLFT].v, lightuv[UPLFT].u, lightuv[UPLFT].v, lindex);
 	ptr++;
 	if (split && !(flags & HWF_NOSPLITUPPER && seg->sidedef->numsegs > 1)) SplitUpperEdge(ptr);
 	ptr->Set(glseg.x2, ztop[1], glseg.y2, tcs[UPRGT].u, tcs[UPRGT].v, lightuv[UPRGT].u, lightuv[UPRGT].v, lindex);
 	ptr++;
+	mark(from, VR_TOP);
+	from = ptr;
 	if (split && glseg.fracright == 1) SplitRightEdge(ptr);
+	mark(from, VR_SIDE);
+	from = ptr;
 	ptr->Set(glseg.x2, zbottom[1], glseg.y2, tcs[LORGT].u, tcs[LORGT].v, lightuv[LORGT].u, lightuv[LORGT].v, lindex);
 	ptr++;
 	if (split && !(flags & HWF_NOSPLITLOWER) && seg->sidedef->numsegs > 1) SplitLowerEdge(ptr);
+	mark(from, VR_BOTTOM);
 	return int(ptr - oo);
 }
 

@@ -27,7 +27,7 @@
 //
 //=============================================================================
 
-static void CreateVerticesForSubsector(subsector_t *sub, VertexContainer &gen, int qualifier)
+void CreateVerticesForSubsector(subsector_t *sub, VertexContainer &gen, int qualifier)
 {
 	if (sub->numlines < 3) return;
 

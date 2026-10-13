@@ -40,3 +40,11 @@
       lifts).
 
 ## Comments
+
+- 2026-10-13 (from 06): the shader must evaluate `(d + nx*x + ny*y) * negiC + zOffset` in exactly
+  the order of `LM_PlaneZ` (`hw_levelmeshbake.h`). Use no fma contraction, or bit-exactness breaks.
+  - `LevelMeshSurface::planeRefs[4]` overflows on 0.1–0.4 % of surfaces (2474 on myhouse MAP01).
+    Derive dirty sets from the vertex anchors (plane → clusters built at upload), not from
+    `planeRefs`.
+  - About 3.4k vertices round-trip within 1 ulp but not bit-exactly (myhouse MAP01 most of them).
+    If A/B shows seams there, switch to a formula that is exact at rest.

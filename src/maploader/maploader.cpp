@@ -51,6 +51,7 @@
 #include "vm.h"
 #include "texturemanager.h"
 #include "hw_vertexbuilder.h"
+#include "hw_levelmeshbake.h"
 #include "version.h"
 #include "fs_decompress.h"
 
@@ -3249,6 +3250,7 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 
 	Level->aabbTree = new DoomLevelAABBTree(Level);
 	Level->levelMesh = new DoomLevelMesh(*Level);
+	Level->levelMeshBake = LevelMeshBake_Create(Level);
 
 	// [DVR] Populate subsector->bbox for alternative space culling in orthographic projection with no fog of war
 	subsector_t* sub = &Level->subsectors[0];

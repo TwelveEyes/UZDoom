@@ -72,6 +72,7 @@
 #include "texturemanager.h"
 #include "p_lnspec.h"
 #include "d_main.h"
+#include "hw_levelmeshbake.h"
 
 extern AActor *SpawnMapThing (int index, FMapThing *mthing, int position);
 
@@ -376,6 +377,8 @@ void FLevelLocals::ClearLevelData(bool fullgc)
 	localEventManager->Shutdown();
 	if (aabbTree) delete aabbTree;
 	if (levelMesh) delete levelMesh;
+	if (levelMeshBake) delete levelMeshBake;
+	levelMeshBake = nullptr;
 	aabbTree = nullptr;
 	levelMesh = nullptr;
 	VisualThinkerHead = nullptr;
