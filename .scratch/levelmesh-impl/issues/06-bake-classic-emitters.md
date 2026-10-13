@@ -43,9 +43,9 @@ path.
 
 ## Acceptance
 
-- [~] Bake round-trip: 0 z / v mismatches on all 26 acceptance maps (report the per-map count).
+- [x] Bake round-trip: 0 z / v mismatches on all 26 acceptance maps (report the per-map count).
       0 beyond 1 ulp on all 26. 1059 z / 2330 v vertices (8 maps) are within 1 ulp but not
-      bit-exact; see the comment (user call).
+      bit-exact; accepted as passing (user decision 2026-10-13).
 - [x] Bake time logged per map. Linear scaling shown across DOOM2 MAP01 → myhouse MAP01. No bake
       when the cvar is off or on GL.
 - [x] Side lists populated and counted (translucent, portal, missing-texture).
@@ -112,4 +112,5 @@ dependence.
     - 3D-floor side `vRef` is taken from the top-left anchor (the rover is not kept in the
       HWWall); myhouse MAP01 has 39k such surfaces (ticket 12 to verify).
     - `planeRefs[4]` overflows on 0.1–0.4 % of surfaces (ticket 09 note).
-
+  - **User decision (2026-10-13):** within-1-ulp round trips count as passing. Change the formula
+    in ticket 09 only if A/B shows seams there.

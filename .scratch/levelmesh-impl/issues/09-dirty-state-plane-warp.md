@@ -47,4 +47,5 @@
     Derive dirty sets from the vertex anchors (plane → clusters built at upload), not from
     `planeRefs`.
   - About 3.4k vertices round-trip within 1 ulp but not bit-exactly (myhouse MAP01 most of them).
-    If A/B shows seams there, switch to a formula that is exact at rest.
+    Accepted as passing (user decision); switch to a formula that is exact at rest only if A/B
+    shows seams there.
