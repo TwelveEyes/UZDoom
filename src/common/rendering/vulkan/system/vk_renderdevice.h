@@ -43,6 +43,7 @@ class VkHardwareDataBuffer;
 class VkHardwareTexture;
 class VkRenderBuffers;
 class VkPostprocess;
+class VkLevelMesh;
 
 class VulkanRenderDevice : public SystemBaseFrameBuffer
 {
@@ -61,6 +62,7 @@ public:
 	VkDescriptorSetManager* GetDescriptorSetManager() { return mDescriptorSetManager.get(); }
 	VkRenderPassManager *GetRenderPassManager() { return mRenderPassManager.get(); }
 	VkRaytrace* GetRaytrace() { return mRaytrace.get(); }
+	VkLevelMesh* GetLevelMesh() { return mLevelMesh.get(); }
 	VkRenderState *GetRenderState() { return mRenderState.get(); }
 	VkPostprocess *GetPostprocess() { return mPostprocess.get(); }
 	VkRenderBuffers *GetBuffers() { return mActiveRenderBuffers; }
@@ -89,6 +91,10 @@ public:
 	void AmbientOccludeScene(float m5) override;
 	void SetSceneRenderTarget(bool useSSAO) override;
 	void SetLevelMesh(hwrenderer::LevelMesh* mesh) override;
+	bool SupportsLevelMesh(bool report) override;
+	void SetLevelMeshData(const LevelMeshUploadData *data) override;
+	bool LevelMeshResident(uint64_t id) override;
+	void PrintLevelMeshStats() override;
 	void UpdateShadowMap() override;
 	void SetSaveBuffers(bool yes) override;
 	void ImageTransitionScene(bool unknown) override;
@@ -131,6 +137,7 @@ private:
 	std::unique_ptr<VkDescriptorSetManager> mDescriptorSetManager;
 	std::unique_ptr<VkRenderPassManager> mRenderPassManager;
 	std::unique_ptr<VkRaytrace> mRaytrace;
+	std::unique_ptr<VkLevelMesh> mLevelMesh;
 	std::unique_ptr<VkRenderState> mRenderState;
 
 	VkRenderBuffers *mActiveRenderBuffers = nullptr;

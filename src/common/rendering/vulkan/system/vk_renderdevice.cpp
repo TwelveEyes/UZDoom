@@ -44,6 +44,7 @@
 #include "vulkan/renderer/vk_descriptorset.h"
 #include "vulkan/renderer/vk_postprocess.h"
 #include "vulkan/renderer/vk_raytrace.h"
+#include "vulkan/renderer/vk_levelmesh.h"
 #include "vulkan/renderer/vk_renderpass.h"
 #include "vulkan/renderer/vk_renderstate.h"
 #include "vulkan/shaders/vk_shader.h"
@@ -115,6 +116,9 @@ VulkanRenderDevice::VulkanRenderDevice(void *hMonitor, bool fullscreen, std::sha
 {
 	VulkanDeviceBuilder builder;
 	builder.OptionalRayQuery();
+	// Levelmesh requirements (VkLevelMesh checks what was enabled).
+	builder.OptionalDescriptorIndexing();
+	builder.OptionalExtension(VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME);
 	builder.Surface(surface);
 	builder.SelectDevice(vk_device);
 	SupportedDevices = builder.FindDevices(surface->Instance);
@@ -140,6 +144,7 @@ VulkanRenderDevice::~VulkanRenderDevice()
 		mBufferManager->Deinit();
 	if (mShaderManager)
 		mShaderManager->Deinit();
+	mLevelMesh.reset();
 
 	mCommands->DeleteFrameObjects();
 }
@@ -183,6 +188,7 @@ void VulkanRenderDevice::InitializeState()
 	mDescriptorSetManager.reset(new VkDescriptorSetManager(this));
 	mRenderPassManager.reset(new VkRenderPassManager(this));
 	mRaytrace.reset(new VkRaytrace(this));
+	mLevelMesh.reset(new VkLevelMesh(this));
 
 	mVertexData = new FFlatVertexBuffer(GetWidth(), GetHeight());
 	mSkyData = new FSkyVertexBuffer;
@@ -330,6 +336,7 @@ void VulkanRenderDevice::SetTextureFilterMode()
 	{
 		mDescriptorSetManager->ResetHWTextureSets();
 		mSamplerManager->ResetHWSamplers();
+		mLevelMesh->SamplersChanged();
 	}
 }
 
@@ -465,6 +472,7 @@ void VulkanRenderDevice::BeginFrame()
 	mSaveBuffers->BeginFrame(SAVEPICWIDTH, SAVEPICHEIGHT, SAVEPICWIDTH, SAVEPICHEIGHT);
 	mRenderState->BeginFrame();
 	mDescriptorSetManager->BeginFrame();
+	mLevelMesh->BeginFrame();
 }
 
 void VulkanRenderDevice::InitLightmap(int LMTextureSize, int LMTextureCount, TArray<uint16_t>& LMTextureData)
@@ -531,6 +539,28 @@ void VulkanRenderDevice::PrintStartupLog()
 void VulkanRenderDevice::SetLevelMesh(hwrenderer::LevelMesh* mesh)
 {
 	mRaytrace->SetLevelMesh(mesh);
+}
+
+bool VulkanRenderDevice::SupportsLevelMesh(bool report)
+{
+	return mLevelMesh && mLevelMesh->Supported(report);
+}
+
+void VulkanRenderDevice::SetLevelMeshData(const LevelMeshUploadData *data)
+{
+	if (mLevelMesh)
+		mLevelMesh->SetData(data);
+}
+
+bool VulkanRenderDevice::LevelMeshResident(uint64_t id)
+{
+	return mLevelMesh && mLevelMesh->IsResident(id);
+}
+
+void VulkanRenderDevice::PrintLevelMeshStats()
+{
+	if (mLevelMesh)
+		mLevelMesh->PrintStats();
 }
 
 void VulkanRenderDevice::UpdateShadowMap()

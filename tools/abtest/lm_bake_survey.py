@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-# lm_bake_survey.py — run the levelmesh bake (ticket 06) on the acceptance maps.
+# lm_bake_survey.py — run the levelmesh bake (ticket 06), clusters and device
+# upload (ticket 07) on the acceptance maps.
 #
-# Loads each map on Vulkan with gl_uselevelmesh 1, waits for the bake's three
-# "LevelMeshBake <map>:" stat lines (plus the OBJ line with --obj), then kills
-# the engine. Writes a JSON + markdown table. Uses a throwaway -config so the
-# user's ini is not touched.
+# Loads each map on Vulkan with gl_uselevelmesh 1, renders a few frames, runs
+# lm_stats, collects the "LevelMeshBake <map>:", "LevelMeshClusters <map>:"
+# and "VkLevelMesh:" lines, then kills the engine. Writes a JSON + markdown
+# table. Uses a throwaway -config so the user's ini is not touched.
 #
 #   lm_bake_survey.py [--only SUBSTR] [--obj DIR] [--out results/lm_bake_survey]
 
@@ -48,10 +49,24 @@ def parse(lines):
                 m = re.search(pat, l)
                 if m and key not in d:
                     d[key] = int(m.group(1))
+    for l in lines:
+        m = re.search(r"LevelMeshClusters \S+: (\d+) clusters \(budget (\d+)\), (\d+) triangles, " + NUM + r" ms; tris/cluster min (\d+) p50 (\d+) p90 (\d+) max (\d+); histogram ([\d ]+); chunked leaves (\d+) \((\d+) clusters\), split surfaces (\d+), mixed-bucket clusters (\d+), cluster-sector refs (\d+), max sector fan-out (\d+), fallback leaves (\d+), hole surfaces (\d+)", l)
+        if m and "clusters" not in d:
+            g = m.groups()
+            d.update(clusters=int(g[0]), budget=int(g[1]), cl_tris=int(g[2]), cl_ms=float(g[3]), cl_min=int(g[4]), cl_p50=int(g[5]),
+                     cl_p90=int(g[6]), cl_max=int(g[7]), cl_hist=g[8].strip(), chunked_leaves=int(g[9]), chunk_clusters=int(g[10]),
+                     split_surfaces=int(g[11]), mixed_bucket=int(g[12]), cl_sector_refs=int(g[13]), max_fanout=int(g[14]), fallback_leaves=int(g[15]), hole_surfaces=int(g[16]))
+        m = re.search(r"VkLevelMesh: device-local " + NUM + r" MB, staging ring " + NUM + r" MB .*upload " + NUM + r" ms", l)
+        if m:
+            d.update(dev_mb=float(m.group(1)), ring_mb=float(m.group(2)), upload_ms=float(m.group(3)))
+        m = re.search(r"VkLevelMesh: \d+ clusters, \d+ triangles; bindless slots (\d+) used / (\d+) capacity.*?(\d+) materials, (\d+) overflows; texture table (\d+) entries, (\d+) resolved", l)
+        if m:
+            d.update(slots=int(m.group(1)), slot_cap=int(m.group(2)), materials=int(m.group(3)), slot_overflows=int(m.group(4)),
+                     tex_table=int(m.group(5)), tex_resolved=int(m.group(6)))
     return d
 
 
-def run(label, iwad, pwad, mapname, objdir, timeout):
+def run(label, iwad, pwad, mapname, objdir, timeout, vkdebug=False):
     ini = tempfile.NamedTemporaryFile(suffix=".ini", delete=False).name
     cmd = ["stdbuf", "-oL", "-eL", os.path.join(BUILD, "uzdoom"), "-config", ini, "-iwad", os.path.join("wads", iwad)]
     if pwad:
@@ -60,24 +75,33 @@ def run(label, iwad, pwad, mapname, objdir, timeout):
             "+set", "gl_uselevelmesh", "1", "+set", "vid_vsync", "0"]
     if objdir:
         cmd += ["+set", "lm_bake_objdir", objdir]
-    cmd += ["+map", mapname]
-    want = 4 if objdir else 3
+    if vkdebug:
+        cmd += ["+set", "vk_debug", "1"]
+    # A single command line: wait only delays the rest of its own line.
+    cfg = tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False)
+    cfg.write(f"wait 5; map {mapname}; wait 35; lm_stats\n")
+    cfg.close()
+    cmd += ["+exec", cfg.name]
     p = subprocess.Popen(cmd, cwd=BUILD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-    lines, t0 = [], time.time()
+    lines, vuids, t0 = [], [], time.time()
     try:
         for l in p.stdout:
-            if l.startswith(f"LevelMeshBake {mapname}:"):
+            vuids += re.findall(r"VUID-[A-Za-z0-9_-]+", l)
+            if l.startswith((f"LevelMeshBake {mapname}:", f"LevelMeshClusters {mapname}:", "VkLevelMesh:")):
                 lines.append(l.strip())
-                if len(lines) >= want:
-                    break
+            if l.startswith("VkLevelMesh: ") and " clusters, " in l:
+                break
             if time.time() - t0 > timeout:
                 break
     finally:
         p.kill()
         p.wait()
         os.unlink(ini)
+        os.unlink(cfg.name)
     d = parse(lines)
     d.update(label=label, map=mapname)
+    if vkdebug:
+        d["vuids"] = " ".join(sorted(set(vuids)))
     return d
 
 
@@ -87,6 +111,7 @@ def main():
     ap.add_argument("--obj", help="directory for per-map OBJ exports")
     ap.add_argument("--out", default=os.path.join(KIT, "results", "lm_bake_survey"))
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--vkdebug", action="store_true", help="run with vk_debug 1 and record validation VUIDs")
     a = ap.parse_args()
     if a.obj:
         os.makedirs(a.obj, exist_ok=True)
@@ -94,19 +119,28 @@ def main():
     for label, iwad, pwad, m in MAPS:
         if a.only and a.only not in f"{label}_{m}":
             continue
-        d = run(label, iwad, pwad, m, os.path.abspath(a.obj) if a.obj else None, a.timeout)
+        d = run(label, iwad, pwad, m, os.path.abspath(a.obj) if a.obj else None, a.timeout, a.vkdebug)
         rows.append(d)
-        print(f"{label} {m}: tris {d.get('triangles')} ms {d.get('ms')} zmis {d.get('z_mismatch')} vmis {d.get('v_mismatch')}", flush=True)
+        print(f"{label} {m}: tris {d.get('triangles')} ms {d.get('ms')} zmis {d.get('z_mismatch')} vmis {d.get('v_mismatch')} "
+              f"clusters {d.get('clusters')} ({d.get('cl_ms')} ms) dev {d.get('dev_mb')} MB slots {d.get('slots')}"
+              + (f" vuids [{d['vuids']}]" if a.vkdebug else ""), flush=True)
     with open(a.out + ".json", "w") as f:
         json.dump(rows, f, indent=1)
     cols = ["label", "map", "sides", "surfaces", "walls", "flats", "flats3d", "triangles", "ms", "wall_ms", "flat_ms",
             "z_mismatch", "v_mismatch", "z_ulp", "v_ulp", "translucent_walls", "portal_walls", "fog_walls", "upper_missing", "lower_missing",
             "translucent_flats", "portal_flats", "heightsec", "off_bottom", "off_top", "off_side", "off_flat",
             "vscale_inconsistent", "planeref_overflow", "ff_vref_heuristic", "poly_skipped"]
+    ccols = ["label", "map", "triangles", "clusters", "cl_ms", "cl_min", "cl_p50", "cl_p90", "cl_max", "cl_hist", "chunked_leaves",
+             "chunk_clusters", "split_surfaces", "mixed_bucket", "cl_sector_refs", "max_fanout", "fallback_leaves", "hole_surfaces",
+             "dev_mb", "upload_ms", "materials", "slots", "slot_overflows", "tex_resolved"] + (["vuids"] if a.vkdebug else [])
     with open(a.out + ".md", "w") as f:
         f.write("| " + " | ".join(cols) + " |\n|" + "---|" * len(cols) + "\n")
         for r in rows:
             f.write("| " + " | ".join(str(r.get(c, "")) for c in cols) + " |\n")
+        f.write("\n## Clusters and device upload (ticket 07)\n\n")
+        f.write("| " + " | ".join(ccols) + " |\n|" + "---|" * len(ccols) + "\n")
+        for r in rows:
+            f.write("| " + " | ".join(str(r.get(c, "")) for c in ccols) + " |\n")
     print("wrote", a.out + ".json", a.out + ".md")
 
 

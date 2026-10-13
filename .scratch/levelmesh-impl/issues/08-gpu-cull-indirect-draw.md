@@ -74,3 +74,18 @@ The first real levelmesh draw, main view only, on Vulkan:
 - [ ] No validation errors; classic path unchanged.
 
 ## Comments
+
+- 2026-10-13 (from 07): resources are in `VkLevelMesh` (`vulkan/renderer/vk_levelmesh.h`).
+  - Use `GetPipelineLayout()`: sets 0 fixed, 1 HW buffers, 2 `LevelMeshSet` (bindings
+    `ELevelMeshBinding`), 3 bindless textures, plus the classic push constants.
+  - Vertex buffer: `LevelMeshVertex`, 36 B. Index buffer: cluster-ordered `uint32`.
+  - Cluster record (`hw_levelmeshdata.h`): `bucketIndices[LMB_COUNT]` are consecutive index
+    ranges from `firstIndex`.
+  - The bake's `LMSF_MASKED` marks almost everything masked, because textures are unloaded at
+    bake time (07 Comments). Until ticket 11, expect nearly every cluster to hit both buckets,
+    or re-derive the bucket after precache.
+  - Many tiny clusters on big maps (SOS MAP32: 628 under 32 triangles). Consider merging small
+    siblings if the per-cluster cost shows.
+  - Descriptor writes may only happen in `VkLevelMesh::BeginFrame` (no
+    `UpdateUnusedWhilePending`).
+

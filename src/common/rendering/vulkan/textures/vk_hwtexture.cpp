@@ -34,6 +34,7 @@
 #include "vulkan/textures/vk_texture.h"
 #include "vulkan/renderer/vk_descriptorset.h"
 #include "vulkan/renderer/vk_postprocess.h"
+#include "vulkan/renderer/vk_levelmesh.h"
 #include "vulkan/shaders/vk_shader.h"
 #include "vk_hwtexture.h"
 
@@ -317,6 +318,8 @@ void VkMaterial::DeleteDescriptors()
 {
 	if (fb)
 	{
+		if (auto levelmesh = fb->GetLevelMesh())
+			levelmesh->MaterialInvalidated(this);
 		auto deleteList = fb->GetCommands()->DrawDeleteList.get();
 		for (auto& it : mDescriptorSets)
 		{

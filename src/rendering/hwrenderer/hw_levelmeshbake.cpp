@@ -63,6 +63,8 @@ EXTERN_CVAR(Bool, gl_seamless)
 CVAR(String, lm_bake_objdir, "", 0)
 // Debug: print the first N round-trip failures of each bake.
 CVAR(Int, lm_bake_debug, 0, 0)
+// Cluster triangle budget (ticket 05: 256). Takes effect at the next level setup.
+CVAR(Int, lm_cluster_budget, 256, 0)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -172,12 +174,13 @@ struct Baker
 		return Out->Surfaces.Size();
 	}
 
-	void EndSurface(LevelMeshSurface &surf)
+	void EndSurface(LevelMeshSurface &surf, subsector_t *leaf)
 	{
 		surf.numVertices = Out->Vertices.Size() - surf.firstVertex;
 		surf.numIndices = Out->Indices.Size() - surf.firstIndex;
 		Out->Stats.triangles += surf.numIndices / 3;
 		Out->Surfaces.Push(surf);
+		Out->SurfaceLeaf.Push(leaf ? leaf->Index() : -1);
 	}
 
 	void AddPlaneRef(LevelMeshSurface &surf, uint32_t ref, bool &overflow)
@@ -537,7 +540,7 @@ void Baker::BakeWall(HWWall &w)
 		surf.normal[1] = -dx / len;
 	}
 	surf.normal[2] = 0;
-	EndSurface(surf);
+	EndSurface(surf, w.seg->Subsector);
 	st.wallSurfaces++;
 }
 
@@ -623,7 +626,7 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 	surf.normal[0] = sign * (float)nrm.X;
 	surf.normal[1] = sign * (float)nrm.Y;
 	surf.normal[2] = sign * (float)nrm.Z;
-	EndSurface(surf);
+	EndSurface(surf, sub);
 	if (ffloor) st.ffloorFlatSurfaces++;
 	else st.flatSurfaces++;
 }
@@ -735,6 +738,7 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 
 bool LevelMeshBake::ExportObj(FLevelLocals *Level, const char *filename) const
 {
+	if (GeometryReleased) return false;
 	FILE *f = fopen(filename, "w");
 	if (!f) return false;
 	fprintf(f, "# UZDoom levelmesh bake: %s\n# OBJ y-up: (x, z, -y) in map units\n", Level->MapName.GetChars());
@@ -769,13 +773,16 @@ bool LevelMeshBake::ExportObj(FLevelLocals *Level, const char *filename) const
 //
 //==========================================================================
 
-LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level)
+LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 {
-	// Ticket 07 replaces IsVulkan() with the levelmesh capability check.
-	if (!gl_uselevelmesh || screen == nullptr || !screen->IsVulkan()) return nullptr;
+	// gl_uselevelmesh is latched at level setup; a rebuild (device reset) keeps the latched choice.
+	if (!rebuild && !gl_uselevelmesh) return nullptr;
+	if (screen == nullptr || !screen->SupportsLevelMesh(true)) return nullptr;
 
 	double t0 = I_msTimeF();
+	static uint64_t nextId = 0;
 	auto bake = new LevelMeshBake;
+	bake->Id = ++nextId;
 	Baker b;
 	b.Level = Level;
 	b.Out = bake;
@@ -806,6 +813,10 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level)
 	bake->Indices.ShrinkToFit();
 	bake->Surfaces.ShrinkToFit();
 	bake->PrintStats(Level->MapName.GetChars());
+
+	LevelMeshClusters_Build(Level, bake, lm_cluster_budget);
+	bake->PrintClusterStats(Level->MapName.GetChars());
+
 	if ((*lm_bake_objdir)[0] != 0)
 	{
 		FString name = FStringf("%s/%s.obj", *lm_bake_objdir, Level->MapName.GetChars());
@@ -825,7 +836,7 @@ CCMD(lm_bakestats)
 {
 	if (!primaryLevel || !primaryLevel->levelMeshBake)
 	{
-		Printf("No levelmesh bake for this level (gl_uselevelmesh off, or not Vulkan).\n");
+		Printf("No levelmesh bake for this level (gl_uselevelmesh off at level setup, or the device cannot run it).\n");
 		return;
 	}
 	primaryLevel->levelMeshBake->PrintStats(primaryLevel->MapName.GetChars());
@@ -835,11 +846,13 @@ CCMD(lm_dumpobj)
 {
 	if (!primaryLevel || !primaryLevel->levelMeshBake)
 	{
-		Printf("No levelmesh bake for this level (gl_uselevelmesh off, or not Vulkan).\n");
+		Printf("No levelmesh bake for this level (gl_uselevelmesh off at level setup, or the device cannot run it).\n");
 		return;
 	}
 	FString name = argv.argc() > 1 ? FString(argv[1]) : FStringf("levelmesh_%s.obj", primaryLevel->MapName.GetChars());
-	if (primaryLevel->levelMeshBake->ExportObj(primaryLevel, name.GetChars()))
+	if (primaryLevel->levelMeshBake->GeometryReleased)
+		Printf("The CPU geometry was freed after the upload; set lm_keepgeometry 1 before loading the map.\n");
+	else if (primaryLevel->levelMeshBake->ExportObj(primaryLevel, name.GetChars()))
 		Printf("Wrote %s\n", name.GetChars());
 	else
 		Printf("Could not write %s\n", name.GetChars());

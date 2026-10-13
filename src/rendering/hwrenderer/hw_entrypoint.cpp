@@ -17,6 +17,7 @@
 
 #include "gi.h"
 #include "a_dynlight.h"
+#include "hw_levelmeshbake.h"
 #include "m_png.h"
 #include "doomstat.h"
 #include "r_data/r_interpolate.h"
@@ -106,6 +107,7 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
 	}
 
 	screen->SetLevelMesh(camera->Level->levelMesh);
+	LevelMesh_UpdateResources(camera->Level);
 
 	// Update the attenuation flag of all light defaults for each viewpoint.
 	// This function will only do something if the setting differs.

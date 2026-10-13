@@ -33,105 +33,16 @@
 #include "hwrenderer/scene/hw_drawinfo.h"
 #include "hwrenderer/scene/hw_drawstructs.h"
 #include "hwrenderer/scene/hw_walldispatcher.h"
+#include "hwrenderer/data/hw_levelmeshdata.h"
 
 // TYPES -------------------------------------------------------------------
 
 struct FLevelLocals;
 
-// Plane reference: sector index << 1 | (ceiling ? 1 : 0).
-constexpr uint32_t LM_NOPLANE = 0xffffffffu;
-
-inline uint32_t LM_PlaneRef(int sectornum, int ceiling)
-{
-	return (uint32_t(sectornum) << 1) | (ceiling ? 1u : 0u);
-}
-
-// A plane as the GPU sees it. LM_PlaneZ is the canonical evaluation; the
-// levelmesh vertex shader must use the same operation order.
-struct LevelMeshPlane
-{
-	float nx, ny, d, negiC;
-};
-
 inline LevelMeshPlane LM_PackPlane(const secplane_t &plane)
 {
 	return { (float)plane.Normal().X, (float)plane.Normal().Y, (float)plane.fD(), (float)plane.negiC };
 }
-
-inline float LM_PlaneZ(const LevelMeshPlane &p, float x, float y)
-{
-	return (p.d + p.nx * x + p.ny * y) * p.negiC;
-}
-
-// Vertex anchor = plane ref | role << LMV_ROLESHIFT.
-enum ELevelMeshVertexRole : uint32_t
-{
-	LMV_BOTTOM = 0,		// wall lower edge
-	LMV_TOP = 1,		// wall upper edge
-	LMV_SIDE = 2,		// wall gl_seamless side split; must stay within the edge's span
-	LMV_FLAT = 3,		// flat vertex
-	LMV_ROLESHIFT = 30,
-	LMV_REFMASK = (1u << LMV_ROLESHIFT) - 1,
-};
-
-// z = LM_PlaneZ(anchor plane, x, y) + zOffset
-// wall v = vOffset + surface.vScale * (z - TexZ(surface.vRef)); flats: v = vOffset
-struct LevelMeshVertex
-{
-	float x, y;
-	float zOffset;
-	float u, vOffset;
-	float lu, lv;		// lightmap uv (page: surface.lightmapPage)
-	uint32_t anchor;
-	uint32_t surface;
-};
-
-enum ELevelMeshSurfaceFlags : uint32_t
-{
-	LMSF_KINDMASK = 3,		// LMSK_*
-	LMSF_3DFLOOR = 1 << 2,		// 3D-floor side or plane
-	LMSF_MASKED = 1 << 3,		// masked material bucket (alpha test)
-	LMSF_CLAMPX = 1 << 4,
-	LMSF_CLAMPY = 1 << 5,
-	LMSF_TWOSIDED = 1 << 6,		// no back-face culling (3D-floor flats); otherwise the front is the classic winding
-	LMSF_GLOW = 1 << 7,		// HWF_GLOW at bake
-	LMSF_HEIGHTSEC = 1 << 8,	// front or back sector has a Boom heightsec (view-dependent in classic, baked unfaked)
-	// 1 << 9 reserved: dither eligibility (ticket 18; WALLF_DITHERTRANS_* is per-frame state)
-	LMSF_SKEW = 1 << 10,		// sloped / skewed texture alignment
-	LMSF_LIGHTLIST = 1 << 11,	// banded: drawn per light layer of lightSector's 3D lightlist (classic split planes)
-	LMSF_SKY = 1 << 12,			// unused for mesh surfaces (sky goes to side lists); reserved
-	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
-};
-
-enum ELevelMeshSurfaceKind : uint32_t
-{
-	LMSK_WALL,
-	LMSK_FLOOR,
-	LMSK_CEILING,
-};
-
-// std430-compatible: 24 x 32 bit.
-struct LevelMeshSurface
-{
-	uint32_t flags;			// LMSF_* | kind
-	uint32_t planeRefs[4];	// distinct vertex anchor planes (LM_NOPLANE = unused); overflow counted in stats
-	uint32_t vRef;			// texture-top plane ref (walls), LM_NOPLANE for flats
-	float vScale;			// dv/dz (walls)
-	int32_t textureId;		// untranslated FTextureID
-	uint32_t sideRef;		// side * 3 + tier (side_t::top/mid/bottom), 0xffffffff for flats
-	uint32_t lightSector;	// sector providing the base light
-	int32_t lightList;		// 3D light layer index, -1 = none / not recorded (ticket 12)
-	int32_t lightLevel;		// classic lightlevel at bake (RescaleLightLevel applied)
-	int32_t relLight;		// classic rellight at bake
-	int32_t sideLight;		// side Light (low 16) | TierLights[tier] (high 16)
-	int32_t fakeContrast;	// smooth rel (low 16) | classic rel (high 16)
-	uint32_t sideFlags;		// side_t::Flags (light / dither bits)
-	int32_t lightmapPage;	// -1 = none
-	float normal[3];		// walls: horizontal, pointing into the side's sector; flats: plane normal (floor up, ceiling down)
-	uint32_t firstVertex, numVertices;
-	uint32_t firstIndex, numIndices;
-};
-static_assert(sizeof(LevelMeshSurface) == 24 * 4, "LevelMeshSurface must stay std430-compatible");
 
 // A flat that is not part of the opaque mesh (sky / portal / translucent).
 struct LevelMeshFlatRef
@@ -158,12 +69,42 @@ struct LevelMeshBakeStats
 	double wallMs = 0, flatMs = 0, totalMs = 0;
 };
 
+struct LevelMeshClusterStats
+{
+	unsigned clusters = 0, triangles = 0;
+	unsigned budget = 0;
+	unsigned minTris = 0, maxTris = 0, p50Tris = 0, p90Tris = 0;
+	unsigned histogram[9] = {};		// triangles per cluster in 32-wide bins; the last bin is > 256
+	unsigned chunkedLeaves = 0;		// leaves over budget, split into chunks
+	unsigned chunkClusters = 0;		// clusters produced by those splits
+	unsigned mixedBucketClusters = 0;
+	unsigned splitSurfaces = 0;		// surfaces straddling a chunk boundary (listed in both clusters)
+	unsigned clusterSectorRefs = 0;
+	unsigned maxSectorClusters = 0;	// largest sector -> cluster fan-out
+	unsigned fallbackLeaves = 0;	// walls without a seg subsector, placed by point lookup
+	unsigned orphanSurfaces = 0;	// surfaces of leaves outside the BSP (section hole fills), placed by point lookup
+	double ms = 0;
+};
+
 class LevelMeshBake
 {
 public:
 	TArray<LevelMeshVertex> Vertices;
-	TArray<uint32_t> Indices;		// triangle list, surface-ordered, absolute vertex indices
+	TArray<uint32_t> Indices;		// triangle list, cluster-ordered (surface-ordered before clustering), absolute vertex indices
 	TArray<LevelMeshSurface> Surfaces;
+	TArray<int32_t> SurfaceLeaf;	// BSP leaf (subsector index) per surface; freed after clustering
+
+	// Clusters (LevelMeshClusters_Build). The surface list of a cluster can
+	// share its first / last surface with the neighbouring cluster when a
+	// leaf over budget was chunked.
+	TArray<LevelMeshCluster> Clusters;
+	TArray<uint32_t> ClusterSectors;	// cluster -> sectors referenced by its vertex anchors
+	TArray<uint32_t> ClusterSurfaces;	// cluster -> surfaces
+	TArray<uint32_t> SectorClusterStart;	// sector -> clusters (CSR, numsectors + 1 entries)
+	TArray<uint32_t> SectorClusters;
+
+	uint64_t Id = 0;				// unique per bake (backend residency)
+	bool GeometryReleased = false;	// Vertices / Indices freed after the upload
 
 	// Side lists (tickets 14-16). The HWWall copies keep the classic
 	// emitter's view-independent output; pointers into level data stay valid
@@ -174,16 +115,30 @@ public:
 	TArray<LevelMeshFlatRef> TranslucentFlats, PortalFlats;
 
 	LevelMeshBakeStats Stats;
+	LevelMeshClusterStats ClusterStats;
 
 	// Evaluates a vertex's z / v from the current planes (CPU reference of the shader math).
 	float VertexZ(FLevelLocals *Level, const LevelMeshVertex &v) const;
 	float VertexV(FLevelLocals *Level, const LevelMeshVertex &v, float z) const;
 
 	void PrintStats(const char *mapname) const;
+	void PrintClusterStats(const char *mapname) const;
 	bool ExportObj(FLevelLocals *Level, const char *filename) const;
 };
 
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
 
 // Returns nullptr when the levelmesh path is not selected for this level.
-LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level);
+// 'rebuild' re-bakes a level whose path was already latched (device reset).
+LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild = false);
+
+// Cuts the bake into clusters and orders the index buffer by cluster.
+void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budget);
+
+// Makes the level's levelmesh resident on the device: uploads at level setup,
+// re-bakes and re-uploads after a device reset, drops the path if the new
+// device cannot run it. Called at level setup and once per frame.
+void LevelMesh_UpdateResources(FLevelLocals *Level);
+
+// Releases the device resources of the level's levelmesh (level teardown).
+void LevelMesh_ReleaseResources(FLevelLocals *Level);

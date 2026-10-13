@@ -3251,6 +3251,7 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 	Level->aabbTree = new DoomLevelAABBTree(Level);
 	Level->levelMesh = new DoomLevelMesh(*Level);
 	Level->levelMeshBake = LevelMeshBake_Create(Level);
+	LevelMesh_UpdateResources(Level);
 
 	// [DVR] Populate subsector->bbox for alternative space culling in orthographic projection with no fog of war
 	subsector_t* sub = &Level->subsectors[0];

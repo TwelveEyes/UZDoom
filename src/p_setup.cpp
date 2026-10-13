@@ -377,7 +377,11 @@ void FLevelLocals::ClearLevelData(bool fullgc)
 	localEventManager->Shutdown();
 	if (aabbTree) delete aabbTree;
 	if (levelMesh) delete levelMesh;
-	if (levelMeshBake) delete levelMeshBake;
+	if (levelMeshBake)
+	{
+		LevelMesh_ReleaseResources(this);
+		delete levelMeshBake;
+	}
 	levelMeshBake = nullptr;
 	aabbTree = nullptr;
 	levelMesh = nullptr;

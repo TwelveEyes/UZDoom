@@ -49,3 +49,14 @@
   - About 3.4k vertices round-trip within 1 ulp but not bit-exactly (myhouse MAP01 most of them).
     Accepted as passing (user decision); switch to a formula that is exact at rest only if A/B
     shows seams there.
+- 2026-10-13 (from 07):
+  - The sector→cluster CSR (`LevelMeshBake::SectorClusterStart/SectorClusters`) is built from
+    the vertex anchors, as asked above. The max fan-out is 322 on myhouse MAP01 and 519 on
+    planisf MAP01.
+  - GPU state buffers exist and are filled at upload: `LevelMeshSectorState` (planes, texZ,
+    lights), `LevelMeshSideState` (side×tier), `LevelMeshPlaneXform`. Their `reserved` fields are
+    free for this ticket and ticket 10.
+  - Uploads go through `VkLevelMesh::AllocUpload` (host-coherent, `STORAGE` usage, so a
+    compute scatter can read them) plus `QueueCopy` / `FlushUploads`.
+  - The cluster→sector list is uploaded as well (binding `LMBIND_CLUSTERSECTORS`).
+

@@ -1,0 +1,402 @@
+/*
+** hw_levelmeshclusters.cpp
+**
+** Levelmesh clusters: BSP subtrees cut at a triangle budget
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+** Every surface belongs to one BSP leaf: flats to their subsector, walls to
+** the subsector of the seg they were emitted from. The BSP is walked top-down
+** and every subtree whose triangle count fits the budget becomes one cluster;
+** a single leaf over budget is cut into budget-sized chunks. Inside a
+** cluster the surfaces are ordered by material bucket, so each bucket is one
+** contiguous index range. The index buffer is rewritten in cluster order and
+** the surfaces' index ranges follow it.
+**
+** The whole build is linear in the number of triangles plus BSP nodes.
+*/
+
+// HEADER FILES ------------------------------------------------------------
+
+#include <algorithm>
+#include <cassert>
+
+#include "hw_levelmeshbake.h"
+#include "g_levellocals.h"
+#include "i_time.h"
+#include "printf.h"
+
+// PRIVATE DATA DEFINITIONS ------------------------------------------------
+
+namespace
+{
+
+uint32_t SurfaceBucket(const LevelMeshSurface &surf)
+{
+	return (surf.flags & LMSF_MASKED) ? LMB_MASKED : LMB_OPAQUE;
+}
+
+struct ClusterBuilder
+{
+	FLevelLocals *Level;
+	LevelMeshBake *Bake;
+	unsigned Budget;
+
+	TArray<uint32_t> LeafStart, LeafSurfaces;	// leaf -> surfaces (CSR)
+	TArray<uint32_t> LeafTris;
+	TArray<uint32_t> NodeTris;
+	TArray<uint32_t> Gather;
+	TArray<float> Z;							// vertex z at load
+	TArray<uint32_t> OldFirstIndex;
+	TArray<uint32_t> NewIndices;
+	TArray<uint32_t> SecStamp;
+	uint32_t Stamp = 0;
+	TArray<uint32_t> ClusterTris;
+	TArray<uint8_t> Visited;					// per leaf, set by the walk
+
+	// The cluster being filled.
+	bool open = false;
+	LevelMeshCluster cur;
+	unsigned curTris = 0;
+	uint32_t lastSurface = ~0u;
+
+	static bool IsLeaf(void *child) { return ((uintptr_t)child & 1) != 0; }
+	static subsector_t *Leaf(void *child) { return (subsector_t *)((uint8_t *)child - 1); }
+	static node_t *Node(void *child) { return (node_t *)child; }
+
+	uint32_t Count(void *child)
+	{
+		if (IsLeaf(child)) return LeafTris[Leaf(child)->Index()];
+		node_t *node = Node(child);
+		uint32_t n = Count(node->children[0]) + Count(node->children[1]);
+		NodeTris[node->Index()] = n;
+		return n;
+	}
+
+	void Collect(void *child)
+	{
+		if (IsLeaf(child))
+		{
+			int leaf = Leaf(child)->Index();
+			Visited[leaf] = 1;
+			for (uint32_t k = LeafStart[leaf]; k < LeafStart[leaf + 1]; k++)
+				Gather.Push(LeafSurfaces[k]);
+			return;
+		}
+		Collect(Node(child)->children[0]);
+		Collect(Node(child)->children[1]);
+	}
+
+	void Emit(void *child)
+	{
+		if (IsLeaf(child))
+		{
+			int leaf = Leaf(child)->Index();
+			Visited[leaf] = 1;
+			Gather.Clear();
+			for (uint32_t k = LeafStart[leaf]; k < LeafStart[leaf + 1]; k++)
+				Gather.Push(LeafSurfaces[k]);
+			EmitGroup(LeafTris[leaf] > Budget);
+			return;
+		}
+		node_t *node = Node(child);
+		if (NodeTris[node->Index()] <= Budget)
+		{
+			Gather.Clear();
+			Collect(child);
+			EmitGroup(false);
+			return;
+		}
+		Emit(node->children[0]);
+		Emit(node->children[1]);
+	}
+
+	void Open()
+	{
+		cur = {};
+		cur.bmin[0] = cur.bmin[1] = cur.bmin[2] = 1e30f;
+		cur.bmax[0] = cur.bmax[1] = cur.bmax[2] = -1e30f;
+		cur.firstIndex = NewIndices.Size();
+		cur.firstSector = Bake->ClusterSectors.Size();
+		cur.firstSurface = Bake->ClusterSurfaces.Size();
+		curTris = 0;
+		lastSurface = ~0u;
+		Stamp++;
+		open = true;
+	}
+
+	void Close()
+	{
+		if (!open) return;
+		open = false;
+		if (curTris == 0) return;
+		cur.numIndices = NewIndices.Size() - cur.firstIndex;
+		cur.numSectors = Bake->ClusterSectors.Size() - cur.firstSector;
+		cur.numSurfaces = Bake->ClusterSurfaces.Size() - cur.firstSurface;
+		for (uint32_t b = 0; b < LMB_COUNT; b++)
+			if (cur.bucketIndices[b]) cur.bucketMask |= 1u << b;
+		if ((cur.bucketMask & (cur.bucketMask - 1)) != 0) Bake->ClusterStats.mixedBucketClusters++;
+		Bake->Clusters.Push(cur);
+		ClusterTris.Push(curTris);
+	}
+
+	void AddTriangles(uint32_t surface, uint32_t src, uint32_t count, uint32_t bucket)
+	{
+		auto &verts = Bake->Vertices;
+		auto &oldIndices = Bake->Indices;
+		for (uint32_t i = src; i < src + count * 3; i++)
+		{
+			uint32_t vi = oldIndices[i];
+			NewIndices.Push(vi);
+			const LevelMeshVertex &v = verts[vi];
+			float z = Z[vi];
+			cur.bmin[0] = std::min(cur.bmin[0], v.x); cur.bmax[0] = std::max(cur.bmax[0], v.x);
+			cur.bmin[1] = std::min(cur.bmin[1], v.y); cur.bmax[1] = std::max(cur.bmax[1], v.y);
+			cur.bmin[2] = std::min(cur.bmin[2], z); cur.bmax[2] = std::max(cur.bmax[2], z);
+			uint32_t sec = (v.anchor & LMV_REFMASK) >> 1;
+			if (SecStamp[sec] != Stamp)
+			{
+				SecStamp[sec] = Stamp;
+				Bake->ClusterSectors.Push(sec);
+			}
+		}
+		cur.bucketIndices[bucket] += count * 3;
+		if (lastSurface != surface)
+		{
+			Bake->ClusterSurfaces.Push(surface);
+			lastSurface = surface;
+		}
+		curTris += count;
+	}
+
+	// Emits the surfaces in Gather as one cluster, or as budget-sized chunks.
+	void EmitGroup(bool chunked)
+	{
+		if (Gather.Size() == 0) return;
+		auto &surfaces = Bake->Surfaces;
+		std::stable_sort(Gather.begin(), Gather.end(), [&](uint32_t a, uint32_t b) { return SurfaceBucket(surfaces[a]) < SurfaceBucket(surfaces[b]); });
+
+		auto &cs = Bake->ClusterStats;
+		unsigned before = Bake->Clusters.Size();
+		Open();
+		for (uint32_t s : Gather)
+		{
+			auto &surf = surfaces[s];
+			uint32_t ntri = surf.numIndices / 3;
+			uint32_t src = OldFirstIndex[s];
+			uint32_t bucket = SurfaceBucket(surf);
+			surf.firstIndex = NewIndices.Size();
+			bool split = false;
+			uint32_t done = 0;
+			while (done < ntri)
+			{
+				if (!open) { Open(); split = done > 0; }
+				uint32_t take = std::min(ntri - done, Budget - curTris);
+				AddTriangles(s, src + done * 3, take, bucket);
+				done += take;
+				if (curTris >= Budget) Close();
+			}
+			if (split) cs.splitSurfaces++;
+		}
+		Close();
+		if (chunked)
+		{
+			cs.chunkedLeaves++;
+			cs.chunkClusters += Bake->Clusters.Size() - before;
+		}
+	}
+
+	void Build()
+	{
+		auto &cs = Bake->ClusterStats;
+		auto &surfaces = Bake->Surfaces;
+		unsigned nleaf = Level->subsectors.Size();
+		unsigned nsurf = surfaces.Size();
+
+		// Leaves the BSP reaches. Section hole fills (SSECF_HOLE) are
+		// render-only subsectors outside the tree.
+		TArray<uint8_t> reachable(nleaf, true);
+		memset(reachable.Data(), 0, nleaf);
+		if (Level->nodes.Size() == 0)
+		{
+			memset(reachable.Data(), 1, nleaf);
+		}
+		else
+		{
+			TArray<void *> stack;
+			stack.Push(Level->HeadNode());
+			while (stack.Size())
+			{
+				void *child = stack.Last();
+				stack.Pop();
+				if (IsLeaf(child)) reachable[Leaf(child)->Index()] = 1;
+				else
+				{
+					stack.Push(Node(child)->children[0]);
+					stack.Push(Node(child)->children[1]);
+				}
+			}
+		}
+
+		// Surfaces without a reachable leaf: the BSP leaf at their centre.
+		for (unsigned s = 0; s < nsurf; s++)
+		{
+			int leaf = Bake->SurfaceLeaf[s];
+			if (leaf >= 0 && leaf < (int)nleaf && reachable[leaf]) continue;
+			if (leaf >= 0 && leaf < (int)nleaf) cs.orphanSurfaces++;
+			else cs.fallbackLeaves++;
+			auto &surf = surfaces[s];
+			double x = 0, y = 0;
+			for (uint32_t i = 0; i < surf.numVertices; i++)
+			{
+				x += Bake->Vertices[surf.firstVertex + i].x;
+				y += Bake->Vertices[surf.firstVertex + i].y;
+			}
+			if (surf.numVertices) { x /= surf.numVertices; y /= surf.numVertices; }
+			Bake->SurfaceLeaf[s] = Level->PointInRenderSubsector(DVector2(x, y))->Index();
+		}
+
+		// Leaf -> surfaces (CSR) and triangle counts.
+		LeafStart.Resize(nleaf + 1);
+		LeafTris.Resize(nleaf);
+		for (auto &v : LeafStart) v = 0;
+		for (auto &v : LeafTris) v = 0;
+		for (unsigned s = 0; s < nsurf; s++)
+		{
+			int leaf = Bake->SurfaceLeaf[s];
+			LeafStart[leaf + 1]++;
+			LeafTris[leaf] += surfaces[s].numIndices / 3;
+		}
+		for (unsigned i = 0; i < nleaf; i++) LeafStart[i + 1] += LeafStart[i];
+		LeafSurfaces.Resize(nsurf);
+		{
+			TArray<uint32_t> fill(nleaf, true);
+			for (unsigned i = 0; i < nleaf; i++) fill[i] = LeafStart[i];
+			for (unsigned s = 0; s < nsurf; s++) LeafSurfaces[fill[Bake->SurfaceLeaf[s]]++] = s;
+		}
+
+		// Vertex z at the load heights.
+		Z.Resize(Bake->Vertices.Size());
+		for (unsigned i = 0; i < Z.Size(); i++) Z[i] = Bake->VertexZ(Level, Bake->Vertices[i]);
+
+		OldFirstIndex.Resize(nsurf);
+		for (unsigned s = 0; s < nsurf; s++) OldFirstIndex[s] = surfaces[s].firstIndex;
+		NewIndices.Grow(Bake->Indices.Size());
+		SecStamp.Resize(Level->sectors.Size());
+		for (auto &v : SecStamp) v = 0;
+		Visited.Resize(nleaf);
+		memset(Visited.Data(), 0, nleaf);
+
+		if (Level->nodes.Size() == 0)
+		{
+			for (unsigned i = 0; i < nleaf; i++)
+			{
+				Gather.Clear();
+				for (uint32_t k = LeafStart[i]; k < LeafStart[i + 1]; k++) Gather.Push(LeafSurfaces[k]);
+				EmitGroup(LeafTris[i] > Budget);
+			}
+		}
+		else
+		{
+						NodeTris.Resize(Level->nodes.Size());
+			Count(Level->HeadNode());
+			Emit(Level->HeadNode());
+			// Safety net: every leaf with surfaces is reachable after the remap above.
+			for (unsigned i = 0; i < nleaf; i++)
+			{
+				if (Visited[i] || LeafStart[i] == LeafStart[i + 1]) continue;
+				Gather.Clear();
+				for (uint32_t k = LeafStart[i]; k < LeafStart[i + 1]; k++) Gather.Push(LeafSurfaces[k]);
+				EmitGroup(LeafTris[i] > Budget);
+			}
+		}
+		if (NewIndices.Size() != Bake->Indices.Size())
+			Printf(TEXTCOLOR_RED "LevelMeshClusters: index count changed (%u -> %u)\n", Bake->Indices.Size(), NewIndices.Size());
+		assert(NewIndices.Size() == Bake->Indices.Size());
+		Bake->Indices = std::move(NewIndices);
+
+		// Sector -> clusters (CSR).
+		unsigned nsec = Level->sectors.Size();
+		auto &start = Bake->SectorClusterStart;
+		start.Resize(nsec + 1);
+		for (auto &v : start) v = 0;
+		for (auto sec : Bake->ClusterSectors) start[sec + 1]++;
+		for (unsigned i = 0; i < nsec; i++)
+		{
+			cs.maxSectorClusters = std::max(cs.maxSectorClusters, start[i + 1]);
+			start[i + 1] += start[i];
+		}
+		Bake->SectorClusters.Resize(Bake->ClusterSectors.Size());
+		{
+			TArray<uint32_t> fill(nsec, true);
+			for (unsigned i = 0; i < nsec; i++) fill[i] = start[i];
+			for (unsigned c = 0; c < Bake->Clusters.Size(); c++)
+			{
+				auto &cl = Bake->Clusters[c];
+				for (uint32_t k = cl.firstSector; k < cl.firstSector + cl.numSectors; k++)
+					Bake->SectorClusters[fill[Bake->ClusterSectors[k]]++] = c;
+			}
+		}
+
+		// Stats.
+		cs.clusters = Bake->Clusters.Size();
+		cs.triangles = Bake->Indices.Size() / 3;
+		cs.clusterSectorRefs = Bake->ClusterSectors.Size();
+		if (ClusterTris.Size())
+		{
+			for (auto t : ClusterTris) cs.histogram[std::min(t > 0 ? (t - 1) / 32 : 0u, 8u)]++;
+			std::sort(ClusterTris.begin(), ClusterTris.end());
+			cs.minTris = ClusterTris[0];
+			cs.maxTris = ClusterTris.Last();
+			cs.p50Tris = ClusterTris[ClusterTris.Size() / 2];
+			cs.p90Tris = ClusterTris[std::min(ClusterTris.Size() - 1, ClusterTris.Size() * 9 / 10)];
+		}
+	}
+};
+
+} // namespace
+
+//==========================================================================
+//
+// LevelMeshClusters_Build
+//
+//==========================================================================
+
+void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budget)
+{
+	double t0 = I_msTimeF();
+	bake->Clusters.Clear();
+	bake->ClusterSectors.Clear();
+	bake->ClusterSurfaces.Clear();
+	bake->ClusterStats = {};
+	bake->ClusterStats.budget = std::clamp(budget, 16, 65536);
+	if (bake->Surfaces.Size() > 0 && Level->subsectors.Size() > 0)
+	{
+		ClusterBuilder b;
+		b.Level = Level;
+		b.Bake = bake;
+		b.Budget = bake->ClusterStats.budget;
+		b.Build();
+	}
+	bake->SurfaceLeaf.Reset();
+	bake->Clusters.ShrinkToFit();
+	bake->ClusterSectors.ShrinkToFit();
+	bake->ClusterSurfaces.ShrinkToFit();
+	bake->ClusterStats.ms = I_msTimeF() - t0;
+}
+
+void LevelMeshBake::PrintClusterStats(const char *mapname) const
+{
+	auto &c = ClusterStats;
+	Printf("LevelMeshClusters %s: %u clusters (budget %u), %u triangles, %.1f ms; tris/cluster min %u p50 %u p90 %u max %u; histogram",
+		mapname, c.clusters, c.budget, c.triangles, c.ms, c.minTris, c.p50Tris, c.p90Tris, c.maxTris);
+	for (int i = 0; i < 9; i++) Printf(" %u", c.histogram[i]);
+	Printf("; chunked leaves %u (%u clusters), split surfaces %u, mixed-bucket clusters %u, cluster-sector refs %u, max sector fan-out %u, fallback leaves %u, hole surfaces %u\n",
+		c.chunkedLeaves, c.chunkClusters, c.splitSurfaces, c.mixedBucketClusters, c.clusterSectorRefs, c.maxSectorClusters, c.fallbackLeaves, c.orphanSurfaces);
+}

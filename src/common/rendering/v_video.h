@@ -37,6 +37,7 @@
 #include "vectors.h"
 
 struct FPortalSceneState;
+struct LevelMeshUploadData;
 class FSkyVertexBuffer;
 class IIndexBuffer;
 class IVertexBuffer;
@@ -176,6 +177,12 @@ public:
 		mShadowMap.SetAABBTree(tree);
 	}
 	virtual void SetLevelMesh(hwrenderer::LevelMesh *mesh) { }
+	// GPU-driven levelmesh (Vulkan only). SupportsLevelMesh(report) prints the
+	// missing features once per device when report is set.
+	virtual bool SupportsLevelMesh(bool report) { return false; }
+	virtual void SetLevelMeshData(const LevelMeshUploadData *data) { }	// nullptr releases
+	virtual bool LevelMeshResident(uint64_t id) { return false; }
+	virtual void PrintLevelMeshStats() { }
 	bool allowSSBO() const
 	{
 #ifndef HW_BLOCK_SSBO

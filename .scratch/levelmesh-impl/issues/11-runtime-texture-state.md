@@ -42,3 +42,16 @@
 - [ ] A lightmapped map passes A/B.
 
 ## Comments
+
+- 2026-10-13 (from 07):
+  - The texture table (`LevelMeshTextureEntry {slot, numLayers}`, per untranslated id) is
+    resolved once at upload, with the animation frame current at that time. Refreshing it on
+    animation is this ticket's job: re-queue the ids (`mPending`) and they are re-resolved at the
+    next `BeginFrame`.
+  - All descriptor writes are deferred to frame start, because ZVulkan does not enable
+    `descriptorBindingUpdateUnusedWhilePending`. Enabling it would be a subtree divergence;
+    only consider it if the one-frame latency shows.
+  - Indexed (palette) materials bind their base layer only.
+  - `LMSF_MASKED` from the bake is unreliable (textures unloaded at bake time; see 07
+    Comments). Bucket membership has to come from the material state here.
+

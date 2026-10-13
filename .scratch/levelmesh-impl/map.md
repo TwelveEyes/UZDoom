@@ -57,7 +57,11 @@ Required:
   (ticket 05).
 - Descriptor indexing: `runtimeDescriptorArray`, `descriptorBindingPartiallyBound`,
   `descriptorBindingVariableDescriptorCount`, `shaderSampledImageArrayNonUniformIndexing`, and
-  update-after-bind for sampled images.
+  update-after-bind for sampled images. These come from `OptionalDescriptorIndexing()`, with no
+  ZVulkan patch, and the bindless capacity must be at least 4096 (ticket 07).
+  `descriptorBindingUpdateUnusedWhilePending` is not enabled, so all levelmesh descriptor writes
+  happen at frame start.
+- Testing: `vk_levelmesh_forcemissing "<feature>,..."` (or `all`) fakes missing features.
 
 Optional:
 
@@ -273,7 +277,7 @@ are included.
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–05 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–07 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -333,4 +337,16 @@ ticket file, and decisions that change this map are written back here, under Dec
   - The bake has no effect on classic frames (pixel-identical with the cvar 0 vs 1).
   - New tools: `lm_bake_survey.py`, `lm_obj_compare.py`, and an `ABCAPTURE view` line.
   - Amended tickets: 07, 09, 12, 16.
+- 2026-10-13: ticket 07 resolved → `hw_levelmeshdata.h`, `hw_levelmeshclusters.cpp`,
+  `hw_levelmeshresources.cpp`, `vk_levelmesh.{h,cpp}`.
+  - No ZVulkan patch. `SupportsLevelMesh()` gates the bake.
+  - Clusters build in 0.03–0.06 µs/triangle. Section hole-fill subsectors (outside the BSP) are
+    assigned by point lookup.
+  - CPU geometry is freed after the upload.
+  - Bindless descriptor writes are deferred to frame start.
+  - UZDoom has no `vid_restart`; the residency check re-bakes if the device copy is ever lost.
+  - Validation clean apart from pre-existing classic errors. Classic is pixel-identical.
+  - Finding: the bake's `LMSF_MASKED` is unreliable (textures are unloaded at load), so buckets
+    move to runtime state (ticket 11).
+  - Amended tickets: 08, 09, 11.
 
