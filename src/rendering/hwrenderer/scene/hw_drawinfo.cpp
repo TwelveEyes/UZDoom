@@ -47,6 +47,12 @@ CVAR(Bool, gl_bandedswlight, false, CVAR_ARCHIVE)
 CVAR(Bool, gl_sort_textures, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Bool, gl_no_skyclear, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Int, gl_enhanced_nv_stealth, 3, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+// A/B debug override (levelmesh effort, ticket 03): render every view as a
+// plain fullbright scene - uniform white light, no fog, no dynamic lights, no
+// player special colormap - so geometry and visibility can be A/B-compared
+// before the levelmesh lighting exists. The levelmesh path honours the same
+// flag. No effect when off.
+CVAR(Bool, r_ab_fullbright, false, CVAR_NOSAVE)
 
 CVAR(Bool, gl_texture, true, 0)
 CVAR(Float, gl_mask_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
@@ -318,6 +324,12 @@ void HWDrawInfo::SetViewArea()
 int HWDrawInfo::SetFullbrightFlags(player_t *player)
 {
 	FullbrightFlags = 0;
+
+	if (r_ab_fullbright)
+	{
+		FullbrightFlags = Fullbright;
+		return CM_DEFAULT;
+	}
 
 	// check for special colormaps
 	player_t * cplayer = player? player->camera->player : nullptr;

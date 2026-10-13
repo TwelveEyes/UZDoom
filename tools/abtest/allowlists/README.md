@@ -1,79 +1,63 @@
-# Known-diff allowlists (levelmesh A/B)
+# Known-diff allowlists (levelmesh A/B, ADR 0002)
 
-Frozen per-map lists of tolerated pixel-diff clusters for the A/B
-comparator (`tools/abtest.py`). The policy below is the retired
-zero-tolerance policy that the tool still implements; ticket 03
-(`.scratch/levelmesh-impl/issues/03-ab-tooling-v2.md`) replaces it with
-tolerance + delta classes (`docs/adr/0002-delta-class-acceptance.md`):
+Per-map lists of reviewed, tolerated differences between the classic and levelmesh paths for
+`tools/abtest.py`. Policy: `docs/adr/0002-delta-class-acceptance.md`.
 
-- **Zero tolerance outside the allowlist.** Any diff pixel not covered by
-  an entry fails the run.
-- **The only legitimate source of a diff is z-fighting** — a structural
-  consequence of the levelmesh's true-z depth (ticket 04) vs the classic
-  path's normalized per-view depth range. A diff that is not a z-fight is
-  a real bug: fix the engine, do not allowlist it.
-- **Human-reviewed, shrink-only.** Every entry is a human-reviewed
-  z-fight. Entries can only be **removed** (re-review), never added
-  silently. `abtest.py record` stages clusters in
-  `pending/<map>.json` — reviewing and promoting an entry to
-  `<map>.json` is a manual, reasoned step, and pending files must never
-  be committed.
+## What passes without an entry
 
-## File format
+`ab_manifest.json` → `tolerance` (calibration recorded there):
 
-One JSON file per map: `allowlists/<map>.json` (`<map>` = the manifest
-`name`, e.g. `DOOM2_MAP01`).
+- a pixel counts as different only if its max per-channel delta exceeds `channel` (2);
+- differing pixels form 4-connected clusters, and clusters smaller than `min_cluster` (4 px)
+  are within tolerance.
+
+Classic vs classic on one backend is byte-identical, so the tolerance only absorbs levelmesh
+rasterization noise. Every larger cluster, and every game-state difference, needs an entry here.
+
+## Delta classes
+
+| class | meaning |
+|---|---|
+| DC1 | z-fight: coplanar/near-coplanar surfaces, either winner legitimate |
+| DC2 | float-z rounding: plane-anchored GPU z vs classic CPU z at sub-pixel edges |
+| DC3 | feedback latency: CPU consumers of GPU visibility lag ≤ the readback depth |
+| DC4 | dynamic-light selection: clustered binning vs per-surface lists at edges |
+| DC5 | visibility precision: exact depth visibility vs the clipper, for game-state sets |
+
+A new class needs an ADR 0002 amendment and a matching change to `CLASSES` in `abtest.py`.
+The tool rejects any other class.
+
+## File format (`<map>.json`, `ab-allowlist/2`)
 
 ```json
-{
-  "format": "ab-allowlist/1",
-  "map": "DOOM2_MAP01",
-  "frozen": true,
-  "entries": [
-    {
-      "mode": "static",
-      "tick": 32,
-      "cx": 1283.5,
-      "cy": 701.2,
-      "radius": 14.3,
-      "reason": "z-fighting: coplanar 3D-floor flats at the lift pit, classic depth-normalization winner vs true-z"
-    }
-  ]
-}
+{"format": "ab-allowlist/2", "map": "DOOM2_MAP01", "entries": [
+ {"kind": "pixels", "mode": "static", "tick": 96, "class": "DC1",
+  "rect": [600, 600, 640, 630], "cx": 620.0, "cy": 615.0, "radius": 25.0,
+  "reason": "floor/3D-plane z-fight at the lift edge", "reviewer": "gene", "date": "2026-10-13"},
+ {"kind": "gstate", "mode": "demo", "tick": 2599, "class": "DC5",
+  "subsectors": [63], "lines": [],
+  "reason": "...", "reviewer": "gene", "date": "2026-10-13"}]}
 ```
 
-Fields:
+- `tick: null` matches every tick of the mode.
+- A pixel cluster is covered if its bbox lies inside `rect`, or every pixel lies inside the
+  circle `(cx, cy, radius)`.
+- `gstate` entries cover the listed subsector / line indices whose exposure flags differ
+  (`--gamestate` runs). They must be DC5.
 
-| field    | type   | meaning |
-|----------|--------|---------|
-| `format`  | string | must be `ab-allowlist/1` |
-| `map`     | string | manifest map name (must match the file name) |
-| `frozen`  | bool   | `true` for committed allowlists (shrink-only) |
-| `entries[].mode`   | string | `static` or `demo` — entries apply to one capture mode only |
-| `entries[].tick`   | int\|null | capture tick the entry covers (`null` = any tick in this mode; prefer an exact tick) |
-| `entries[].cx/cy`  | number | circle center, pixels, top-left origin, at the pinned 2560×1440 |
-| `entries[].radius` | number | circle radius, pixels |
-| `entries[].reason` | string | what z-fights here and why either winner is legitimate — must state z-fighting |
+## Workflow (the human step is mandatory)
 
-**Coverage rule** (enforced by `abtest.py`): a diff cluster is covered
-iff **every pixel** of the cluster lies within some entry's circle for
-the same (map, mode, tick). Clusters are 4-connected components of the
-per-pixel diff bitmap.
+1. **Run.** `abtest.py run --only MAP` fails and writes crops to `<run>/<combo>/report/`, each
+   showing A | B | 4× diff.
+2. **Fix or stage.** A real bug gets fixed in the engine. Otherwise stage the candidates:
+   `abtest.py record MAP MODE <run>/<combo>/a <run>/<combo>/b [--gamestate]`. This writes
+   `pending/<map>.json` with class `UNREVIEWED` and reason `PENDING ...`. It never touches the
+   allowlist.
+3. **Review.** A human edits each pending entry: set a class and a concrete reason, or delete
+   the entry.
+4. **Promote.** `abtest.py promote MAP --reviewer NAME` moves only the reviewed entries,
+   stamping the reviewer and date; unreviewed ones stay pending.
+5. **Commit.** Commit `<map>.json`. `pending/` is gitignored.
 
-## Workflow
-
-1. First bring-up (ticket 09): run the matrix; every failing combo's
-   clusters are staged with
-   `abtest.py record <map> <mode> <backend> <dirA> <dirB>`.
-2. Review each staged cluster in `pending/<map>.json` (images are in the
-   run dir): real bug → fix the engine; z-fight → write a concrete
-   `reason`, keep the circle.
-3. Promote the true z-fights to `allowlists/<map>.json` (`frozen: true`),
-   delete the pending file, re-run the combo to confirm zero uncovered
-   pixels.
-4. After that, the allowlist is frozen: `abtest.py record` output for a
-   frozen map is a regression signal, not input.
-
-This directory starts empty of per-map JSONs on purpose: ticket 01's
-determinism bar is a classic-vs-classic zero-diff run with no
-allowlist in play.
+`abtest.py validate` checks the manifest and every allowlist (format, classes, required fields,
+no `PENDING` reasons).

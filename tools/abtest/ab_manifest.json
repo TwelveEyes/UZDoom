@@ -1,6 +1,6 @@
 {
- "format": "ab-manifest/1",
- "comment": "A/B capture manifest (ticket 01, spec .scratch/levelmesh-rendering/spec.md section 9). 26 acceptance maps x {static tick list, demo replay} x {gl33, vulkan}. static_ticks: dense generic list covering the first ~200 tics (spawn state, thinker init) plus candidate light-thinker/animated-flat boundary cadences (1-8 tics) and later ticks for slow thinkers. Per-map boundary pinning (exact light-thinker periods, door/lift transit tics) is pinned here at first bring-up (ticket 09) -- until then every map runs this list, and the determinism bar (run --determinism) is unaffected by list content. demo: the section-10 synthetic set in demos/ (2600 tics from level start), captured every 30 tics plus the last tic. Resolution 2560x1440 host-native (pinned; the resolution axis was dropped 2026-10-05).",
+ "format": "ab-manifest/2",
+ "comment": "A/B capture manifest v2 (.scratch/levelmesh-impl ticket 03; policy docs/adr/0002). 26 acceptance maps x {static tick list, demo replay}; levelmesh pairs are Vulkan-only (ab_backends). Demo mode replays the perf-baseline-v2 tour demos (demo_dir), captured every 30 tics plus the last. tolerance: per-pixel max-channel delta and minimum cluster size, from the ticket-03 calibration.",
  "resolution": [
   2560,
   1440
@@ -9,7 +9,24 @@
   "gl33": 0,
   "vulkan": 1
  },
+ "ab_backends": [
+  "vulkan"
+ ],
  "determinism_map": "DOOM2_MAP01",
+ "demo_dir": "demos/v2",
+ "tolerance": {
+  "channel": 2,
+  "min_cluster": 4,
+  "calibration": {
+   "date": "2026-10-13",
+   "machine": "reference (RX 7900 XTX, RADV / radeonsi)",
+   "map": "DOOM2_MAP01",
+   "same_backend": "classic Vulkan vs classic Vulkan, separate launches (driver restarts): static 30/30 and demo 87/87 ticks byte-identical across 3 launches each (max delta 0). Classic needs no tolerance; it exists only for the levelmesh.",
+   "cross_backend": "classic GL33 vs classic Vulkan (known-good, different rasterizer): static 0/30 identical, max delta 24, 62.5% of differing px at delta <= 2, every cluster above delta 8 is a single pixel; demo 0/87 identical, max delta 208, 1-px-wide column clusters up to 1004 px (texture column / edge sampling). This is an upper bound on legitimate rasterizer noise, far looser than a same-backend levelmesh pair should be; thresholds that pass it would hide real bugs.",
+   "choice": "channel 2 = one-shade colour rounding; min_cluster 4 = isolated edge-sample specks (< 2x2). Larger differences must be classified under a delta class (DC1 z-fight / DC2 float-z, ...) in a reviewed allowlist entry. Re-calibrate (abtest.py calibrate) if the reference machine or driver changes.",
+   "runs": "tools/abtest/runs/*-cal/calibration.json (local)"
+  }
+ },
  "static_ticks_default": [
   1,
   2,

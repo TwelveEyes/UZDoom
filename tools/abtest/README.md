@@ -8,6 +8,35 @@ work is tickets 02 (perf baseline v2) and 03 (A/B tooling v2) in
 committed home for demos, manifests, allowlists, and scripts; large perf
 logs stay local (`logs/`, `runs/` are gitignored).
 
+## A/B tooling v2 (current; ticket 03 of `.scratch/levelmesh-impl/`)
+
+`../abtest.py` compares classic (`gl_uselevelmesh 0`) with levelmesh (`1`) frames captured
+in the engine's A/B capture mode. There are two fresh level loads per map × mode, Vulkan only
+(manifest `ab_backends`).
+
+- **Manifest:** `ab_manifest.json` (`ab-manifest/2`).
+  - Demo mode replays the tour demos from `demos/v2/`; captures are every 30 tics plus the
+    last tic.
+  - `tolerance` holds the pass thresholds and their calibration.
+- **Tolerance + delta classes:** see `allowlists/README.md` (policy, file format, the
+  record → review → promote workflow).
+- **Commands:**
+  ```sh
+  abtest.py run --determinism            # classic vs classic, strict
+  abtest.py run [--only MAP] [--mode M]  # A/B; failing clusters cropped to <run>/<combo>/report/
+  abtest.py calibrate --mode static      # classic stats: Vulkan x3 launches, GL33 vs Vulkan
+  abtest.py diff | statediff | record | promote | validate
+  ```
+- **Flags:**
+  - `--gamestate` sets `r_ab_gamestate 1`: each capture also writes `<map>_<tick>.gstate`
+    (per-subsector `SSECMF_DRAWN`, per-line `ML_MAPPED`), and the two paths are set-diffed.
+  - `--fullbright` sets `r_ab_fullbright 1`: every view renders as a plain fullbright scene
+    (no light levels, fog, dynamic lights or special colormaps), for geometry/visibility A/B
+    before levelmesh lighting exists (ticket 08).
+- **Pins** (every run): `show_messages 0`. Notify lines tick through real-time startup tics,
+  so the tour demos' cheat messages made captures non-deterministic. `r_dynlights 0` stays
+  until ticket 19.
+
 ## Perf baseline v2 (current; ticket 02 of `.scratch/levelmesh-impl/`)
 
 Results: `results/baseline-v2.{md,json}`. The v1 baseline below is archived and invalid
@@ -21,8 +50,8 @@ changes listed here.
   `total`, as the frame time.
 - **Demos:** `make_demo.py --path tour` (default) warps the camera to 26 stops in the map's main
   playable area, with a 360° pan per stop; god + noclip. Output is in `demos/v2/`. `--path
-  vantage --at x,y --turn N` holds a single view. The v1 spiral is kept as `--path spiral` only
-  for the A/B demo mode, which still uses `demos/*.lmp` until ticket 03.
+  vantage --at x,y --turn N` holds a single view. The v1 spiral (`--path spiral`, `demos/*.lmp`)
+  is retired: since ticket 03 the A/B demo mode also uses `demos/v2/`.
 - **Vantages:** `select_vantages.py` picks the costliest sustained tour view per target map from
   `logs/v2_<MAP>_vulkan.perflog`, writes `demos/vantage/*.lmp`, and records them in
   `vantages.json`.

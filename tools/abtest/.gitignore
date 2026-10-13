@@ -8,3 +8,5 @@
 __pycache__/
 # Contact sheets (regenerate with contact_sheet.py)
 /sheets/
+# Allowlist candidates (abtest.py record) are never committed
+/allowlists/pending/

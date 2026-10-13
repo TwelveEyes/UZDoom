@@ -293,3 +293,9 @@ ticket file, and decisions that change this map are written back here, under Dec
     1536×864 window, so only the top-left of the window showed the frame
     (`vk_framebuffer.cpp`).
   - All Vulkan baseline sets re-measured after the fix (≤ ~5 % change); bars unchanged.
+- 2026-10-13: ticket 03 resolved.
+  - `abtest.py` v2: Vulkan pairs, tolerance (channel 2, min cluster 4, calibrated) + DC1–DC5
+    allowlists, record → review → promote, game-state set-diff.
+  - Engine debug cvars: `r_ab_fullbright` (ticket 08 uses it until ticket 10) and
+    `r_ab_gamestate`.
+  - A/B runs pin `show_messages 0`: notify lines made the demo captures non-deterministic.

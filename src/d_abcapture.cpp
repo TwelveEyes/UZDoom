@@ -144,6 +144,47 @@ CUSTOM_CVAR(String, r_ab_capture, "", CVAR_NOSAVE)
 	ParseValue(*self);
 }
 
+// Game-state dump (levelmesh effort, ticket 03): with r_ab_gamestate on,
+// every captured tick also writes <outdir>/<map>_<tick>.gstate holding the
+// automap exposure state the renderer feeds back into the game - the
+// per-subsector SSECMF_DRAWN and per-line ML_MAPPED flags - so tools/abtest.py
+// can set-diff it between the classic and levelmesh paths.
+CVAR(Bool, r_ab_gamestate, false, CVAR_NOSAVE)
+
+namespace
+{
+	// Bitset as lowercase hex, bit i = element i (LSB first within a byte).
+	template<class Pred>
+	void WriteBits(FILE *f, unsigned count, Pred pred)
+	{
+		for (unsigned i = 0; i < count; i += 8)
+		{
+			unsigned b = 0;
+			for (unsigned k = 0; k < 8 && i + k < count; k++)
+				if (pred(i + k)) b |= 1u << k;
+			fprintf(f, "%02x", b);
+		}
+		fputc('\n', f);
+	}
+
+	void WriteGameState(const char *path, FLevelLocals *L)
+	{
+		FILE *f = fopen(path, "w");
+		if (f == nullptr)
+		{
+			Printf(AbCapturePrint, "ABCAPTURE: cannot write %s\n", path);
+			return;
+		}
+		fprintf(f, "gstate 1 map=%s tick=%d subsectors=%u lines=%u\n", L->MapName.GetChars(), AbCaptureTic,
+			L->subsectors.Size(), L->lines.Size());
+		fprintf(f, "S ");
+		WriteBits(f, L->subsectors.Size(), [&](unsigned i) { return (L->subsectors[i].flags & SSECMF_DRAWN) != 0; });
+		fprintf(f, "L ");
+		WriteBits(f, L->lines.Size(), [&](unsigned i) { return (L->lines[i].flags & ML_MAPPED) != 0; });
+		fclose(f);
+	}
+}
+
 //==========================================================================
 //
 // AbCapture_BeginRenderPass
@@ -242,6 +283,12 @@ void AbCapture_FrameComposed ()
 	path.Format("%s/%s_%d.png", OutDir.GetChars(), MapName.GetChars(), AbCaptureTic);
 	M_ScreenShot(path.GetChars());
 	Printf(AbCapturePrint, "ABCAPTURE %s\n", path.GetChars());
+	if (r_ab_gamestate && CapturedLevel != nullptr)
+	{
+		FString gpath;
+		gpath.Format("%s/%s_%d.gstate", OutDir.GetChars(), MapName.GetChars(), AbCaptureTic);
+		WriteGameState(gpath.GetChars(), CapturedLevel);
+	}
 
 	bool all = true;
 	for (const auto &t : Ticks)
