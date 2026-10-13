@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model, Shading resolve.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 10
 
 ## What to build

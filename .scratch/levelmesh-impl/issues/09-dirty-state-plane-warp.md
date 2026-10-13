@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model (State buffers, Plane-anchored vertices), Frame model (CPU step 1).
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 08
 
 ## What to build
@@ -19,6 +19,14 @@
   values used for that frame.
 - **Cluster z-range refresh.** When a sector's planes change, recompute the z-ranges of its
   back-linked clusters and upload them dirty-only. The cull must stay conservative mid-frame.
+  - Ticket 05 findings:
+    - Upload through a host-visible update list plus **one compute scatter** dispatch. Do not use
+      a `VkBufferCopy` region per record: those cost 0.16–0.30 ms of GPU time per frame on Pirates
+      MAP49, where two moving planes of big sectors fan out to 508–966 clusters.
+    - Expect that fan-out. With the scatter, 1796 dirty clusters cost 0.006 ms GPU and 2000
+      moving planes about 0.1 ms CPU.
+    - The moving planes per frame are exactly the interpolator's `DSectorPlaneInterpolation`
+      list.
 - **Warp everywhere.** Doors, lifts, crushers, scrollers' plane `TexZ`, transdoor (z−1 floors, from
   the bake), and sector_link-moved sectors all move through the same plane-anchored path.
 - Measure the upload volume and CPU time per frame in `r_perflog`.

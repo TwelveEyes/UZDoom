@@ -61,6 +61,8 @@ changes listed here.
   ./run_matrix.sh --demos demos/vantage --tag vant --tics 1050              # vantages
   ./run_matrix.sh --demos demos/v2 --tag mon --monsters --only SOS_MAP32    # monsters
   ```
+  `--set 'CVAR VALUE'` (repeatable) adds a `+set` to every run, e.g. `--set "gl_multisample 4"`;
+  `contact_sheet.py --set` does the same for review sheets.
   The driver detects the end of a timedemo from the perflog and terminates the engine at the end
   dialog, which would otherwise wait for a user. The engine runs under `stdbuf -oL` so its
   stdout survives that kill.

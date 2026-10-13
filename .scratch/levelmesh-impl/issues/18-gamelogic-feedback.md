@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Acceptance policy (DC3, DC5); `../research/02-consumer-inventory.md`.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 17
 
 ## What to build

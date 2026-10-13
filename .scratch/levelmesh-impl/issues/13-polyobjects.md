@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model (State buffers: polyobject transforms).
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 09
 
 ## What to build

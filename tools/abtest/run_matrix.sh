@@ -31,7 +31,8 @@
 #   run_matrix.sh --demos demos/vantage --tag vant --tics 1050
 #   run_matrix.sh --demos demos/v2 --tag mon --monsters --only SOS
 # --demos  demo directory (default demos/); --tag  log-name prefix;
-# --monsters  drop -nomonsters; --tics  demo length for the completion check.
+# --monsters  drop -nomonsters; --tics  demo length for the completion check;
+# --set 'CVAR VALUE'  extra +set on the engine command line (repeatable).
 # Every run loads baseline.cfg (incl. r_ticstability 0, perf baseline v2).
 # Status: tools/abtest/logs/status.tsv (demo, backend, exit, verdict,
 # wall_s, lline).
@@ -50,6 +51,7 @@ DEMODIR="$KIT/demos"
 TAG=""
 MONSTERS=0
 TICS=2600
+SETS=()
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -59,6 +61,7 @@ while [ $# -gt 0 ]; do
 	--tag) TAG="$2_"; shift 2 ;;
 	--monsters) MONSTERS=1; shift ;;
 	--tics) TICS="$2"; shift 2 ;;
+	--set) SETS+=(+set ${2%% *} "${2#* }"); shift 2 ;;
 	*) echo "unknown arg: $1" >&2; exit 2 ;;
 	esac
 done
@@ -197,6 +200,7 @@ for demo in $DEMOS; do
 				-exec "$KIT/baseline.cfg" \
 				+set vid_preferbackend "$N" \
 				+set r_perflog "$PLOG" \
+				"${SETS[@]}" \
 				-timedemo "$DEMODIR/$demo.lmp" \
 				> "$OUT" 2>&1
 		) &

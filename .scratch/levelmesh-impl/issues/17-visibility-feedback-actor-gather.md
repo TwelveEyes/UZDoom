@@ -3,7 +3,7 @@
 **Map:** `../map.md`: Frame model (GPU step 7; CPU step 3), Acceptance policy DC3;
 `../research/02-consumer-inventory.md`.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 15
 
 ## What to build
@@ -26,6 +26,10 @@ Replace the BSP walk's role as the source of "what is visible" for CPU consumers
 - **Decal gather.** Decals of visible sides (same source) go to the existing decal draw.
 - **Dynamic-light list inputs** for sprites and models stay classic (ticket 19 covers walls / flats).
 - **Shared order.** Portal views (ticket 15) use the same gather with their own bitsets.
+
+Ticket 05: the visibility must be occlusion-accurate (two-phase Hi-Z). A frustum-only set
+over-includes massively: on myhouse MAP01 V1, 2104 frustum clusters against 76 Hi-Z-visible. That
+would bloat the CPU sprite gather and the ticket-18 exposure marks.
 
 ## Acceptance
 

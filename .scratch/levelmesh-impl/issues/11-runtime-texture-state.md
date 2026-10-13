@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model (State buffers: side state, plane xform, translation table), Shaders.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 10
 
 ## What to build

@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model (Bake, Plane-anchored vertices, Surfaces). ADR 0003.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 01, 05
 
 ## What to build

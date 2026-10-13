@@ -50,8 +50,11 @@ The success measure is performance (§ Perf bars). Visual parity is gated by the
 
 Required:
 
-- Vulkan 1.2 with `drawIndirectCount` and `multiDrawIndirect` (already required by ZVulkan).
-- `shaderDrawParameters` (`gl_DrawID` / base instance).
+- `VK_KHR_draw_indirect_count`, requested through `VulkanDeviceBuilder::OptionalExtension` (ticket
+  05: no ZVulkan patch needed), and `multiDrawIndirect` (already required by ZVulkan). ZVulkan's
+  feature struct has no Vulkan 1.2 core `drawIndirectCount`.
+- The surface index travels as a `flat` vertex attribute, so `shaderDrawParameters` is not needed
+  (ticket 05).
 - Descriptor indexing: `runtimeDescriptorArray`, `descriptorBindingPartiallyBound`,
   `descriptorBindingVariableDescriptorCount`, `shaderSampledImageArrayNonUniformIndexing`, and
   update-after-bind for sampled images.
@@ -101,8 +104,8 @@ carries:
 
 **Clusters.**
 
-- Spatial groups of surfaces, built from BSP subtrees and cut when a subtree reaches a target
-  triangle budget (~64–256 triangles; ticket 07 tunes this).
+- Spatial groups of surfaces, built from BSP subtrees and cut when a subtree reaches a
+  **256-triangle** budget (ticket 05; a leaf over budget is split into chunks).
 - Each cluster record holds an xy AABB, a z-range, a triangle range in a cluster-ordered index
   buffer, and its bucket membership.
 - The z-range is refreshed through sector→cluster back-links when a referenced plane moves
@@ -223,6 +226,12 @@ are included.
 - **GPU visibility:** per-phase GPU timestamps (cull, draw, Hi-Z) arrive with tickets 05/08 and
   are reported alongside these bars, without a separate bar. The `wall` bars already catch a
   GPU-bound regression.
+  - The frame is CPU/GPU serialized: `WaitForCommands` waits for every fence at frame end, so
+    GPU time adds directly to `wall`.
+  - Ticket 05 measured the fixed per-view GPU cost at about 0.08 ms (two-phase Hi-Z, budget 256),
+    so B1's 0.10 ms slack stands.
+  - The bars do not assume that Hi-Z beats a no-cull draw. On the reference GPU it does not
+    (research 05).
 - A low-end GPU run is reported when one is available. It is informational, not a gate.
 
 ## Standing constraints (every ticket)
@@ -264,8 +273,8 @@ are included.
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–05 are `ready-for-agent`. Tickets 06–21 are `needs-triage` until the ticket 05 gate
-resolves; the spike's findings may change them, and a no-go stops the effort for a re-plan.
+Tickets 01–05 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
 
@@ -301,3 +310,17 @@ ticket file, and decisions that change this map are written back here, under Dec
   - A/B runs pin `show_messages 0`: notify lines made the demo captures non-deterministic.
 - 2026-10-12: ticket 04 resolved. No VKDoom code or architecture (user rule); prior art is
   lessons only → research/04-prior-art-vkdoom.md.
+- 2026-10-13: ticket 05 resolved, **go-with-changes** (user decision) → research/05-spike-results.md.
+  - Mesh-only frames: B2 1.4–6.8 %, B3 ≤ 0.07 ms, fixed per-view GPU cost ~0.08 ms.
+  - No-cull is as fast as or faster than GPU culling in GPU time on the 7900 XTX.
+  - **Two-phase Hi-Z is kept as the visibility source** for tickets 10/17/18, not as a frame-cost
+    win. The bars do not depend on it.
+  - **Cluster budget 256.**
+  - Amended tickets:
+    - 07: KHR draw-indirect-count, surface id as a vertex attribute.
+    - 08: few indirect draws per bucket, floor-rounded Hi-Z mips, compute depth barriers, the
+      pass-split seam, an MSAA policy, a no-cull diagnostic arm.
+    - 09: compute scatter for dirty clusters; budget for fan-out from big sectors.
+    - 10 / 17: depend on Hi-Z visibility.
+  - `run_matrix.sh` / `contact_sheet.py` gained `--set`.
+  - Tickets 06–21 → `ready-for-agent`.

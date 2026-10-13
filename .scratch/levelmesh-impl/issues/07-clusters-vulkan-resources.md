@@ -2,18 +2,24 @@
 
 **Map:** `../map.md`: Device requirements, Data model (Clusters, State buffers).
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 06
 
 ## What to build
 
-- **Feature gating.** Request the required Vulkan 1.2 features through ZVulkan's
-  `VulkanDeviceBuilder`: descriptor indexing, `drawIndirectCount`, `shaderDrawParameters`
-  (`multiDrawIndirect` is already required). Expose a `SupportsLevelMesh()` capability. If ZVulkan
+- **Feature gating.** Request what is required through ZVulkan's `VulkanDeviceBuilder`:
+  - descriptor indexing;
+  - `VK_KHR_draw_indirect_count` via `OptionalExtension` (ticket 05 used volk's
+    `vkCmdDrawIndexedIndirectCountKHR` with no ZVulkan patch; ZVulkan has no Vulkan 1.2 core
+    feature struct);
+  - `multiDrawIndirect`, which is already required.
+
+  Carry the surface index as a `flat` vertex attribute, so `shaderDrawParameters` is not needed. Expose a `SupportsLevelMesh()` capability. If ZVulkan
   needs changes, keep them minimal and flag them as subtree divergence in Comments. On capability
   failure, `gl_uselevelmesh` silently uses classic, with one console message.
 - **Clustering.**
-  - Walk the BSP and cut subtrees into clusters at the triangle budget chosen in ticket 05.
+  - Walk the BSP and cut subtrees into clusters at a **256-triangle** budget (ticket 05). A leaf
+    over budget is split into chunks.
   - Assign walls by the seg's subsector and flats by subsector.
   - Order the index buffer by cluster.
   - Each cluster record holds: xy AABB, z-range from load heights, index range, bucket mask, and a
@@ -42,5 +48,12 @@
       Linear build.
 - [ ] Resources survive `vid_restart` and map changes. No validation-layer errors (`vk_debug 1`).
 - [ ] Classic path and `VkRaytrace` unaffected.
+
+## Notes from ticket 05
+
+- The spike's cluster build (`spike-05-gpucull`: `src/rendering/hwrenderer/spike_mesh.cpp`) took
+  36 ms for SOS MAP32 (487k triangles) and 86–90 ms for myhouse MAP01 (1.18 M), unoptimized.
+- Dirty uploads: use a host-visible update list plus a compute scatter (ticket 09), not per-record
+  `VkBufferCopy` regions. The staging ring here should allow for that.
 
 ## Comments

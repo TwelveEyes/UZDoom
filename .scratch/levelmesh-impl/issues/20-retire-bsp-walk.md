@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Transitional strategy, Frame model (end state), Perf bars.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 11, 13, 16, 18, 19
 
 ## What to build

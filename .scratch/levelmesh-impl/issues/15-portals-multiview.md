@@ -3,7 +3,7 @@
 **Map:** `../map.md`: Frame model, Clusters ("spatial only; portal topology separate"),
 `../research/03-portal-flow.md`.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 12, 14
 
 ## What to build

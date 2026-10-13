@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Acceptance policy, Perf bars.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 03, 20
 
 ## What to build

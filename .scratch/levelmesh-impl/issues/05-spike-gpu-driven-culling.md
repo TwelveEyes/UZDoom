@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Transitional strategy (the go/no-go gate), Frame model.
 **Type:** prototype
-**Status:** ready-for-agent
+**Status:** resolved
 **Blocked by:** 02, 04
 
 ## Question
@@ -52,9 +52,37 @@ The user decides. A no-go stops tickets 06+ for a re-plan.
 
 ## Acceptance
 
-- [ ] Numbers for every stress vantage and the four cluster budgets, plus the no-cull arm and the
+- [x] Numbers for every stress vantage and the four cluster budgets, plus the no-cull arm and the
   moving-sector vantage.
-- [ ] Clear recommendation; user decision recorded in `../map.md` Decisions log.
-- [ ] Tickets 06–21 updated (triaged to `ready-for-agent`, or changed) according to the findings.
+- [x] Clear recommendation; user decision recorded in `../map.md` Decisions log.
+- [x] Tickets 06–21 updated (triaged to `ready-for-agent`, or changed) according to the findings.
 
 ## Comments
+
+- 2026-10-13 (resolved): results in `../research/05-spike-results.md`. The spike code is on branch
+  `spike-05-gpucull` (throwaway, never merged).
+  - Mesh-only frames (no `CreateScene`, no BSP walk), measured against classic Vulkan:
+    - wall p95 is 1.4–6.8 % of classic on the seven heavy vantages (B2 passes);
+    - render CPU p95 is 0.05–0.07 ms everywhere (B3 passes);
+    - the fixed GPU cost per view is about 0.08 ms (fits B1's 0.10 ms slack).
+  - The projected end state, with classic sprites and a pessimistic shading allowance, is
+    10–40 % of classic wall.
+  - No-cull (Helion-style) is as fast as or faster than GPU culling in GPU time on the 7900 XTX,
+    with or without synthetic shading load. Culling's value is the visibility set for tickets
+    10/17/18 and for weak GPUs, not frame cost here.
+  - Under shading load, GPU cost follows the number of indirect draws.
+  - Moving sectors: 2000 lifts cost 0.1 ms CPU (linear in moving planes) plus a 0.006 ms GPU
+    scatter. No re-bake.
+  - Trap: per-record copy regions cost 0.16–0.30 ms of GPU time when big sectors fan out to
+    hundreds of clusters. A compute scatter fixes it.
+  - Other surprises:
+    - Vulkan mips round down, which broke the first Hi-Z;
+    - `VkImageTransition` has no compute stage;
+    - the frame is CPU/GPU serialized (`WaitForCommands`);
+    - MSAA 4× Hi-Z build costs 0.26 ms;
+    - `VK_KHR_draw_indirect_count` works without a ZVulkan patch.
+  - **User decision (2026-10-13):** go-with-changes. Two-phase Hi-Z is kept as the visibility
+    source (the bars do not assume it beats no-cull). Cluster budget 256. The `--set` option of
+    `run_matrix.sh` / `contact_sheet.py` was ported to the main branch.
+  - Tickets 06–21 were triaged to `ready-for-agent`, and 07 / 08 / 09 / 10 / 17 were amended with
+    the findings.

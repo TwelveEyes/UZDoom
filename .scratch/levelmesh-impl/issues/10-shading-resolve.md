@@ -2,12 +2,14 @@
 
 **Map:** `../map.md`: Frame model (Shading resolve).
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 09
 
 ## What to build
 
-A compute pass, run per view after each cull phase, over the visible surfaces only. It writes one
+A compute pass, run per view after each cull phase, over the visible surfaces only. The visible
+set comes from the two-phase Hi-Z cull (ticket 05 decision: Hi-Z is kept as the visibility
+source). It writes one
 compact resolved shading record per surface:
 
 - effective light, `RescaleLightLevel`, rel light (fake contrast: baked rel pair; smooth / classic

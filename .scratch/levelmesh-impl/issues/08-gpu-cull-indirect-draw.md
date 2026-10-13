@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Frame model (GPU, per view), Shaders, Transitional strategy.
 **Type:** task
-**Status:** needs-triage (pending the 05 gate)
+**Status:** ready-for-agent
 **Blocked by:** 03, 07
 
 ## What to build
@@ -14,8 +14,8 @@ The first real levelmesh draw, main view only, on Vulkan:
   - phase 1: frustum-test last frame's visible clusters, then write `VkDrawIndexedIndirectCommand`s
     per bucket (opaque, masked) plus atomic counts;
   - draw with `vkCmdDrawIndexedIndirectCount`;
-  - Hi-Z build: a depth pyramid built from the scene depth (handle MSAA depth: resolve with
-    max/min, or build from sample 0, as chosen in ticket 05);
+  - Hi-Z build: a max-depth pyramid built from the scene depth (MSAA: see the findings below;
+    sample 0 alone is not conservative);
   - phase 2: the remaining clusters, frustum plus Hi-Z;
   - update the bitset.
 - **Render-pass integration.** Compute must run outside a render pass. Add an explicit
@@ -39,6 +39,31 @@ The first real levelmesh draw, main view only, on Vulkan:
   - The classic walk still runs (transitional).
 - **Perflog.** GPU timestamps per phase in new `r_perflog` columns, plus counts of clusters and
   triangles drawn.
+
+### Ticket 05 findings to apply (research 05)
+
+- **Draw count.** Under shading load, GPU cost follows the number of indirect draws, not the
+  triangles: 2367 per-cluster draws cost 1.6 ms where one draw cost 1.0 ms. Keep the draws per
+  bucket low. Measure Ironwail-style index compaction (one draw per bucket) against per-cluster
+  commands.
+- **Hi-Z role.** Hi-Z is the visibility source for tickets 10/17/18. It is not a frame-cost
+  optimization: on the 7900 XTX a no-cull draw is as fast or faster. Keep a no-cull diagnostic
+  mode for A/B and low-end comparisons. Report the GPU timings of both.
+- **Hi-Z mips round down** (Vulkan mip sizes). The last row and column of an odd-sized level must
+  also take the extra source texel. Ceil-halved sizes silently drop texels and cull visible
+  geometry.
+- **Depth barriers.** `VkImageTransition` only knows fragment-stage shader reads, and render
+  passes do not update `VkTextureImage::Layout`. Use explicit barriers: attachment → shader-read
+  for compute → back. Alternatively, extend the helper.
+- **Pass split.** The prototype seam is `VkRenderState::SpikeBeginPass()`. It begins or continues
+  the scene pass and re-applies the viewport/scissor. `EndRenderPass()` afterwards rebinds the
+  classic state. The first levelmesh pass consumes the pending scene clear.
+- **MSAA.** A conservative mip 0 (max over samples) costs 0.26 ms at 4× vs 0.03 ms without MSAA.
+  Choose a policy: lower-resolution mip 0, a `VK_KHR_depth_stencil_resolve` MAX resolve, or no
+  Hi-Z under MSAA.
+- **Verification.** The spike's check is cheap and strong: two-phase output must match
+  frustum-only output pixel for pixel, up to z-fight pixels, on a moving tour in the A/B capture
+  mode (one sim tic per frame).
 
 ## Acceptance
 
