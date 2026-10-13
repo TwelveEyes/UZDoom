@@ -33,6 +33,7 @@
 #include "g_game.h"
 #include "am_map.h"
 #include "i_interface.h"
+#include "spike_mesh.h"
 
 extern gamestate_t wipegamestate;
 extern uint8_t globalfreeze, globalchangefreeze;
@@ -260,6 +261,7 @@ void P_Ticker (void)
 		// [ZZ] call the WorldTick hook
 		Level->localEventManager->WorldTick();
 		Level->Tick();			// [RH] let the level tick
+		Spike_TickMovers(Level);	// ticket 05 spike (throwaway)
 		Level->Thinkers.RunThinkers(Level);
 
 		//if added by MC: Freeze mode.

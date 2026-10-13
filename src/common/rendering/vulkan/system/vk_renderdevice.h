@@ -43,6 +43,7 @@ class VkHardwareDataBuffer;
 class VkHardwareTexture;
 class VkRenderBuffers;
 class VkPostprocess;
+class VkSpikeCull;
 
 class VulkanRenderDevice : public SystemBaseFrameBuffer
 {
@@ -89,6 +90,11 @@ public:
 	void AmbientOccludeScene(float m5) override;
 	void SetSceneRenderTarget(bool useSSAO) override;
 	void SetLevelMesh(hwrenderer::LevelMesh* mesh) override;
+	bool SpikeSupported() override;
+	void SpikeSetMesh(const SpikeMeshData *data) override;
+	void SpikeUpdateClusters(const SpikeClusterUpdate *updates, unsigned count) override;
+	void SpikeRender(const SpikeView &view) override;
+	void SpikeSceneTimestamp(bool begin) override;
 	void UpdateShadowMap() override;
 	void SetSaveBuffers(bool yes) override;
 	void ImageTransitionScene(bool unknown) override;
@@ -132,6 +138,7 @@ private:
 	std::unique_ptr<VkRenderPassManager> mRenderPassManager;
 	std::unique_ptr<VkRaytrace> mRaytrace;
 	std::unique_ptr<VkRenderState> mRenderState;
+	std::unique_ptr<VkSpikeCull> mSpikeCull;
 
 	VkRenderBuffers *mActiveRenderBuffers = nullptr;
 

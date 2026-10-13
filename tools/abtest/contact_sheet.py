@@ -52,6 +52,8 @@ def main():
     ap.add_argument("--cols", type=int, default=6)
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--set", action="append", default=[], metavar="'CVAR VALUE'",
+                    help="extra cvar pin (repeatable; spike05)")
     a = ap.parse_args()
 
     if a.ticks:
@@ -70,6 +72,8 @@ def main():
     with open(pins, "w") as f:
         f.write(PINS.format(cfg=os.path.join(KIT, "baseline.cfg"), backend=a.backend,
                             ticks=",".join(map(str, ticks)), outdir=shots))
+        for kv in a.set:
+            f.write(f"set {kv}\n")
     cmd = [os.path.join(BUILD, "uzdoom"), "-iwad", os.path.join("wads", a.iwad),
            "-nomonsters", "-rngseed", "12345", "-width", "1280", "-height", "720",
            "-exec", pins, "-playdemo", os.path.abspath(a.demo)]

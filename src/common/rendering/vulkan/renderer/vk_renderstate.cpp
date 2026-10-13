@@ -503,6 +503,23 @@ void VkRenderState::EndRenderPass()
 	}
 }
 
+VulkanCommandBuffer *VkRenderState::SpikeBeginPass()
+{
+	if (!mCommandBuffer)
+	{
+		mCommandBuffer = fb->GetCommands()->GetDrawCommands();
+		BeginRenderPass(mCommandBuffer);
+	}
+	mPipelineKey = {};
+	mScissorChanged = true;
+	mViewportChanged = true;
+	mStencilRefChanged = true;
+	mBias.mChanged = true;
+	ApplyScissor();
+	ApplyViewport();
+	return mCommandBuffer;
+}
+
 void VkRenderState::EndFrame()
 {
 	mMatrixBufferWriter.Reset();

@@ -37,6 +37,9 @@
 #include "vectors.h"
 
 struct FPortalSceneState;
+struct SpikeMeshData;
+struct SpikeClusterUpdate;
+struct SpikeView;
 class FSkyVertexBuffer;
 class IIndexBuffer;
 class IVertexBuffer;
@@ -176,6 +179,12 @@ public:
 		mShadowMap.SetAABBTree(tree);
 	}
 	virtual void SetLevelMesh(hwrenderer::LevelMesh *mesh) { }
+	// Ticket 05 spike (throwaway): GPU-driven cluster cull prototype. Vulkan only.
+	virtual bool SpikeSupported() { return false; }
+	virtual void SpikeSetMesh(const SpikeMeshData *data) { }
+	virtual void SpikeUpdateClusters(const SpikeClusterUpdate *updates, unsigned count) { }
+	virtual void SpikeRender(const SpikeView &view) { }
+	virtual void SpikeSceneTimestamp(bool begin) { }
 	bool allowSSBO() const
 	{
 #ifndef HW_BLOCK_SSBO

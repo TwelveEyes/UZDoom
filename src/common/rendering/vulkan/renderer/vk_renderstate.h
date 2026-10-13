@@ -71,6 +71,18 @@ public:
 	void EndRenderPass();
 	void EndFrame();
 
+	// Ticket 05 spike: begin (or continue) the current render pass for an external pipeline.
+	// Call EndRenderPass() afterwards so the classic state is rebound.
+	VulkanCommandBuffer *SpikeBeginPass();
+	VulkanRenderPass *SpikeGetRenderPass() { return mPassSetup->GetRenderPass(0); }
+	int SpikeGetDrawBuffers() const { return mRenderTarget.DrawBuffers; }
+	VkSampleCountFlagBits SpikeGetSamples() const { return mRenderTarget.Samples; }
+	void SpikeGetViewport(int &x, int &y, int &w, int &h) const
+	{
+		if (mViewportWidth >= 0) { x = mViewportX; y = mViewportY; w = mViewportWidth; h = mViewportHeight; }
+		else { x = 0; y = 0; w = mRenderTarget.Width; h = mRenderTarget.Height; }
+	}
+
 protected:
 	void Apply(int dt);
 	void ApplyRenderPass(int dt);

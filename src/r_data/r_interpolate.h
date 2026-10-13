@@ -27,6 +27,7 @@
 #include "dobject.h"
 
 struct FLevelLocals;
+void R_SpikeCollectMovingPlanes(FLevelLocals *Level, TArray<int> &out);	// ticket 05 spike
 //==========================================================================
 //
 //
@@ -36,6 +37,7 @@ struct FLevelLocals;
 class DInterpolation : public DObject
 {
 	friend struct FInterpolator;
+	friend void R_SpikeCollectMovingPlanes(FLevelLocals *Level, TArray<int> &out);
 
 	DECLARE_ABSTRACT_CLASS(DInterpolation, DObject)
 	HAS_OBJECT_POINTERS

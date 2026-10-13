@@ -50,6 +50,7 @@ DEMODIR="$KIT/demos"
 TAG=""
 MONSTERS=0
 TICS=2600
+SETS=()
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -59,6 +60,7 @@ while [ $# -gt 0 ]; do
 	--tag) TAG="$2_"; shift 2 ;;
 	--monsters) MONSTERS=1; shift ;;
 	--tics) TICS="$2"; shift 2 ;;
+	--set) SETS+=(+set ${2%% *} "${2#* }"); shift 2 ;;
 	*) echo "unknown arg: $1" >&2; exit 2 ;;
 	esac
 done
@@ -197,6 +199,7 @@ for demo in $DEMOS; do
 				-exec "$KIT/baseline.cfg" \
 				+set vid_preferbackend "$N" \
 				+set r_perflog "$PLOG" \
+				"${SETS[@]}" \
 				-timedemo "$DEMODIR/$demo.lmp" \
 				> "$OUT" 2>&1
 		) &

@@ -55,6 +55,8 @@ public:
 	void UpdateInterpolation();
 	void Restore();
 	void Interpolate(double smoothratio);
+	sector_t *SpikeSector() const { return sector; }
+	bool SpikeCeiling() const { return ceiling; }
 
 	virtual void Serialize(FSerializer &arc);
 	size_t PropagateMark();
@@ -966,5 +968,26 @@ void FPolyObj::StopInterpolation()
 	if (interpolation != nullptr)
 	{
 		interpolation->DelRef();
+	}
+}
+
+//==========================================================================
+//
+// Ticket 05 spike (throwaway): list the sector planes that are moving this
+// frame (every moving plane has a live plane interpolation).
+// out receives sectorindex * 2 + (ceiling ? 1 : 0).
+//
+//==========================================================================
+
+void R_SpikeCollectMovingPlanes(FLevelLocals *Level, TArray<int> &out)
+{
+	out.Clear();
+	for (DInterpolation *probe = Level->interpolator.Head; probe != nullptr; probe = probe->Next)
+	{
+		if (probe->IsKindOf(RUNTIME_CLASS(DSectorPlaneInterpolation)))
+		{
+			auto p = static_cast<DSectorPlaneInterpolation *>(probe);
+			out.Push(p->SpikeSector()->Index() * 2 + (p->SpikeCeiling() ? 1 : 0));
+		}
 	}
 }

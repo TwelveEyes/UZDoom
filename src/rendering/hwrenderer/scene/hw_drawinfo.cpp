@@ -24,6 +24,8 @@
 #include "hw_portal.h"
 #include "hw_renderstate.h"
 #include "hw_drawinfo.h"
+#include "hw_spike.h"
+#include "spike_mesh.h"
 #include "po_man.h"
 #include "models.h"
 #include "hw_clock.h"
@@ -1044,22 +1046,41 @@ void HWDrawInfo::DrawScene(int drawmode)
 		ssao_portals_available--;
 	}
 
-	if (vp.camera != nullptr)
+	// Ticket 05 spike: mesh-only modes skip the classic scene build entirely.
+	int spikemode = drawmode == DM_MAINVIEW ? Spike_Frame(Level) : SPIKE_OFF;
+	auto& RenderState = *screen->RenderState();
+
+	if (spikemode != SPIKE_OFF)
 	{
-		ActorRenderFlags savedflags = vp.camera->renderflags;
-		CreateScene(drawmode == DM_MAINVIEW);
-		vp.camera->renderflags = savedflags;
+		SpikeView sv;
+		VSMatrix mvp = VPUniforms.ProjectionMatrix;
+		mvp.multMatrix(VPUniforms.ViewMatrix);
+		memcpy(sv.mvp, mvp.get(), sizeof(sv.mvp));
+		sv.mode = spikemode;
+		RenderState.SetDepthMask(true);
+		screen->SpikeRender(sv);
 	}
 	else
 	{
-		CreateScene(false);
+		if (drawmode == DM_MAINVIEW)
+			screen->SpikeSceneTimestamp(true);
+
+		if (vp.camera != nullptr)
+		{
+			ActorRenderFlags savedflags = vp.camera->renderflags;
+			CreateScene(drawmode == DM_MAINVIEW);
+			vp.camera->renderflags = savedflags;
+		}
+		else
+		{
+			CreateScene(false);
+		}
+
+		RenderState.SetDepthMask(true);
+		if (!gl_no_skyclear) portalState.RenderFirstSkyPortal(recursion, this, RenderState);
+
+		RenderScene(RenderState);
 	}
-	auto& RenderState = *screen->RenderState();
-
-	RenderState.SetDepthMask(true);
-	if (!gl_no_skyclear) portalState.RenderFirstSkyPortal(recursion, this, RenderState);
-
-	RenderScene(RenderState);
 
 	if (applySSAO && RenderState.GetPassType() == GBUFFER_PASS)
 	{
@@ -1073,6 +1094,9 @@ void HWDrawInfo::DrawScene(int drawmode)
 	portalState.EndFrame(this, RenderState);
 	recursion--;
 	RenderTranslucent(RenderState);
+
+	if (drawmode == DM_MAINVIEW && spikemode == SPIKE_OFF)
+		screen->SpikeSceneTimestamp(false);
 }
 
 

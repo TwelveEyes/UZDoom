@@ -666,6 +666,7 @@ set (VULKAN_SOURCES
 	common/rendering/vulkan/renderer/vk_pprenderstate.cpp
 	common/rendering/vulkan/renderer/vk_descriptorset.cpp
 	common/rendering/vulkan/renderer/vk_raytrace.cpp
+	common/rendering/vulkan/renderer/vk_spikecull.cpp
 	common/rendering/vulkan/shaders/vk_shader.cpp
 	common/rendering/vulkan/shaders/vk_ppshader.cpp
 	common/rendering/vulkan/textures/vk_samplers.cpp
@@ -826,6 +827,7 @@ set (PCH_SOURCES
 	rendering/hwrenderer/hw_vertexbuilder.cpp
 	rendering/hwrenderer/doom_aabbtree.cpp
 	rendering/hwrenderer/doom_levelmesh.cpp
+	rendering/hwrenderer/spike_mesh.cpp
 	rendering/hwrenderer/hw_models.cpp
 	rendering/hwrenderer/hw_precache.cpp
 	rendering/hwrenderer/scene/hw_lighting.cpp

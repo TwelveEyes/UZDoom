@@ -41,6 +41,7 @@
 #include "v_video.h"
 #include "version.h"
 #include "vk_renderdevice.h"
+#include "vulkan/renderer/vk_spikecull.h"
 #include "vulkan/renderer/vk_descriptorset.h"
 #include "vulkan/renderer/vk_postprocess.h"
 #include "vulkan/renderer/vk_raytrace.h"
@@ -115,6 +116,7 @@ VulkanRenderDevice::VulkanRenderDevice(void *hMonitor, bool fullscreen, std::sha
 {
 	VulkanDeviceBuilder builder;
 	builder.OptionalRayQuery();
+	builder.OptionalExtension(VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME);	// ticket 05 spike
 	builder.Surface(surface);
 	builder.SelectDevice(vk_device);
 	SupportedDevices = builder.FindDevices(surface->Instance);
@@ -197,6 +199,7 @@ void VulkanRenderDevice::InitializeState()
 #else
 	mRenderState.reset(new VkRenderState(this));
 #endif
+	mSpikeCull.reset(new VkSpikeCull(this));
 }
 
 void VulkanRenderDevice::Update()
@@ -531,6 +534,32 @@ void VulkanRenderDevice::PrintStartupLog()
 void VulkanRenderDevice::SetLevelMesh(hwrenderer::LevelMesh* mesh)
 {
 	mRaytrace->SetLevelMesh(mesh);
+}
+
+bool VulkanRenderDevice::SpikeSupported()
+{
+	return mSpikeCull && mSpikeCull->Supported();
+}
+
+void VulkanRenderDevice::SpikeSetMesh(const SpikeMeshData *data)
+{
+	mSpikeCull->SetMesh(data);
+}
+
+void VulkanRenderDevice::SpikeUpdateClusters(const SpikeClusterUpdate *updates, unsigned count)
+{
+	mSpikeCull->UpdateClusters(updates, count);
+}
+
+void VulkanRenderDevice::SpikeRender(const SpikeView &view)
+{
+	mSpikeCull->Render(view);
+}
+
+void VulkanRenderDevice::SpikeSceneTimestamp(bool begin)
+{
+	if (mSpikeCull)
+		mSpikeCull->SceneTimestamp(begin);
 }
 
 void VulkanRenderDevice::UpdateShadowMap()

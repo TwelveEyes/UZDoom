@@ -28,6 +28,7 @@
 #include "c_dispatch.h"
 #include "v_video.h"
 #include "hw_clock.h"
+#include "hw_spike.h"
 #include "i_time.h"
 #include "i_interface.h"
 #include "printf.h"
@@ -230,6 +231,8 @@ CVAR(String, r_perflog, "", CVAR_NOSAVE)
 
 extern cycle_t FrameCycles;
 
+SpikeStats spikestats;
+
 static FILE *PerfLogFile = nullptr;
 static FString PerfLogOpenPath;
 static FString PerfLogLastMap;
@@ -256,6 +259,10 @@ static void PerfLogHeader(FILE *f)
 		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count> "
 		"wall=<wall-clock ms since the previous logged frame: the whole main-loop iteration, "
 		"incl. sim tics and input; 0 on the first frame>\n");
+	fprintf(f, "# spike05 fields (GPU values lag one frame): sm=<r_spike mode> cl=<clusters> c1=<phase-1 clusters drawn> "
+		"c2=<phase-2 clusters drawn> cf=<clusters passing frustum> tri=<triangles drawn> gc1/gd1/ghz/gc2/gd2=<GPU ms: "
+		"cull 1, draw 1, Hi-Z, cull 2, draw 2> gsc=<GPU ms scene span> mvp=<moving planes> mvd=<dirty clusters> "
+		"mvc=<CPU ms z-range refresh + staging>\n");
 	fprintf(f, "# L map=<name> sectors=<n> lines=<n> subsectors=<n> sprites=<n> polyobjs=<n> "
 		"lineportals=<n> portalgroups=<n> ffloors=<n>\n");
 }
@@ -337,13 +344,18 @@ void PerfLogUpdate()
 	PerfLogLastNS = nowNS;
 	fprintf(PerfLogFile, "F %llu tic=%d total=%.3f r=%.3f bsp=%.3f clip=%.3f wr=%.3f ws=%.3f "
 		"fr=%.3f fs=%.3f sr=%.3f ss=%.3f 2d=%.3f f3d=%.3f fin=%.3f pg=%.3f pr=%.3f dcms=%.3f "
-		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d wall=%.3f\n",
+		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d wall=%.3f "
+		"sm=%d cl=%d c1=%d c2=%d cf=%d tri=%lld gc1=%.3f gd1=%.3f ghz=%.3f gc2=%.3f gd2=%.3f gsc=%.3f "
+		"mvp=%d mvd=%d mvc=%.3f\n",
 		(unsigned long long)PerfLogFrame++, gametic, FrameCycles.TimeMS(), All.TimeMS(),
 		Bsp.TimeMS(), ClipWall.TimeMS(), RenderWall.TimeMS(), SetupWall.TimeMS(),
 		RenderFlat.TimeMS(), SetupFlat.TimeMS(), RenderSprite.TimeMS(), SetupSprite.TimeMS(),
 		twoD.TimeMS(), Flush3D.TimeMS(), Finish.TimeMS(), PortalAll.TimeMS(),
 		ProcessAll.TimeMS(), drawcalls.TimeMS(), rendered_lines, render_vertexsplit,
 		vertexcount, rendered_flats, flatprimitives, flatvertices, rendered_sprites,
-		rendered_decals, rendered_portals, rendered_commandbuffers, wallMS);
+		rendered_decals, rendered_portals, rendered_commandbuffers, wallMS,
+		spikestats.mode, spikestats.clusters, spikestats.drawn1, spikestats.drawn2, spikestats.frustum,
+		(long long)spikestats.tris, spikestats.gCull1, spikestats.gDraw1, spikestats.gHiz, spikestats.gCull2,
+		spikestats.gDraw2, spikestats.gScene, spikestats.movPlanes, spikestats.movDirty, spikestats.movCPU);
 	fflush(PerfLogFile);
 }
