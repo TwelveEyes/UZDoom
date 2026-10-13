@@ -30,3 +30,12 @@ classic logic are not.
   lists instead of the mesh (ticket 06).
 - Load time includes running the classic processing once per seg and subsector. That cost is
   linear.
+
+## Provenance (2026-10-12)
+
+The project takes no code or architecture from VKDoom. `HWMeshHelper` and the mesh-helper mode are
+GZDoom code: Christoph Oelckers, `9cd57faec`, on GZDoom master. UZDoom's copy is identical to
+GZDoom's. VKDoom also baked through classic emitters, but it re-baked surfaces on every change and
+extended `HWMeshHelper` in its own tree. This ADR bakes once, moves planes on the GPU, and takes
+flats from the static vertex builder. The user reviewed the overlap and kept this ADR.
+See `.scratch/levelmesh-impl/research/04-prior-art-vkdoom.md`.

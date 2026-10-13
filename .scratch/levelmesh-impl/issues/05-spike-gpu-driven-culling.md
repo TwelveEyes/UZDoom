@@ -29,6 +29,13 @@ static world beat the classic path by enough to justify tickets 06–21?
 
   Sweep the cluster budget (64 / 128 / 256 / 512 triangles). Also report frustum-only, to show
   what Hi-Z buys.
+- **No-cull arm (Helion-style brute force; `../research/04-prior-art-vkdoom.md` §4).** Draw the
+  whole spike mesh every frame with no culling, one indirect command per bucket. If this beats
+  cull + draw at the stress vantages on the test GPU, say so: it changes the go/no-go.
+- **Moving-sector vantage (research 04 §1.4, §6 avoid-3).** Add a vantage or demo segment with many
+  moving planes (lifts, doors, crushers). Geometry stays at load heights in the spike. Each frame,
+  refresh the z-range of the clusters those sectors touch and upload the dirty cluster records.
+  Report that CPU + upload cost; it must stay flat with no per-frame re-bake.
 
 ## Deliverable
 
@@ -45,7 +52,8 @@ The user decides. A no-go stops tickets 06+ for a re-plan.
 
 ## Acceptance
 
-- [ ] Numbers for every stress vantage and the four cluster budgets.
+- [ ] Numbers for every stress vantage and the four cluster budgets, plus the no-cull arm and the
+  moving-sector vantage.
 - [ ] Clear recommendation; user decision recorded in `../map.md` Decisions log.
 - [ ] Tickets 06–21 updated (triaged to `ready-for-agent`, or changed) according to the findings.
 

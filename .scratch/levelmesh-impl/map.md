@@ -299,3 +299,5 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Engine debug cvars: `r_ab_fullbright` (ticket 08 uses it until ticket 10) and
     `r_ab_gamestate`.
   - A/B runs pin `show_messages 0`: notify lines made the demo captures non-deterministic.
+- 2026-10-12: ticket 04 resolved. No VKDoom code or architecture (user rule); prior art is
+  lessons only → research/04-prior-art-vkdoom.md.
