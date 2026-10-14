@@ -354,6 +354,13 @@ void VkRenderState::ApplyStreamData()
 
 void VkRenderState::ApplyPushConstants()
 {
+	FillPushConstants();
+	auto passManager = fb->GetRenderPassManager();
+	mCommandBuffer->pushConstants(passManager->GetPipelineLayout(mPipelineKey.NumTextureLayers), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)sizeof(PushConstants), &mPushConstants);
+}
+
+void VkRenderState::FillPushConstants()
+{
 	int fogset = 0;
 	if (mFogEnabled)
 	{
@@ -393,9 +400,6 @@ void VkRenderState::ApplyPushConstants()
 	mPushConstants.uLightIndex = mLightIndex;
 	mPushConstants.uBoneIndexBase = mBoneIndexBase;
 	mPushConstants.uDataIndex = mStreamBufferWriter.DataIndex();
-
-	auto passManager = fb->GetRenderPassManager();
-	mCommandBuffer->pushConstants(passManager->GetPipelineLayout(mPipelineKey.NumTextureLayers), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)sizeof(PushConstants), &mPushConstants);
 }
 
 void VkRenderState::ApplyMatrices()
@@ -501,6 +505,105 @@ void VkRenderState::EndRenderPass()
 		mLastModelMatrixEnabled = true;
 		mLastTextureMatrixEnabled = true;
 	}
+}
+
+//==========================================================================
+//
+// External pipelines (the levelmesh)
+//
+// An external pipeline layout must be compatible with the classic one for
+// sets 0 (fixed) and 1 (HW buffers) and the push constant range. The classic
+// per-draw state (stream data, matrices, viewport, scissor, stencil
+// reference, depth bias, push constants) is applied as for a classic draw,
+// then the caller binds its own pipeline and remaining sets. Compute work
+// between external draws ends the render pass with EndRenderPass(); the next
+// BeginExternalDraw (or classic Apply) resumes it with the attachments
+// loaded. The first pass of a scene consumes the pending clear.
+//
+//==========================================================================
+
+VkRenderPassSetup *VkRenderState::GetRenderPassSetup()
+{
+	VkRenderPassKey key = {};
+	key.DrawBufferFormat = mRenderTarget.Format;
+	key.Samples = mRenderTarget.Samples;
+	key.DrawBuffers = mRenderTarget.DrawBuffers;
+	key.DepthStencil = !!mRenderTarget.DepthStencil;
+	return fb->GetRenderPassManager()->GetRenderPass(key);
+}
+
+VkRenderState::ExternalTarget VkRenderState::GetExternalTarget()
+{
+	ExternalTarget t;
+	t.renderPass = GetRenderPassSetup()->GetRenderPass(0);
+	t.drawBuffers = mRenderTarget.DrawBuffers;
+	t.samples = mRenderTarget.Samples;
+	t.depthStencil = mRenderTarget.DepthStencil != nullptr;
+	t.depthStencilView = mRenderTarget.DepthStencil;
+	if (mViewportWidth >= 0)
+	{
+		t.x = mViewportX;
+		t.y = mViewportY;
+		t.width = mViewportWidth;
+		t.height = mViewportHeight;
+	}
+	else
+	{
+		t.x = 0;
+		t.y = 0;
+		t.width = mRenderTarget.Width;
+		t.height = mRenderTarget.Height;
+	}
+	t.depthTest = mDepthTest;
+	t.depthWrite = mDepthTest && mDepthWrite;
+	t.depthFunc = mDepthFunc;
+	t.depthClamp = mDepthClamp;
+	t.stencilTest = mStencilTest;
+	t.stencilOp = mStencilOp;
+	t.colorMask = mColorMask;
+	return t;
+}
+
+VulkanCommandBuffer *VkRenderState::BeginExternalDraw(VulkanPipelineLayout *layout, PushConstants &pc)
+{
+	drawcalls.Clock();
+	ApplyStreamData();
+	ApplyMatrices();
+
+	if (!mCommandBuffer)
+	{
+		mCommandBuffer = fb->GetCommands()->GetDrawCommands();
+		BeginRenderPass(mCommandBuffer);
+	}
+	mScissorChanged = true;
+	mViewportChanged = true;
+	mStencilRefChanged = true;
+	mBias.mChanged = true;
+	ApplyScissor();
+	ApplyViewport();
+	ApplyStencilRef();
+	ApplyDepthBias();
+
+	FillPushConstants();
+	pc = mPushConstants;
+
+	uint32_t offsets[3] = { mViewpointOffset, mMatrixBufferWriter.Offset(), mStreamBufferWriter.StreamDataOffset() };
+	auto descriptors = fb->GetDescriptorSetManager();
+	mCommandBuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, descriptors->GetFixedDescriptorSet());
+	mCommandBuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, descriptors->GetHWBufferDescriptorSet(), 3, offsets);
+	drawcalls.Unclock();
+	return mCommandBuffer;
+}
+
+void VkRenderState::EndExternalDraw()
+{
+	// Everything the external pipeline may have replaced is rebound by the next Apply.
+	mPipelineKey = {};
+	mLastViewpointOffset = 0xffffffff;
+	mLastVertexBuffer = nullptr;
+	mLastIndexBuffer = nullptr;
+	mMaterial.mChanged = true;
+	mNeedApply = true;
 }
 
 void VkRenderState::EndFrame()

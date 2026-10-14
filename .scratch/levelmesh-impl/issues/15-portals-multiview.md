@@ -42,3 +42,11 @@ Portal rendering at full classic semantics, on top of multi-view GPU culling:
 - [ ] Per-view GPU timings on the portal-dense vantage logged against the ticket-02 classic numbers.
 
 ## Comments
+
+- 2026-10-14 (from 08): `VkLevelMeshRenderer` is main view only.
+  - `Draw` refuses any target whose depth is not the scene depth.
+  - Visibility is one `uint` per cluster in a single buffer, and there is one Hi-Z image. Both
+    need to become per view.
+  - Back-face culling is a pipeline bit (front face counter-clockwise, `lm_backfacecull`).
+    Mirrors need the flipped front face from the render state's cull mode.
+  - The pipeline cache key already includes the render-pass and state bits.

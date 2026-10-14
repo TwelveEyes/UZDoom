@@ -66,6 +66,8 @@ struct LevelMeshBakeStats
 	unsigned vScaleInconsistent = 0;			// left/right dv/dz disagree
 	unsigned planeRefOverflow = 0;				// surfaces with more than 4 distinct anchor planes
 	unsigned ffloorVRefHeuristic = 0;			// 3D-floor sides whose vRef was taken from the top-left anchor
+	unsigned deferredSurfaces = 0;				// LMSF_DEFERRED: drawn by the classic path (ticket 08)
+	unsigned deferredByTier = 0;				// of those, deferred because another piece of the side tier is
 	double wallMs = 0, flatMs = 0, totalMs = 0;
 };
 
@@ -102,6 +104,12 @@ public:
 	TArray<uint32_t> ClusterSurfaces;	// cluster -> surfaces
 	TArray<uint32_t> SectorClusterStart;	// sector -> clusters (CSR, numsectors + 1 entries)
 	TArray<uint32_t> SectorClusters;
+
+	// Classic draw-list entries the levelmesh replaces (1 = owned): per side
+	// tier (side * 3 + side_t::top/mid/bottom) and per sector plane
+	// (sector * 2 + plane). Everything else stays on the classic path.
+	TArray<uint8_t> SideTierOwned;
+	TArray<uint8_t> SectorPlaneOwned;
 
 	uint64_t Id = 0;				// unique per bake (backend residency)
 	bool GeometryReleased = false;	// Vertices / Indices freed after the upload

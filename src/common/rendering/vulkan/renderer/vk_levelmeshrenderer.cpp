@@ -1,0 +1,697 @@
+/*
+** vk_levelmeshrenderer.cpp
+**
+** GPU cull + indirect draw of the levelmesh (main view)
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+** Frame sequence of one Draw (LMCULL_HIZ):
+**
+**   end the scene pass
+**   reset counters, cull phase 1 (clusters visible last frame, frustum)
+**   finalize (compaction: write the draw arguments)
+**   draw phase 1                          (resumes the scene pass)
+**   end the scene pass; depth -> read-only; build the Hi-Z pyramid; depth back
+**   cull phase 2 (all clusters, frustum + Hi-Z; rewrites the visibility)
+**   finalize, copy the counters to the readback ring
+**   draw phase 2                          (resumes the scene pass)
+**
+** LMCULL_FRUSTUM / LMCULL_NONE run one cull and one draw. The render pass
+** resumes with the attachments loaded; if the scene pass had not started
+** yet, the first resume consumes the pending clear.
+**
+** The Hi-Z level 0 is the viewport of the scene depth at full resolution
+** (max over the MSAA samples); later levels round down and fold the odd
+** remainder into the last row / column (hiz.comp).
+*/
+
+// HEADER FILES ------------------------------------------------------------
+
+#include <algorithm>
+#include <cstring>
+
+#include "vk_levelmeshrenderer.h"
+#include "vk_levelmesh.h"
+#include "vk_renderstate.h"
+#include "vk_renderpass.h"
+#include "vk_descriptorset.h"
+#include "vulkan/shaders/vk_shader.h"
+#include "vulkan/system/vk_renderdevice.h"
+#include "vulkan/system/vk_commandbuffer.h"
+#include "vulkan/textures/vk_renderbuffers.h"
+#include <zvulkan/vulkanbuilders.h>
+#include "hw_renderstate.h"
+#include "c_cvars.h"
+#include "printf.h"
+
+// TYPES -------------------------------------------------------------------
+
+// Cull phases (cull.comp LMPHASE_*)
+enum
+{
+	LMPHASE_FIRST,
+	LMPHASE_SECOND,
+	LMPHASE_SINGLE,
+	LMPHASE_FINALIZE,
+};
+
+// Counter buffer layout (uint32 each, cull.comp LMC_*)
+enum
+{
+	LMC_COMPACT = 0,		// [LMB_DRAWN] compaction cursor per bucket, both phases
+	LMC_P1END = 2,			// [LMB_DRAWN] end of phase 1 per bucket
+	LMC_COMMANDS = 4,		// [2 * LMB_DRAWN] per-cluster commands per phase and bucket
+	LMC_CLUSTERS = 8,		// [2] clusters drawn per phase
+	LMC_INDICES = 10,		// [2 * LMB_DRAWN] indices drawn per phase and bucket
+	LMC_FRUSTUMCULLED = 14,
+	LMC_OCCLUDED = 15,
+	LMC_COUNT = 16,
+};
+
+// Timestamp points
+enum
+{
+	TS_START,
+	TS_CULL1,
+	TS_DRAW1,
+	TS_HIZ,
+	TS_CULL2,
+	TS_DRAW2,
+};
+
+static_assert(LMB_DRAWN == 2, "the cull constants carry two bucket bases");
+
+// PUBLIC DATA DEFINITIONS -------------------------------------------------
+
+// Debug: back-face culling of the levelmesh draws (0 = off, 1 = on).
+CVAR(Int, lm_backfacecull, 1, CVAR_NOSAVE)
+
+// CODE --------------------------------------------------------------------
+
+VkLevelMeshRenderer::VkLevelMeshRenderer(VulkanRenderDevice *fb) : fb(fb)
+{
+}
+
+VkLevelMeshRenderer::~VkLevelMeshRenderer()
+{
+	if (mReadback && mReadbackData) mReadback->Unmap();
+}
+
+static FString CullDefines()
+{
+	FString d = VkLevelMesh::ShaderDefines(0, -1);
+	d << "#define LM_CULL_SET 1\n";
+	d.AppendFormat("#define LMPHASE_FIRST %uu\n#define LMPHASE_SECOND %uu\n#define LMPHASE_SINGLE %uu\n#define LMPHASE_FINALIZE %uu\n",
+		(unsigned)LMPHASE_FIRST, (unsigned)LMPHASE_SECOND, (unsigned)LMPHASE_SINGLE, (unsigned)LMPHASE_FINALIZE);
+	d.AppendFormat("#define LMC_COMPACT %uu\n#define LMC_P1END %uu\n#define LMC_COMMANDS %uu\n#define LMC_CLUSTERS %uu\n",
+		(unsigned)LMC_COMPACT, (unsigned)LMC_P1END, (unsigned)LMC_COMMANDS, (unsigned)LMC_CLUSTERS);
+	d.AppendFormat("#define LMC_INDICES %uu\n#define LMC_FRUSTUMCULLED %uu\n#define LMC_OCCLUDED %uu\n",
+		(unsigned)LMC_INDICES, (unsigned)LMC_FRUSTUMCULLED, (unsigned)LMC_OCCLUDED);
+	return d;
+}
+
+//==========================================================================
+//
+// Device objects (on first draw)
+//
+//==========================================================================
+
+bool VkLevelMeshRenderer::CreateObjects()
+{
+	if (mCreated) return !mFailed;
+	mCreated = true;
+	auto dev = fb->device.get();
+	auto lm = fb->GetLevelMesh();
+	auto shaders = fb->GetShaderManager();
+
+	try
+	{
+		mCullShader = shaders->LoadComputeShader("levelmesh_cull", "shaders/levelmesh/cull.comp", CullDefines().GetChars());
+		mHiZShaders[0] = shaders->LoadComputeShader("levelmesh_hiz_depth", "shaders/levelmesh/hiz.comp", "#define HIZ_FROM_DEPTH\n");
+		mHiZShaders[1] = shaders->LoadComputeShader("levelmesh_hiz_depthms", "shaders/levelmesh/hiz.comp", "#define HIZ_FROM_DEPTH_MS\n");
+		mHiZShaders[2] = shaders->LoadComputeShader("levelmesh_hiz_level", "shaders/levelmesh/hiz.comp", "");
+		for (int pass = NORMAL_PASS; pass <= GBUFFER_PASS; pass++)
+		{
+			shaders->GetLevelMesh(false, (EPassType)pass);
+			shaders->GetLevelMesh(true, (EPassType)pass);
+		}
+	}
+	catch (const CVulkanError &e)
+	{
+		Printf("Levelmesh: shader compile failed, using the classic path: %s\n", e.what());
+		mFailed = true;
+		return false;
+	}
+
+	mCullSetLayout = DescriptorSetLayoutBuilder()
+		.AddBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.AddBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.AddBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.AddBinding(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.DebugName("VkLevelMeshRenderer.CullSetLayout")
+		.Create(dev);
+	mCullLayout = PipelineLayoutBuilder()
+		.AddSetLayout(lm->GetSetLayout())
+		.AddSetLayout(mCullSetLayout.get())
+		.AddPushConstantRange(VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CullConstants))
+		.DebugName("VkLevelMeshRenderer.CullLayout")
+		.Create(dev);
+	mCullPipeline = ComputePipelineBuilder()
+		.Layout(mCullLayout.get())
+		.ComputeShader(mCullShader.get())
+		.DebugName("VkLevelMeshRenderer.CullPipeline")
+		.Create(dev);
+
+	mHiZSetLayout = DescriptorSetLayoutBuilder()
+		.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.DebugName("VkLevelMeshRenderer.HiZSetLayout")
+		.Create(dev);
+	mHiZLayout = PipelineLayoutBuilder()
+		.AddSetLayout(mHiZSetLayout.get())
+		.AddPushConstantRange(VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(HiZConstants))
+		.DebugName("VkLevelMeshRenderer.HiZLayout")
+		.Create(dev);
+	for (int i = 0; i < 3; i++)
+	{
+		mHiZPipelines[i] = ComputePipelineBuilder()
+			.Layout(mHiZLayout.get())
+			.ComputeShader(mHiZShaders[i].get())
+			.DebugName("VkLevelMeshRenderer.HiZPipeline")
+			.Create(dev);
+	}
+
+	// Sets are replaced on level / size changes (old ones go to the delete
+	// list), so the pool holds a few generations.
+	mPool = DescriptorPoolBuilder()
+		.MaxSets(256)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 256)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 256)
+		.DebugName("VkLevelMeshRenderer.Pool")
+		.Create(dev);
+
+	mPointSampler = SamplerBuilder()
+		.MinFilter(VK_FILTER_NEAREST)
+		.MagFilter(VK_FILTER_NEAREST)
+		.MipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
+		.AddressMode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+		.MaxLod(16.0f)
+		.DebugName("VkLevelMeshRenderer.PointSampler")
+		.Create(dev);
+
+	if (fb->device->GraphicsTimeQueries)
+	{
+		mQueries = QueryPoolBuilder()
+			.QueryType(VK_QUERY_TYPE_TIMESTAMP, NumSlots * NumPoints)
+			.Create(dev);
+	}
+	mReadback = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU)
+		.Size(NumSlots * NumCounters * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.Readback")
+		.Create(dev);
+	mReadbackData = (uint32_t *)mReadback->Map(0, NumSlots * NumCounters * sizeof(uint32_t));
+	memset(mReadbackData, 0, NumSlots * NumCounters * sizeof(uint32_t));
+	return true;
+}
+
+//==========================================================================
+//
+// Per-level buffers
+//
+//==========================================================================
+
+bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd)
+{
+	if (mLevelId == lm->GetId() && mCullSet) return true;
+
+	auto dev = fb->device.get();
+	auto deleteList = fb->GetCommands()->DrawDeleteList.get();
+	deleteList->Add(std::move(mVisibility));
+	deleteList->Add(std::move(mCounters));
+	deleteList->Add(std::move(mDrawArgs));
+	deleteList->Add(std::move(mCompact));
+	deleteList->Add(std::move(mCullSet));
+
+	mLevelId = lm->GetId();
+	mNumClusters = lm->GetClusterCount();
+	mBucketBase[0] = 0;
+	mBucketBase[1] = lm->GetBucketIndexCount(LMB_OPAQUE);
+	size_t compactCount = std::max<size_t>((size_t)lm->GetBucketIndexCount(LMB_OPAQUE) + lm->GetBucketIndexCount(LMB_MASKED), 4);
+
+	mVisibility = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+		.Size(std::max(mNumClusters, 1u) * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.Visibility")
+		.Create(dev);
+	mCounters = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
+		.Size(LMC_COUNT * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.Counters")
+		.Create(dev);
+	// 2 * LMB_DRAWN compaction draws, then 2 * LMB_DRAWN regions of per-cluster commands.
+	mDrawArgs = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
+		.Size((2 * LMB_DRAWN + 2 * LMB_DRAWN * (size_t)std::max(mNumClusters, 1u)) * sizeof(VkDrawIndexedIndirectCommand))
+		.DebugName("VkLevelMeshRenderer.DrawArgs")
+		.Create(dev);
+	mCompact = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
+		.Size(compactCount * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.CompactIndices")
+		.Create(dev);
+
+	// Nothing was visible "last frame": the first frame draws everything in phase 2.
+	cmd->fillBuffer(mVisibility->buffer, 0, VK_WHOLE_SIZE, 0);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+	UpdateCullSet();
+	return true;
+}
+
+void VkLevelMeshRenderer::UpdateCullSet()
+{
+	if (!mVisibility || !mHiZView) return;
+	fb->GetCommands()->DrawDeleteList->Add(std::move(mCullSet));
+	mCullSet = mPool->allocate(mCullSetLayout.get());
+	mCullSet->SetDebugName("VkLevelMeshRenderer.CullSet");
+	WriteDescriptors()
+		.AddBuffer(mCullSet.get(), 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mVisibility.get())
+		.AddBuffer(mCullSet.get(), 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mCounters.get())
+		.AddBuffer(mCullSet.get(), 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mDrawArgs.get())
+		.AddBuffer(mCullSet.get(), 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mCompact.get())
+		.AddCombinedImageSampler(mCullSet.get(), 4, mHiZView.get(), mPointSampler.get(), VK_IMAGE_LAYOUT_GENERAL)
+		.Execute(fb->device.get());
+}
+
+//==========================================================================
+//
+// Hi-Z resources: level 0 = the viewport size of the scene depth
+//
+//==========================================================================
+
+bool VkLevelMeshRenderer::PrepareHiZ(int width, int height, VkSampleCountFlagBits samples)
+{
+	auto buffers = fb->GetBuffers();
+	VulkanImageView *depthView = buffers->SceneDepthStencil.DepthOnlyView.get();
+	if (!depthView || width <= 0 || height <= 0) return false;
+	if (mHiZ && mDepthView == depthView && mHiZWidth == width && mHiZHeight == height && mHiZSamples == samples) return true;
+
+	auto dev = fb->device.get();
+	auto deleteList = fb->GetCommands()->DrawDeleteList.get();
+	deleteList->Add(std::move(mHiZView));
+	for (auto &v : mHiZLevelViews) deleteList->Add(std::move(v));
+	for (auto &s : mHiZSets) deleteList->Add(std::move(s));
+	deleteList->Add(std::move(mHiZ));
+	mHiZLevelViews.clear();
+	mHiZSets.clear();
+
+	int levels = 1;
+	while ((width >> levels) > 0 || (height >> levels) > 0)
+	{
+		if ((width >> levels) == 0 || (height >> levels) == 0) break;
+		levels++;
+	}
+	mDepthView = depthView;
+	mHiZWidth = width;
+	mHiZHeight = height;
+	mHiZLevels = levels;
+	mHiZSamples = samples;
+
+	mHiZ = ImageBuilder()
+		.Size(width, height, levels)
+		.Format(VK_FORMAT_R32_SFLOAT)
+		.Usage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+		.DebugName("VkLevelMeshRenderer.HiZ")
+		.Create(dev);
+	mHiZFresh = true;
+	mHiZView = ImageViewBuilder()
+		.Image(mHiZ.get(), VK_FORMAT_R32_SFLOAT)
+		.DebugName("VkLevelMeshRenderer.HiZView")
+		.Create(dev);
+	for (int i = 0; i < levels; i++)
+	{
+		mHiZLevelViews.push_back(ImageViewBuilder()
+			.Image(mHiZ.get(), VK_FORMAT_R32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1, 1)
+			.DebugName("VkLevelMeshRenderer.HiZLevelView")
+			.Create(dev));
+	}
+	WriteDescriptors write;
+	for (int i = 0; i < levels; i++)
+	{
+		auto set = mPool->allocate(mHiZSetLayout.get());
+		set->SetDebugName("VkLevelMeshRenderer.HiZSet");
+		if (i == 0)
+			write.AddCombinedImageSampler(set.get(), 0, depthView, mPointSampler.get(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+		else
+			write.AddCombinedImageSampler(set.get(), 0, mHiZLevelViews[i - 1].get(), mPointSampler.get(), VK_IMAGE_LAYOUT_GENERAL);
+		write.AddStorageImage(set.get(), 1, mHiZLevelViews[i].get(), VK_IMAGE_LAYOUT_GENERAL);
+		mHiZSets.push_back(std::move(set));
+	}
+	write.Execute(dev);
+	UpdateCullSet();
+	return true;
+}
+
+void VkLevelMeshRenderer::BuildHiZ(VulkanCommandBuffer *cmd)
+{
+	auto buffers = fb->GetBuffers();
+	auto depthImage = buffers->SceneDepthStencil.Image.get();
+
+	// Depth: attachment -> sampled. Hi-Z: the previous cull reads -> writes.
+	PipelineBarrier barrier;
+	barrier.AddImage(depthImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+	barrier.AddImage(mHiZ.get(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+		VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT, 0, mHiZLevels);
+	barrier.Execute(cmd, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+	int w = mHiZWidth, h = mHiZHeight;
+	for (int i = 0; i < mHiZLevels; i++)
+	{
+		HiZConstants pc = {};
+		int pipe = i > 0 ? 2 : (mHiZSamples != VK_SAMPLE_COUNT_1_BIT ? 1 : 0);
+		int dw = i == 0 ? w : std::max(w >> 1, 1);
+		int dh = i == 0 ? h : std::max(h >> 1, 1);
+		pc.srcOffset[0] = i == 0 ? mTarget.x : 0;
+		pc.srcOffset[1] = i == 0 ? mTarget.y : 0;
+		pc.srcSize[0] = w;
+		pc.srcSize[1] = h;
+		pc.dstSize[0] = dw;
+		pc.dstSize[1] = dh;
+		pc.samples = (int)mHiZSamples;
+		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, mHiZPipelines[pipe].get());
+		cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mHiZLayout.get(), 0, mHiZSets[i].get());
+		cmd->pushConstants(mHiZLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(HiZConstants), &pc);
+		cmd->dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
+		PipelineBarrier()
+			.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)
+			.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		w = dw;
+		h = dh;
+	}
+
+	// Depth back to an attachment for the rest of the scene.
+	PipelineBarrier()
+		.AddImage(depthImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+			VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+			VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+}
+
+//==========================================================================
+//
+// Draw pipelines
+//
+//==========================================================================
+
+VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked)
+{
+	const auto &t = mTarget;
+	bool cull = lm_backfacecull != 0;
+	uint64_t bits = (uint64_t)masked | ((uint64_t)t.drawBuffers << 1) | ((uint64_t)t.samples << 4) | ((uint64_t)t.depthTest << 12) |
+		((uint64_t)t.depthWrite << 13) | ((uint64_t)t.depthClamp << 14) | ((uint64_t)t.stencilTest << 15) | ((uint64_t)t.depthFunc << 16) |
+		((uint64_t)t.stencilOp << 20) | ((uint64_t)t.colorMask << 24) | ((uint64_t)cull << 28);
+	PipelineKey key = { t.renderPass, bits };
+	auto &pipeline = mPipelines[key];
+	if (pipeline) return pipeline.get();
+
+	EPassType passType = t.drawBuffers > 1 ? GBUFFER_PASS : NORMAL_PASS;
+	auto shaders = fb->GetShaderManager();
+	auto program = shaders->GetLevelMesh(masked, passType);
+
+	static const VkStencilOp op2vk[] = { VK_STENCIL_OP_KEEP, VK_STENCIL_OP_INCREMENT_AND_CLAMP, VK_STENCIL_OP_DECREMENT_AND_CLAMP };
+	static const VkCompareOp depthfunc2vk[] = { VK_COMPARE_OP_LESS, VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_ALWAYS };
+
+	GraphicsPipelineBuilder builder;
+	builder.Cache(fb->GetRenderPassManager()->GetCache());
+	builder.AddVertexShader(shaders->GetLevelMeshVert());
+	builder.AddFragmentShader(program->frag.get());
+	builder.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT);
+	builder.AddDynamicState(VK_DYNAMIC_STATE_SCISSOR);
+	builder.AddDynamicState(VK_DYNAMIC_STATE_DEPTH_BIAS);
+	builder.AddDynamicState(VK_DYNAMIC_STATE_STENCIL_REFERENCE);
+	builder.Viewport(0.0f, 0.0f, 320.0f, 200.0f);
+	builder.Scissor(0, 0, 320, 200);
+	builder.Topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+	builder.DepthStencilEnable(t.depthTest, t.depthWrite, t.stencilTest);
+	builder.DepthFunc(depthfunc2vk[t.depthFunc]);
+	if (fb->device->EnabledFeatures.Features.depthClamp)
+		builder.DepthClampEnable(t.depthClamp);
+	builder.DepthBias(false, 0.0f, 0.0f, 0.0f);
+	// The bake keeps the classic winding (floors as the flat triangulation,
+	// ceilings reversed, walls as the classic fan): visible faces are
+	// counter-clockwise on screen (verified against lm_backfacecull 0).
+	builder.Cull(cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+	builder.Stencil(VK_STENCIL_OP_KEEP, op2vk[t.stencilOp], VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 0xffffffff, 0xffffffff, 0);
+	ColorBlendAttachmentBuilder blend;
+	blend.ColorWriteMask((VkColorComponentFlags)t.colorMask);
+	for (int i = 0; i < t.drawBuffers; i++)
+		builder.AddColorBlendAttachment(blend.Create());
+	builder.RasterizationSamples(t.samples);
+	builder.Layout(fb->GetLevelMesh()->GetPipelineLayout());
+	builder.RenderPass(t.renderPass);
+	builder.DebugName(masked ? "VkLevelMeshRenderer.MaskedPipeline" : "VkLevelMeshRenderer.OpaquePipeline");
+	pipeline = builder.Create(fb->device.get());
+	return pipeline.get();
+}
+
+//==========================================================================
+//
+// Cull, draw
+//
+//==========================================================================
+
+void VkLevelMeshRenderer::Cull(VulkanCommandBuffer *cmd, CullConstants &pc, uint32_t phase)
+{
+	pc.phase = phase;
+	cmd->bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, mCullPipeline.get());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mCullLayout.get(), 0, fb->GetLevelMesh()->GetSet());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mCullLayout.get(), 1, mCullSet.get());
+	cmd->pushConstants(mCullLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CullConstants), &pc);
+	uint32_t groups = std::max(mNumClusters, 1u);
+	uint32_t gx = std::min(groups, 65535u);
+	cmd->dispatch(gx, (groups + gx - 1) / gx, 1);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	if (pc.drawMode == LMDRAW_COMPACT)
+	{
+		pc.phase = LMPHASE_FINALIZE;
+		pc.finalizePhase = phase;
+		cmd->pushConstants(mCullLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CullConstants), &pc);
+		cmd->dispatch(1, 1, 1);
+	}
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+}
+
+void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, int phaseSlot)
+{
+	auto state = fb->GetRenderState();
+	auto layout = lm->GetPipelineLayout();
+	PushConstants pc;
+	auto cmd = state->BeginExternalDraw(layout, pc);
+	pc.uTextureMode &= 0xffff;	// the material layer flags are per surface (lm_frag.glsl)
+	pc.uLightIndex = -1;
+	pc.uLevelMeshFlags = (int)view.flags;
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
+	bool compact = view.drawMode == LMDRAW_COMPACT;
+	cmd->bindIndexBuffer(compact ? mCompact->buffer : lm->GetIndexBuffer()->buffer, 0, VK_INDEX_TYPE_UINT32);
+
+	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
+	for (int b = 0; b < (int)LMB_DRAWN; b++)
+	{
+		bool masked = b == LMB_MASKED;
+		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(masked));
+		// As HWDrawInfo::RenderScene: AlphaFunc(Alpha_GEqual, gl_mask_threshold).
+		pc.uAlphaThreshold = masked ? view.maskThreshold - 0.001f : -0.001f;
+		cmd->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
+		uint32_t slot = phaseSlot * LMB_DRAWN + b;
+		if (compact)
+		{
+			cmd->drawIndexedIndirect(mDrawArgs->buffer, slot * stride, 1, stride);
+		}
+		else
+		{
+			VkDeviceSize offset = (2 * LMB_DRAWN + (VkDeviceSize)slot * mNumClusters) * stride;
+			vkCmdDrawIndexedIndirectCountKHR(cmd->buffer, mDrawArgs->buffer, offset, mCounters->buffer, (LMC_COMMANDS + slot) * sizeof(uint32_t),
+				std::max(mNumClusters, 1u), stride);
+		}
+	}
+	state->EndExternalDraw();
+}
+
+void VkLevelMeshRenderer::Timestamp(VulkanCommandBuffer *cmd, int point)
+{
+	if (!mQueries) return;
+	cmd->writeTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mQueries.get(), mSlot * NumPoints + point);
+	mSlots[mSlot].points |= 1u << point;
+}
+
+bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
+{
+	auto lm = fb->GetLevelMesh();
+	if (!lm || lm->GetId() == 0 || lm->GetClusterCount() == 0) return false;
+	auto state = fb->GetRenderState();
+	auto ext = state->GetExternalTarget();
+	// The main scene only: the Hi-Z and the visibility are per view.
+	if (!ext.depthStencil || ext.depthStencilView != fb->GetBuffers()->SceneDepthStencil.View.get()) return false;
+	if (!CreateObjects()) return false;
+
+	mTarget = ext;
+
+	Harvest();
+
+	// Compute runs outside the render pass.
+	state->EndRenderPass();
+	auto cmd = fb->GetCommands()->GetDrawCommands();
+	if (!PrepareHiZ(ext.width, ext.height, ext.samples)) return false;
+	if (!PrepareLevel(lm, cmd)) return false;
+	if (mHiZFresh)
+	{
+		// Every cull phase binds the pyramid (only the second one reads it),
+		// so a new image enters GENERAL before the first dispatch.
+		PipelineBarrier()
+			.AddImage(mHiZ.get(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT, 0, mHiZLevels)
+			.Execute(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		mHiZFresh = false;
+	}
+
+	mSlot = (mSlot + 1) % NumSlots;
+	auto &slot = mSlots[mSlot];
+	slot.pending = true;
+	slot.serial = ++mSerial;
+	slot.cullMode = view.cullMode;
+	slot.drawMode = view.drawMode;
+	slot.points = 0;
+	slot.frame = mFrame;
+	if (mQueries) cmd->resetQueryPool(mQueries.get(), mSlot * NumPoints, NumPoints);
+	Timestamp(cmd, TS_START);
+
+	// The previous draws' indirect / index reads must finish before the
+	// counters and arguments are rewritten.
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	cmd->fillBuffer(mCounters->buffer, 0, VK_WHOLE_SIZE, 0);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+	CullConstants pc = {};
+	memcpy(pc.viewProj, view.viewProj, sizeof(pc.viewProj));
+	pc.viewport[0] = (float)ext.x;
+	pc.viewport[1] = (float)ext.y;
+	pc.viewport[2] = (float)ext.width;
+	pc.viewport[3] = (float)ext.height;
+	pc.cullMode = (uint32_t)view.cullMode;
+	pc.drawMode = (uint32_t)view.drawMode;
+	pc.numClusters = mNumClusters;
+	pc.bucketBase[0] = mBucketBase[0];
+	pc.bucketBase[1] = mBucketBase[1];
+	pc.hizLevels = (uint32_t)mHiZLevels;
+
+	auto copyCounters = [&]()
+	{
+		cmd->copyBuffer(mCounters.get(), mReadback.get(), 0, (VkDeviceSize)mSlot * NumCounters * sizeof(uint32_t), NumCounters * sizeof(uint32_t));
+		PipelineBarrier()
+			.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)
+			.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+	};
+
+	if (view.cullMode == LMCULL_HIZ)
+	{
+		Cull(cmd, pc, LMPHASE_FIRST);
+		Timestamp(cmd, TS_CULL1);
+		DrawPhase(lm, view, 0);
+		cmd = fb->GetCommands()->GetDrawCommands();
+		Timestamp(cmd, TS_DRAW1);
+		state->EndRenderPass();
+		BuildHiZ(cmd);
+		Timestamp(cmd, TS_HIZ);
+		Cull(cmd, pc, LMPHASE_SECOND);
+		copyCounters();
+		Timestamp(cmd, TS_CULL2);
+		DrawPhase(lm, view, 1);
+		Timestamp(cmd, TS_DRAW2);
+	}
+	else
+	{
+		Cull(cmd, pc, LMPHASE_SINGLE);
+		copyCounters();
+		Timestamp(cmd, TS_CULL1);
+		DrawPhase(lm, view, 0);
+		Timestamp(cmd, TS_DRAW1);
+	}
+	return true;
+}
+
+//==========================================================================
+//
+// Timings and counters of completed draws (non-blocking)
+//
+//==========================================================================
+
+void VkLevelMeshRenderer::Harvest()
+{
+	double period = fb->device->PhysicalDevice.Properties.Properties.limits.timestampPeriod;
+	for (int n = 1; n <= NumSlots; n++)
+	{
+		int i = (mSlot + n) % NumSlots;	// oldest first
+		auto &slot = mSlots[i];
+		if (!slot.pending) continue;
+		// Without queries there is no availability to poll: a slot is only
+		// known complete once a frame boundary waited for its submit.
+		if (!mQueries && slot.frame == mFrame) continue;
+		uint64_t ts[NumPoints] = {};
+		bool ready = true;
+		if (mQueries)
+		{
+			// Only the written points: an unwritten query never becomes available.
+			for (int p = 0; p < NumPoints && ready; p++)
+			{
+				if (slot.points & (1u << p))
+					ready = mQueries->getResults(i * NumPoints + p, 1, sizeof(uint64_t), &ts[p], sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+			}
+		}
+		if (!ready) continue;
+		slot.pending = false;
+		if (slot.serial <= mHarvestedSerial) continue;
+		mHarvestedSerial = slot.serial;
+
+		const uint32_t *c = mReadbackData + i * NumCounters;
+		auto ms = [&](int a, int b) { return (slot.points & (1u << a)) && (slot.points & (1u << b)) && ts[b] > ts[a] ? (ts[b] - ts[a]) * period / 1e6 : 0.0; };
+		LevelMeshPerfStats &s = mStats;
+		s.serial = slot.serial;
+		s.cullMode = slot.cullMode;
+		s.drawMode = slot.drawMode;
+		for (int p = 0; p < 2; p++)
+		{
+			s.clusters[p] = c[LMC_CLUSTERS + p];
+			s.triangles[p] = (c[LMC_INDICES + p * LMB_DRAWN] + c[LMC_INDICES + p * LMB_DRAWN + 1]) / 3;
+		}
+		s.frustumCulled = c[LMC_FRUSTUMCULLED];
+		s.occluded = c[LMC_OCCLUDED];
+		s.cullMs[0] = ms(TS_START, TS_CULL1);
+		s.drawMs[0] = ms(TS_CULL1, TS_DRAW1);
+		s.hizMs = ms(TS_DRAW1, TS_HIZ);
+		s.cullMs[1] = ms(TS_HIZ, TS_CULL2);
+		s.drawMs[1] = ms(TS_CULL2, TS_DRAW2);
+		s.totalMs = ms(TS_START, slot.cullMode == LMCULL_HIZ ? TS_DRAW2 : TS_DRAW1);
+	}
+}

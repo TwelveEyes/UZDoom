@@ -28,3 +28,7 @@ the sky geometry is. In the levelmesh:
 - [ ] Sky scroll is deterministic under the capture clock.
 
 ## Comments
+
+- 2026-10-14 (from 08): Pirates MAP43 demo tick 120 (classic vs levelmesh): the levelmesh
+  draws an upper wall against the sky that classic omits. Check the sky upper / sky-hack rules
+  if 09 does not explain it.

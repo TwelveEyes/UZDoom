@@ -666,6 +666,7 @@ set (VULKAN_SOURCES
 	common/rendering/vulkan/renderer/vk_pprenderstate.cpp
 	common/rendering/vulkan/renderer/vk_descriptorset.cpp
 	common/rendering/vulkan/renderer/vk_levelmesh.cpp
+	common/rendering/vulkan/renderer/vk_levelmeshrenderer.cpp
 	common/rendering/vulkan/renderer/vk_raytrace.cpp
 	common/rendering/vulkan/shaders/vk_shader.cpp
 	common/rendering/vulkan/shaders/vk_ppshader.cpp

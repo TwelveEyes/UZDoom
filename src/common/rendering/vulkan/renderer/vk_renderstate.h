@@ -71,6 +71,22 @@ public:
 	void EndRenderPass();
 	void EndFrame();
 
+	// External pipelines (the levelmesh): see vk_renderstate.cpp.
+	struct ExternalTarget
+	{
+		VulkanRenderPass *renderPass = nullptr;	// compatible render pass for pipeline creation
+		int drawBuffers = 1;
+		VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+		bool depthStencil = false;
+		VulkanImageView *depthStencilView = nullptr;	// the attachment (identifies the depth buffer)
+		int x = 0, y = 0, width = 0, height = 0;	// current viewport
+		bool depthTest = false, depthWrite = false, depthClamp = true, stencilTest = false;
+		int depthFunc = 0, stencilOp = 0, colorMask = 15;
+	};
+	ExternalTarget GetExternalTarget();
+	VulkanCommandBuffer *BeginExternalDraw(VulkanPipelineLayout *layout, PushConstants &pc);
+	void EndExternalDraw();
+
 protected:
 	void Apply(int dt);
 	void ApplyRenderPass(int dt);
@@ -81,6 +97,8 @@ protected:
 	void ApplyStreamData();
 	void ApplyMatrices();
 	void ApplyPushConstants();
+	void FillPushConstants();
+	VkRenderPassSetup *GetRenderPassSetup();
 	void ApplyHWBufferSet();
 	void ApplyVertexBuffers();
 	void ApplyMaterial();

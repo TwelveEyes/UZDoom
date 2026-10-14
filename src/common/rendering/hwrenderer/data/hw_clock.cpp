@@ -47,6 +47,7 @@ glcycle_t MTWait, WTTotal;
 int vertexcount, flatvertices, flatprimitives;
 
 int rendered_lines,rendered_flats,rendered_sprites,render_vertexsplit,render_texsplit,rendered_decals, rendered_portals, rendered_commandbuffers;
+int rendered_levelmesh;
 int iter_dlightf, iter_dlight, draw_dlight, draw_dlightf;
 
 void ResetProfilingData()
@@ -71,6 +72,7 @@ void ResetProfilingData()
 
 	flatvertices=flatprimitives=vertexcount=0;
 	render_texsplit=render_vertexsplit=rendered_lines=rendered_flats=rendered_sprites=rendered_decals=rendered_portals = 0;
+	rendered_levelmesh = 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -246,7 +248,7 @@ static uint64_t PerfLogNowNS()
 
 static void PerfLogHeader(FILE *f)
 {
-	fprintf(f, "# r_perflog v2\n");
+	fprintf(f, "# r_perflog v3\n");
 	fprintf(f, "# F <frame> tic=<gametic> total=<D_Display ms> r=<RenderView window ms> "
 		"bsp=<traversal ms, incl clip> clip=<wall clip ms> wr=<wall render ms> ws=<wall setup ms> "
 		"fr=<flat render ms> fs=<flat setup ms> sr=<sprite render ms> ss=<sprite setup ms> "
@@ -255,7 +257,12 @@ static void PerfLogHeader(FILE *f)
 		"fl=<flat count> fp=<flat primitives> fv=<flat vertices> sp=<sprite count> "
 		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count> "
 		"wall=<wall-clock ms since the previous logged frame: the whole main-loop iteration, "
-		"incl. sim tics and input; 0 on the first frame>\n");
+		"incl. sim tics and input; 0 on the first frame> "
+		"[lm=<levelmesh draws this frame> and, once a levelmesh draw completed on the GPU (lagged by "
+		"the frames in flight): lmcm=<cull mode: 0 none, 1 frustum, 2 Hi-Z> lmdm=<draw mode: 0 compact, "
+		"1 per cluster> lmcl1/lmcl2=<clusters drawn, phase 1 / Hi-Z phase 2> lmtri1/lmtri2=<triangles> "
+		"lmfc=<clusters frustum-culled> lmocc=<clusters Hi-Z-occluded> lmc1/lmd1=<phase 1 cull / draw GPU ms> "
+		"lmhz=<Hi-Z build GPU ms> lmc2/lmd2=<phase 2 cull / draw GPU ms> lmgpu=<levelmesh total GPU ms>]\n");
 	fprintf(f, "# L map=<name> sectors=<n> lines=<n> subsectors=<n> sprites=<n> polyobjs=<n> "
 		"lineportals=<n> portalgroups=<n> ffloors=<n>\n");
 }
@@ -337,7 +344,7 @@ void PerfLogUpdate()
 	PerfLogLastNS = nowNS;
 	fprintf(PerfLogFile, "F %llu tic=%d total=%.3f r=%.3f bsp=%.3f clip=%.3f wr=%.3f ws=%.3f "
 		"fr=%.3f fs=%.3f sr=%.3f ss=%.3f 2d=%.3f f3d=%.3f fin=%.3f pg=%.3f pr=%.3f dcms=%.3f "
-		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d wall=%.3f\n",
+		"wl=%d wsp=%d wv=%d fl=%d fp=%d fv=%d sp=%d dec=%d portals=%d cbuf=%d wall=%.3f",
 		(unsigned long long)PerfLogFrame++, gametic, FrameCycles.TimeMS(), All.TimeMS(),
 		Bsp.TimeMS(), ClipWall.TimeMS(), RenderWall.TimeMS(), SetupWall.TimeMS(),
 		RenderFlat.TimeMS(), SetupFlat.TimeMS(), RenderSprite.TimeMS(), SetupSprite.TimeMS(),
@@ -345,5 +352,19 @@ void PerfLogUpdate()
 		ProcessAll.TimeMS(), drawcalls.TimeMS(), rendered_lines, render_vertexsplit,
 		vertexcount, rendered_flats, flatprimitives, flatvertices, rendered_sprites,
 		rendered_decals, rendered_portals, rendered_commandbuffers, wallMS);
+	LevelMeshPerfStats lm;
+	bool lmStats = screen->GetLevelMeshStats(lm);
+	if (rendered_levelmesh > 0 || lmStats)
+	{
+		fprintf(PerfLogFile, " lm=%d", rendered_levelmesh);
+		if (lmStats)
+		{
+			fprintf(PerfLogFile, " lmcm=%d lmdm=%d lmcl1=%u lmcl2=%u lmtri1=%u lmtri2=%u lmfc=%u lmocc=%u "
+				"lmc1=%.3f lmd1=%.3f lmhz=%.3f lmc2=%.3f lmd2=%.3f lmgpu=%.3f",
+				lm.cullMode, lm.drawMode, lm.clusters[0], lm.clusters[1], lm.triangles[0], lm.triangles[1],
+				lm.frustumCulled, lm.occluded, lm.cullMs[0], lm.drawMs[0], lm.hizMs, lm.cullMs[1], lm.drawMs[1], lm.totalMs);
+		}
+	}
+	fprintf(PerfLogFile, "\n");
 	fflush(PerfLogFile);
 }

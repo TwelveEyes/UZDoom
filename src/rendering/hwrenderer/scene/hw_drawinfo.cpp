@@ -38,6 +38,7 @@
 #include "a_corona.h"
 #include "texturemanager.h"
 #include "actorinlines.h"
+#include "hwrenderer/hw_levelmeshbake.h"
 #include "g_levellocals.h"
 
 EXTERN_CVAR(Float, r_visibility)
@@ -55,6 +56,14 @@ CVAR(Int, gl_enhanced_nv_stealth, 3, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Bool, r_ab_fullbright, false, CVAR_NOSAVE)
 
 CVAR(Bool, gl_texture, true, 0)
+
+// Levelmesh draw (gl_uselevelmesh, Vulkan): debug switches. lm_draw 0 keeps the
+// classic lists drawing everything; lm_cullmode / lm_drawmode pick the
+// LMCULL_* (0 none, 1 frustum, 2 two-phase Hi-Z) and LMDRAW_* (0 index
+// compaction, 1 per-cluster commands) modes.
+CVAR(Bool, lm_draw, true, CVAR_NOSAVE)
+CVAR(Int, lm_cullmode, LMCULL_HIZ, CVAR_NOSAVE)
+CVAR(Int, lm_drawmode, LMDRAW_COMPACT, CVAR_NOSAVE)
 CVAR(Float, gl_mask_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Float, gl_mask_sprite_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
@@ -570,6 +579,11 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 
 	state.EnableTexture(gl_texture);
 	state.EnableBrightmap(true);
+
+	// The levelmesh draws the opaque and masked surfaces it owns; the classic
+	// lists keep the rest (map.md: transitional strategy).
+	DrawLevelMesh(state);
+
 	drawlists[GLDL_PLAINWALLS].DrawWalls(this, state, false);
 	drawlists[GLDL_PLAINFLATS].DrawFlats(this, state, false);
 
@@ -598,6 +612,55 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 	DrawDecals(state, Decals[0]);
 
 	RenderAll.Unclock();
+}
+
+//-----------------------------------------------------------------------------
+//
+// DrawLevelMesh
+//
+// Main view only (portal / mirror views are ticket 15). The render state is
+// that of a classic fullbright wall; the levelmesh vertex stage applies the
+// interim per-surface light when the scene is not fullbright (ticket 10
+// replaces it with the shading resolve).
+//
+//-----------------------------------------------------------------------------
+
+bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
+{
+	auto bake = Level->levelMeshBake;
+	if (!lm_draw || bake == nullptr || outer != nullptr || !gl_texture || !screen->LevelMeshResident(bake->Id)) return false;
+
+	LevelMeshView view;
+	VSMatrix viewProj = VPUniforms.ProjectionMatrix;
+	viewProj.multMatrix(VPUniforms.ViewMatrix);
+	memcpy(view.viewProj, viewProj.get(), sizeof(view.viewProj));
+	view.cullMode = clamp<int>(lm_cullmode, LMCULL_NONE, LMCULL_HIZ);
+	view.drawMode = clamp<int>(lm_drawmode, LMDRAW_COMPACT, LMDRAW_CLUSTERS);
+	view.flags = isFullbrightScene() ? (uint32_t)LMVF_FULLBRIGHT : 0u;
+	view.maskThreshold = gl_mask_threshold;
+
+	FColormap cm;
+	cm.Clear();
+	SetColor(state, Level, lightmode, 255, 0, true, cm, 1.f);
+	SetFog(state, Level, lightmode, 255, 0, true, nullptr, false);
+	state.SetObjectColor(0xffffffff);
+	state.SetObjectColor2(0);
+	state.SetAddColor(0);
+	state.ApplyTextureManipulation(nullptr);
+	state.EnableGlow(false);
+	state.EnableGradient(false);
+	state.EnableSplit(false);
+	state.EnableTextureMatrix(false);
+	state.SetTextureClamp(false);
+	state.SetNpotEmulation(0.f, 0.f);
+	state.SetEffect(EFF_NONE);
+	state.SetLightIndex(-1);
+
+	if (!screen->DrawLevelMesh(view, state)) return false;
+	rendered_levelmesh++;
+	for (int list : { GLDL_PLAINWALLS, GLDL_PLAINFLATS, GLDL_MASKEDWALLS, GLDL_MASKEDFLATS, GLDL_MASKEDWALLSOFS })
+		drawlists[list].RemoveLevelMeshOwned(bake);
+	return true;
 }
 
 //-----------------------------------------------------------------------------

@@ -41,3 +41,14 @@ Remove the interim lighting from ticket 08. The fullbright override stays as a d
 - [ ] Resolve cost logged per view (GPU timestamp) on the stress vantages.
 
 ## Comments
+
+- 2026-10-14 (from 08): the interim shading is the classic fullbright wall state, set in
+  `HWDrawInfo::DrawLevelMesh` before the draw. The fragment stage is the shared `main.fp` (via
+  `lm_frag.glsl`); per-surface data reaches it as the flat varying `vLMMaterial` (slot, layer
+  count, sampler, texture-mode flags).
+  - The bake defers to classic any side or plane with special, additive or texture-manipulation
+    colours (`HasWallColorEffects`, plus the plane checks), along with heightsecs and light
+    bands. These are decided at bake time. Moving them into the resolve, and dropping the
+    deferral, belongs here or in 11.
+  - Use the `WALLF_EXTCOLOR` hint carefully: the map loader sets it on every side
+    (`sector_t::CheckExColorFlag`).

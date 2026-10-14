@@ -84,6 +84,8 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_SKEW = 1 << 10,		// sloped / skewed texture alignment
 	LMSF_LIGHTLIST = 1 << 11,	// banded: drawn per light layer of lightSector's 3D lightlist (classic split planes)
 	LMSF_SKY = 1 << 12,			// unused for mesh surfaces (sky goes to side lists); reserved
+	LMSF_DEFERRED = 1 << 13,	// not drawn by the levelmesh yet: the classic path owns it (LMB_DEFERRED)
+	LMSF_TEXCLAMPY = 1 << 14,	// TEXF_ClampY texture mode (classic SetTextureClamp: clamped two-sided mid texture)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
 };
 
@@ -118,12 +120,19 @@ struct LevelMeshSurface
 static_assert(sizeof(LevelMeshSurface) == 24 * 4, "LevelMeshSurface must stay std430-compatible");
 
 // Material buckets. Inside a cluster the index range is ordered by bucket.
+// Opaque and masked follow the classic draw lists (HWDrawInfo::AddWall /
+// AddFlat): only two-sided mid textures (and 3D-floor / portal planes) are
+// alpha tested. LMB_DEFERRED holds the surfaces the levelmesh does not draw
+// yet (3D floors, heightsecs, light bands, sky-hack mid textures); the classic
+// path keeps drawing them (LevelMeshBake::SideTierOwned / SectorPlaneOwned).
 // Ticket 11 makes bucket membership runtime state.
 enum ELevelMeshBucket : uint32_t
 {
 	LMB_OPAQUE,
 	LMB_MASKED,
-	LMB_COUNT
+	LMB_DEFERRED,
+	LMB_COUNT,
+	LMB_DRAWN = LMB_DEFERRED	// buckets the levelmesh draws
 };
 
 // A spatial group of triangles: a BSP subtree cut at the triangle budget.
@@ -138,7 +147,6 @@ struct LevelMeshCluster
 	uint32_t bucketMask;	// 1 << bucket for every non-empty bucket
 	uint32_t firstSector, numSectors;	// into the cluster -> sector list (vertex anchor sectors)
 	uint32_t firstSurface, numSurfaces;	// into the cluster -> surface list
-	uint32_t reserved;
 };
 static_assert(sizeof(LevelMeshCluster) == 16 * 4, "LevelMeshCluster must stay std430-compatible");
 
@@ -177,11 +185,41 @@ static_assert(sizeof(LevelMeshPlaneXform) == 8 * 4, "LevelMeshPlaneXform must st
 
 // Texture translation table entry, indexed by the untranslated texture id.
 // Layer i of the material is bindless slot (slot + i). Slot 0 is the null
-// texture; an unresolved or invalid texture maps to { 0, 0 }.
+// texture; an unresolved or invalid texture maps to all zeros.
+// std430-compatible: 4 x 32 bit.
 struct LevelMeshTextureEntry
 {
 	uint32_t slot;
-	uint32_t numLayers;
+	uint32_t layers;		// number of layers (low 16 bits) | material layer flags (TEXF_*, high 16 bits)
+	float displayWidth, displayHeight;	// FGameTexture display size (flat texture matrix)
+};
+
+// One levelmesh view, as the game side hands it to DFrameBuffer::DrawLevelMesh.
+enum ELevelMeshCullMode : int
+{
+	LMCULL_NONE,		// every cluster, one pass (diagnostic)
+	LMCULL_FRUSTUM,		// frustum only, one pass
+	LMCULL_HIZ,			// two-phase: last frame's visible set, then Hi-Z
+};
+
+enum ELevelMeshDrawMode : int
+{
+	LMDRAW_COMPACT,		// visible clusters' indices compacted: one draw per bucket and phase
+	LMDRAW_CLUSTERS,	// one indirect command per visible cluster and bucket (draw-indirect-count)
+};
+
+enum ELevelMeshViewFlags : uint32_t
+{
+	LMVF_FULLBRIGHT = 1,	// the render state carries the light; no per-surface interim light
+};
+
+struct LevelMeshView
+{
+	float viewProj[16];		// ProjectionMatrix * ViewMatrix (GL world space: x, z, y)
+	int cullMode = LMCULL_HIZ;
+	int drawMode = LMDRAW_COMPACT;
+	uint32_t flags = 0;		// LMVF_*
+	float maskThreshold = 0.5f;	// alpha threshold of the masked bucket (gl_mask_threshold)
 };
 
 template<class T> struct LevelMeshSpan

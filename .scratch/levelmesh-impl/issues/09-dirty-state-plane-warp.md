@@ -59,4 +59,16 @@
   - Uploads go through `VkLevelMesh::AllocUpload` (host-coherent, `STORAGE` usage, so a
     compute scatter can read them) plus `QueueCopy` / `FlushUploads`.
   - The cluster→sector list is uploaded as well (binding `LMBIND_CLUSTERSECTORS`).
-
+- 2026-10-14 (from 08): the draw is `VkLevelMeshRenderer` (`vk_levelmeshrenderer.{h,cpp}`).
+  - **Cluster bounds must follow the planes.** `cull.comp` tests the cluster AABB, whose z is
+    built from the load heights. Once the vertex stage reads moving planes, a door, lift or
+    crusher can leave its cluster's box, and frustum or Hi-Z culling will drop visible geometry.
+    Refresh `bmin.z / bmax.z` from the dirty sectors (`LMBIND_CLUSTERSECTORS` gives the
+    sector→cluster fan-out), or widen the boxes to each sector's movement range.
+  - Plane z comes from `lmSectors[].planes` and `texZ` in `levelmesh.vp`. Writing those per
+    frame is the only change the vertex stage needs.
+  - Latent ownership issue: deferral is propagated to whole side tiers, but not to whole sector
+    planes. All of today's plane deferral conditions are per sector, so nothing breaks yet, but
+    a per-subsector deferral would make classic and the levelmesh both draw the plane.
+  - In the 08 demo A/B, Pirates MAP43 tick 120 drew an upper wall against the sky that classic
+    did not. That is either a moving sector or a sky rule (14); recheck it here.

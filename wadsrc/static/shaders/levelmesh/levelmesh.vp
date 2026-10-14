@@ -1,0 +1,165 @@
+/*
+** levelmesh.vp
+**
+** Levelmesh vertex stage: plane-anchored positions from the sector state
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+** The vertex-stage variant of the shader matrix for the levelmesh: vertices
+** are pulled from the LevelMeshSet (gl_VertexIndex is the mesh vertex index)
+** and every output the shared main.fp reads is produced exactly as main.vp
+** produces it, in the same order of operations, so depth and clipping
+** match the classic path. Per-surface material data travels as one flat
+** varying (vLMMaterial, see lm_frag.glsl).
+*/
+
+#include "shaders/levelmesh/lm_data.glsl"
+
+layout(location = LM_MATERIAL_LOCATION) flat out uvec4 vLMMaterial;
+
+// Wall texture v: anchored to the texture-top plane (LevelMeshBake::VertexV).
+float LM_WallV(LMVertex v, LMSurface surf, float z)
+{
+	if (surf.vRef == LM_NOPLANE) return v.vOffset + surf.vScale * z;
+	float texz = lmSectors[surf.vRef >> 1].texZ[surf.vRef & 1u];
+	return v.vOffset + surf.vScale * (z - texz);
+}
+
+// Flat texture coordinates: the classic plane texture matrix
+// (hw_SetPlaneTextureRotation: scale1 * translate * scale2 * rotate),
+// expanded into the same products the VSMatrix calls produce.
+vec2 LM_FlatTexCoord(LMVertex v, LMSurface surf, LMTextureEntry tex)
+{
+	LMPlaneXform xf = lmPlaneXforms[surf.planeRefs[0]];
+	float w = tex.displayWidth > 0.0 ? tex.displayWidth : 64.0;
+	float h = tex.displayHeight > 0.0 ? tex.displayHeight : 64.0;
+	float uoffs = xf.xOffset / w;
+	float voffs = (xf.yOffset + xf.baseyOffset) / h;
+	float a = xf.xScale * (64.0 / w);
+	float b = xf.yScale * (64.0 / h);
+	float rad = radians(-(xf.angle + xf.baseAngle));
+	float co = cos(rad);
+	float si = sin(rad);
+	return vec2((a * co) * v.u + (-(a * si)) * v.vOffset + xf.xScale * uoffs,
+		(b * si) * v.u + (b * co) * v.vOffset + xf.yScale * voffs);
+}
+
+void main()
+{
+	float ClipDistance0, ClipDistance1, ClipDistance2, ClipDistance3, ClipDistance4;
+
+	LMVertex v = lmVertices[gl_VertexIndex];
+	LMSurface surf = lmSurfaces[v.surface];
+	uint ref = v.anchor & LMV_REFMASK;
+	float z = LM_PlaneZ(lmSectors[ref >> 1].planes[ref & 1u], v.x, v.y) + v.zOffset;
+
+	LMTextureEntry tex = lmTextures[surf.textureId];
+	uint kind = surf.flags & LMSF_KINDMASK;
+	vec2 tc;
+	if (kind == LMSK_WALL) tc = vec2(v.u, LM_WallV(v, surf, z));
+	else tc = LM_FlatTexCoord(v, surf, tex);
+
+	// Material for the fragment stage: bindless base slot, layer count,
+	// sampler (classic clamp mode: walls pass HWF_CLAMPX/Y, flats CLAMP_NONE),
+	// texture-mode flags (material layers + ClampY, see LMSF_TEXCLAMPY).
+	uint samplerMode = 0u;
+	uint texflags = tex.layers & 0xffff0000u;
+	if (kind == LMSK_WALL)
+	{
+		if ((surf.flags & LMSF_CLAMPX) != 0u) samplerMode |= 1u;
+		if ((surf.flags & LMSF_CLAMPY) != 0u) samplerMode |= 2u;
+		if ((surf.flags & LMSF_TEXCLAMPY) != 0u) texflags |= LM_TEXF_CLAMPY;
+	}
+	vLMMaterial = uvec4(tex.slot, tex.layers & 0xffffu, samplerMode, texflags);
+
+	vec4 worldcoord = ModelMatrix * vec4(v.x, z, v.y, 1.0);
+	vec4 eyeCoordPos = ViewMatrix * worldcoord;
+
+	// Interim light (until the shading resolve, ticket 10): the render state
+	// carries the color; without the fullbright override every surface is
+	// scaled by its baked classic light level.
+	vColor = uVertexColor;
+	if ((uLevelMeshFlags & LMVF_FULLBRIGHT) == 0)
+	{
+		float light = clamp(float(surf.lightLevel + surf.relLight) / 255.0, 0.0, 1.0);
+		vColor.rgb *= light;
+	}
+
+	vLightmap = vec3(v.lu, v.lv, float(surf.lightmapPage));
+
+	pixelpos.xyz = worldcoord.xyz;
+	pixelpos.w = -eyeCoordPos.z/eyeCoordPos.w;
+
+	if (uGlowTopColor.a > 0 || uGlowBottomColor.a > 0)
+	{
+		float topatpoint = (uGlowTopPlane.w + uGlowTopPlane.x * worldcoord.x + uGlowTopPlane.y * worldcoord.z) * uGlowTopPlane.z;
+		float bottomatpoint = (uGlowBottomPlane.w + uGlowBottomPlane.x * worldcoord.x + uGlowBottomPlane.y * worldcoord.z) * uGlowBottomPlane.z;
+		glowdist.x = topatpoint - worldcoord.y;
+		glowdist.y = worldcoord.y - bottomatpoint;
+		glowdist.z = clamp(glowdist.x / (topatpoint - bottomatpoint), 0.0, 1.0);
+	}
+
+	if (uObjectColor2.a != 0)
+	{
+		float topatpoint = (uGradientTopPlane.w + uGradientTopPlane.x * worldcoord.x + uGradientTopPlane.y * worldcoord.z) * uGradientTopPlane.z;
+		float bottomatpoint = (uGradientBottomPlane.w + uGradientBottomPlane.x * worldcoord.x + uGradientBottomPlane.y * worldcoord.z) * uGradientBottomPlane.z;
+		gradientdist.x = topatpoint - worldcoord.y;
+		gradientdist.y = worldcoord.y - bottomatpoint;
+		gradientdist.z = clamp(gradientdist.x / (topatpoint - bottomatpoint), 0.0, 1.0);
+	}
+
+	if (uSplitBottomPlane.z != 0.0)
+	{
+		ClipDistance3 = ((uSplitTopPlane.w + uSplitTopPlane.x * worldcoord.x + uSplitTopPlane.y * worldcoord.z) * uSplitTopPlane.z) - worldcoord.y;
+		ClipDistance4 = worldcoord.y - ((uSplitBottomPlane.w + uSplitBottomPlane.x * worldcoord.x + uSplitBottomPlane.y * worldcoord.z) * uSplitBottomPlane.z);
+	}
+
+	// Surface normals are in map space (x, y, z); GL world space is (x, z, y).
+	vec3 normal = vec3(surf.normal[0], surf.normal[2], surf.normal[1]);
+	vWorldNormal = vec4(normalize((NormalModelMatrix * vec4(normal, 1.0)).xyz), 1.0);
+	vEyeNormal = vec4(normalize((NormalViewMatrix * vec4(normalize(vWorldNormal.xyz), 1.0)).xyz), 1.0);
+
+	vTexCoord = vec4(tc, 0.0, 1.0);
+
+	gl_Position = ProjectionMatrix * eyeCoordPos;
+	gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
+
+	if (uClipHeightDirection != 0.0) // clip planes used for reflective flats
+	{
+		ClipDistance0 = (worldcoord.y - uClipHeight) * uClipHeightDirection;
+	}
+	else if (uClipLine.x > -1000000.0) // line portals
+	{
+		ClipDistance0 = -( (worldcoord.z - uClipLine.y) * uClipLine.z + (uClipLine.x - worldcoord.x) * uClipLine.w ) + 1.0/32768.0;
+	}
+	else
+	{
+		ClipDistance0 = 1;
+	}
+
+	ClipDistance1 = worldcoord.y - uClipSplit.x;
+	ClipDistance2 = uClipSplit.y - worldcoord.y;
+
+	if (uSplitTopPlane == vec4(0.0))
+	{
+		ClipDistance3 = 1.0;
+		ClipDistance4 = 1.0;
+	}
+
+#ifdef NO_CLIPDISTANCE_SUPPORT
+	ClipDistanceA = vec4(ClipDistance0, ClipDistance1, ClipDistance2, ClipDistance3);
+	ClipDistanceB = vec4(ClipDistance4, 0.0, 0.0, 0.0);
+#else
+	gl_ClipDistance[0] = ClipDistance0;
+	gl_ClipDistance[1] = ClipDistance1;
+	gl_ClipDistance[2] = ClipDistance2;
+	gl_ClipDistance[3] = ClipDistance3;
+	gl_ClipDistance[4] = ClipDistance4;
+#endif
+}

@@ -246,7 +246,8 @@ struct Baker
 	void BakeWall(HWWall &w);
 	uint32_t WallVRef(HWWall &w, sector_t *rf, sector_t *rb);
 	void ProcessFlats();
-	void BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor);
+	void BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor, bool portal);
+	void ComputeOwnership();
 };
 
 //==========================================================================
@@ -317,6 +318,29 @@ void Baker::ProcessSides()
 		mh.upper.Clear();
 		mh.lower.Clear();
 	}
+}
+
+// Materials the levelmesh fragment stage cannot draw yet: it only builds the
+// default material shader (no warp, specular / PBR, paletted, user shaders
+// or canvases). Animation frames are assumed to share their base's shader.
+static bool NeedsClassicMaterial(FGameTexture *tex)
+{
+	if (tex == nullptr) return false;
+	if (tex->isWarped() || tex->isHardwareCanvas() || tex->GetUseType() == ETextureType::SWCanvas) return true;
+	if (tex->GetShaderIndex() != SHADER_Default) return true;
+	if (tex->GetNormalmap() != nullptr) return true;	// specular / PBR
+	return false;
+}
+
+// Side colors, additive color and texture manipulation the classic wall draw
+// applies (HWWall::RenderTexturedWall); white / none draws unchanged.
+static bool HasWallColorEffects(side_t *side, int tier, sector_t *frontsector)
+{
+	if (frontsector == nullptr) return false;
+	if (uint32_t(side->GetSpecialColor(tier, side_t::walltop, frontsector)) != 0xffffffffu) return true;
+	if (uint32_t(side->GetSpecialColor(tier, side_t::wallbottom, frontsector)) != 0xffffffffu) return true;
+	if ((uint32_t(side->GetAdditiveColor(tier, frontsector)) & 0xffffff) != 0) return true;
+	return side->textures[tier].TextureFx.AddColor.a != 0;
 }
 
 //==========================================================================
@@ -504,7 +528,11 @@ void Baker::BakeWall(HWWall &w)
 	int tier = w.type == RENDERWALL_TOP ? side_t::top : w.type == RENDERWALL_BOTTOM ? side_t::bottom : side_t::mid;
 	surf.flags = LMSK_WALL | (uint32_t(w.type) << LMSF_WALLTYPESHIFT);
 	if (is3d) surf.flags |= LMSF_3DFLOOR;
-	if (w.texture->isMasked() || w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF) surf.flags |= LMSF_MASKED;
+	// The classic list rule (HWDrawInfo::AddWall): only two-sided mid textures
+	// and 3D-floor sides can be masked. FTexture::Masked is not final before the
+	// pixels load, so every two-sided mid texture is alpha tested; an opaque
+	// texture passes the test everywhere.
+	if (w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF || (is3d && w.texture->isMasked())) surf.flags |= LMSF_MASKED;
 	if (w.flags & HWWall::HWF_CLAMPX) surf.flags |= LMSF_CLAMPX;
 	if (w.flags & HWWall::HWF_CLAMPY) surf.flags |= LMSF_CLAMPY;
 	if (w.flags & HWWall::HWF_GLOW) surf.flags |= LMSF_GLOW;
@@ -532,6 +560,18 @@ void Baker::BakeWall(HWWall &w)
 	surf.fakeContrast = (uint16_t)side->GetFakeContrastRel(true) | (int32_t(side->GetFakeContrastRel(false)) << 16);
 	surf.sideFlags = side->Flags;
 	surf.lightmapPage = w.lindex >= 0 ? int(w.lindex) : -1;
+	// Not drawn by the levelmesh yet: 3D floors and light bands (ticket 12),
+	// heightsecs (view-dependent fake, ticket 16), sky-hack mid textures (the
+	// classic draws them with a depth bias, GLDL_MASKEDWALLSOFS).
+	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
+	if ((w.flags & HWWall::HWF_SKYHACK) && w.type == RENDERWALL_M2S) surf.flags |= LMSF_DEFERRED;
+	// HWWall::RenderTexturedWall: clamped two-sided mids also clamp in the shader.
+	if ((w.flags & HWWall::HWF_CLAMPY) && (w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF) && !w.texture->isWarped()) surf.flags |= LMSF_TEXCLAMPY;
+	// Not yet expressible by the levelmesh shading: non-default material
+	// shaders, and side colors / texture manipulation (ticket 10). The values
+	// HWWall::RenderTexturedWall applies are tested, not WALLF_EXTCOLOR: the
+	// map loader sets that flag on every side (sector_t::CheckExColorFlag).
+	if (NeedsClassicMaterial(w.texture) || HasWallColorEffects(side, tier, w.frontsector)) surf.flags |= LMSF_DEFERRED;
 	float dx = w.glseg.x2 - w.glseg.x1, dy = w.glseg.y2 - w.glseg.y1;
 	float len = sqrtf(dx * dx + dy * dy);
 	if (len > 0)
@@ -550,7 +590,7 @@ void Baker::BakeWall(HWWall &w)
 //
 //==========================================================================
 
-void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor)
+void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor, bool portal)
 {
 	auto &st = Out->Stats;
 	const secplane_t &splane = model->GetSecPlane(mplane);
@@ -601,7 +641,16 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 		v.anchor = ref | (LMV_FLAT << LMV_ROLESHIFT);
 		Out->Vertices.Push(v);
 	}
-	for (auto idx : gen.indices) Out->Indices.Push(firstv + idx);
+	// The classic draws floors and ceilings from one triangulation without
+	// culling. The levelmesh culls back faces, so a ceiling (seen from below)
+	// gets the opposite winding of a floor.
+	bool flip = !ffloor && h == sector_t::ceiling;
+	for (unsigned i = 0; i + 2 < gen.indices.Size(); i += 3)
+	{
+		Out->Indices.Push(firstv + gen.indices[i]);
+		Out->Indices.Push(firstv + gen.indices[flip ? i + 2 : i + 1]);
+		Out->Indices.Push(firstv + gen.indices[flip ? i + 1 : i + 2]);
+	}
 
 	surf.planeRefs[0] = ref;
 	surf.flags = (h == sector_t::ceiling ? LMSK_CEILING : LMSK_FLOOR);
@@ -611,9 +660,16 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 		surf.flags |= LMSF_HEIGHTSEC;
 		st.heightsecSurfaces++;
 	}
+	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC)) surf.flags |= LMSF_DEFERRED;
 	FTextureID texid = model->GetTexture(mplane);
 	auto tex = TexMan.GetGameTexture(texid, true);
-	if (tex && tex->isMasked()) surf.flags |= LMSF_MASKED;
+	// As walls: material shaders and the plane colors / texture manipulation
+	// HWFlat::DrawFlat applies (ticket 10).
+	if (NeedsClassicMaterial(tex) || model->SpecialColors[mplane] != 0xffffffff || (model->AdditiveColors[mplane] & 0xffffff) != 0 ||
+		model->planes[mplane].TextureFx.AddColor.a != 0)
+		surf.flags |= LMSF_DEFERRED;
+	// HWDrawInfo::AddFlat: only 3D-floor and portal planes are alpha tested.
+	if (tex && tex->isMasked() && (ffloor || portal)) surf.flags |= LMSF_MASKED;
 	surf.vScale = 0;
 	surf.textureId = texid.GetIndex();
 	surf.sideRef = 0xffffffffu;
@@ -666,7 +722,7 @@ void Baker::ProcessFlats()
 						Out->TranslucentFlats.Push({ sub, &sec, nullptr, h });
 						continue;
 					}
-					BakeFlat(sub, &sec, h, &sec, h, 0, false);
+					BakeFlat(sub, &sec, h, &sec, h, 0, false, portal);
 				}
 
 				// 3D-floor planes, on the target sector's triangulation.
@@ -693,12 +749,51 @@ void Baker::ProcessFlats()
 							Out->Stats.untexturedFlats++;
 							continue;
 						}
-						BakeFlat(sub, &sec, h, pr.model, pr.isceiling, int(k) + 1, true);
+						BakeFlat(sub, &sec, h, pr.model, pr.isceiling, int(k) + 1, true, false);
 					}
 				}
 			}
 		}
 	}
+}
+
+//==========================================================================
+//
+// Ownership: which classic draw-list entries the levelmesh replaces. A side
+// tier is owned when all its mesh surfaces are drawn; one deferred piece
+// (a light band, a 3D-floor clip) defers the whole tier, so the classic
+// HWWalls of a tier are either all skipped or all drawn. A sector plane is
+// owned when its (non-3D-floor) flats are in the mesh and drawn.
+//
+//==========================================================================
+
+void Baker::ComputeOwnership()
+{
+	enum { HAS_MESH = 1, HAS_DEFERRED = 2 };
+	TArray<uint8_t> tiers(Level->sides.Size() * 3, true);
+	TArray<uint8_t> planes(Level->sectors.Size() * 2, true);
+	memset(tiers.Data(), 0, tiers.Size());
+	memset(planes.Data(), 0, planes.Size());
+
+	for (auto &surf : Out->Surfaces)
+	{
+		uint8_t bit = (surf.flags & LMSF_DEFERRED) ? HAS_DEFERRED : HAS_MESH;
+		if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) tiers[surf.sideRef] |= bit;
+		else if (!(surf.flags & LMSF_3DFLOOR)) planes[surf.planeRefs[0]] |= bit;	// plane ref = sector * 2 + plane
+	}
+	for (auto &surf : Out->Surfaces)
+	{
+		if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL && (tiers[surf.sideRef] & HAS_DEFERRED) && !(surf.flags & LMSF_DEFERRED))
+		{
+			surf.flags |= LMSF_DEFERRED;
+			Out->Stats.deferredByTier++;
+		}
+		if (surf.flags & LMSF_DEFERRED) Out->Stats.deferredSurfaces++;
+	}
+	Out->SideTierOwned.Resize(tiers.Size());
+	for (unsigned i = 0; i < tiers.Size(); i++) Out->SideTierOwned[i] = tiers[i] == HAS_MESH;
+	Out->SectorPlaneOwned.Resize(planes.Size());
+	for (unsigned i = 0; i < planes.Size(); i++) Out->SectorPlaneOwned[i] = planes[i] == HAS_MESH;
 }
 
 } // namespace
@@ -731,6 +826,7 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 	Printf("LevelMeshBake %s: sides %u (poly skipped %u); side lists: translucent walls %u, portal walls %u, fog walls %u, upper missing %u, lower missing %u, translucent flats %u, portal/sky flats %u; untextured flats %u; heightsec surfaces %u\n",
 		mapname, s.sidesProcessed, s.polySidesSkipped, s.translucentWalls, s.portalWalls, s.fogWalls, s.upperMissing, s.lowerMissing,
 		s.translucentFlats, s.portalFlats, s.untexturedFlats, s.heightsecSurfaces);
+	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier)\n", mapname, s.deferredSurfaces, s.deferredByTier);
 	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u\n",
 		mapname, s.zMismatch, s.vMismatch, s.zInexact, s.vInexact, s.offsetAnchored[LMV_BOTTOM], s.offsetAnchored[LMV_TOP], s.offsetAnchored[LMV_SIDE], s.offsetAnchored[LMV_FLAT],
 		s.vScaleInconsistent, s.planeRefOverflow, s.ffloorVRefHeuristic);
@@ -795,6 +891,7 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 	}
 	double t1 = I_msTimeF();
 	b.ProcessFlats();
+	b.ComputeOwnership();
 	double t2 = I_msTimeF();
 
 	auto &st = bake->Stats;

@@ -43,6 +43,19 @@ extern int rendered_portals;
 
 extern int vertexcount, flatvertices, flatprimitives;
 
+// Levelmesh GPU work of the latest completed draw (DFrameBuffer::
+// GetLevelMeshStats), lagged by the frames in flight. Phase index 0 is the
+// first (or only) cull + draw phase, 1 the Hi-Z phase.
+struct LevelMeshPerfStats
+{
+	uint64_t serial = 0;		// completed levelmesh draws so far; 0 = none yet
+	int cullMode = -1, drawMode = -1;	// LMCULL_* / LMDRAW_* of that draw
+	unsigned clusters[2] = {}, triangles[2] = {};	// drawn per phase
+	unsigned frustumCulled = 0, occluded = 0;	// clusters
+	double cullMs[2] = {}, drawMs[2] = {}, hizMs = 0, totalMs = 0;	// GPU time
+};
+extern int rendered_levelmesh;	// levelmesh draws this frame
+
 void ResetProfilingData();
 void CheckBench();
 void  checkBenchActive();

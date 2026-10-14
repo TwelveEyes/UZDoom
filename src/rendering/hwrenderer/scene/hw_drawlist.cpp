@@ -24,6 +24,7 @@
 #include "hw_walldispatcher.h"
 #include "hwrenderer/scene/hw_drawlist.h"
 #include "hwrenderer/scene/hw_drawstructs.h"
+#include "hwrenderer/hw_levelmeshbake.h"
 #include "r_sky.h"
 #include "r_utility.h"
 
@@ -830,6 +831,55 @@ void HWDrawList::Draw(HWDrawInfo *di, FRenderState &state, bool translucent)
 	{
 		DoDraw(di, state, translucent, i);
 	}
+}
+
+//==========================================================================
+//
+// Drops the entries the levelmesh drew (whole side tiers and sector planes
+// the bake owns). Only the plain tier types are claimed: other wall types
+// (3D-floor blocks, fog boundaries, mirrors, ...) always stay classic, even
+// where Baker::BakeWall files them under a tier.
+//
+//==========================================================================
+void HWDrawList::RemoveLevelMeshOwned(const LevelMeshBake *bake)
+{
+	unsigned out = 0;
+	for (unsigned i = 0; i < drawitems.Size(); i++)
+	{
+		const auto &item = drawitems[i];
+		bool owned = false;
+		if (item.rendertype == DrawType_WALL)
+		{
+			const HWWall *w = walls[item.index];
+			int tier = -1;
+			switch (w->type)
+			{
+			case RENDERWALL_TOP: tier = side_t::top; break;
+			case RENDERWALL_BOTTOM: tier = side_t::bottom; break;
+			case RENDERWALL_M1S:
+			case RENDERWALL_M2S:
+			case RENDERWALL_M2SNF: tier = side_t::mid; break;
+			default: break;
+			}
+			if (tier >= 0 && w->seg && w->seg->sidedef)
+			{
+				unsigned ref = w->seg->sidedef->Index() * 3 + tier;
+				owned = ref < bake->SideTierOwned.Size() && bake->SideTierOwned[ref];
+			}
+		}
+		else if (item.rendertype == DrawType_FLAT)
+		{
+			// Sector planes only: not 3D-floor planes, not hack fills.
+			const HWFlat *f = flats[item.index];
+			if (f->hacktype == 0 && (f->renderflags == SSRF_RENDERFLOOR || f->renderflags == SSRF_RENDERCEILING) && f->sector)
+			{
+				unsigned ref = f->sector->sectornum * 2 + (f->ceiling ? 1 : 0);
+				owned = ref < bake->SectorPlaneOwned.Size() && bake->SectorPlaneOwned[ref];
+			}
+		}
+		if (!owned) drawitems[out++] = item;
+	}
+	drawitems.Resize(out);
 }
 
 //==========================================================================

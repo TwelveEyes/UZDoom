@@ -38,6 +38,8 @@
 
 struct FPortalSceneState;
 struct LevelMeshUploadData;
+struct LevelMeshView;
+struct LevelMeshPerfStats;
 class FSkyVertexBuffer;
 class IIndexBuffer;
 class IVertexBuffer;
@@ -183,6 +185,10 @@ public:
 	virtual void SetLevelMeshData(const LevelMeshUploadData *data) { }	// nullptr releases
 	virtual bool LevelMeshResident(uint64_t id) { return false; }
 	virtual void PrintLevelMeshStats() { }
+	// Draws the levelmesh for the current view into the scene (opaque and
+	// masked buckets). False = nothing drawn: the classic lists draw everything.
+	virtual bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) { return false; }
+	virtual bool GetLevelMeshStats(LevelMeshPerfStats &stats) { return false; }
 	bool allowSSBO() const
 	{
 #ifndef HW_BLOCK_SSBO

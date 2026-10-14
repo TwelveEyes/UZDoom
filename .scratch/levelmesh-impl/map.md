@@ -277,7 +277,7 @@ are included.
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–07 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–08 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -349,4 +349,23 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Finding: the bake's `LMSF_MASKED` is unreliable (textures are unloaded at load), so buckets
     move to runtime state (ticket 11).
   - Amended tickets: 08, 09, 11.
-
+- 2026-10-14: ticket 08 resolved → `vk_levelmeshrenderer.{h,cpp}`,
+  `wadsrc/static/shaders/levelmesh/`, `HWDrawInfo::DrawLevelMesh`, and
+  `DFrameBuffer::DrawLevelMesh`.
+  - Two-phase Hi-Z (last frame's visible set, then Hi-Z) is the default; none and frustum-only
+    remain as diagnostic modes.
+  - Index compaction (one draw per bucket and phase) is the default draw. Per-cluster
+    draw-indirect-count measured equal.
+  - MSAA Hi-Z: max over samples at full resolution (0.075 ms at 4×).
+  - Frustum test: no near/far rejection, because of depth clamp.
+  - Interim shading is fullbright. Owned walls and flats leave the classic lists after a
+    successful draw; the walk still runs.
+  - Ownership is wider than planned: the bake also defers heightsecs, light bands, sky-hack
+    mids, non-default materials, and colour/texture-manipulation sides and planes.
+    `WALLF_EXTCOLOR` is set on every side, so the effective values are tested instead.
+  - The masked bucket follows the classic list rule.
+  - GPU 0.12–0.23 ms on the stress vantages (research/08-gpu-timings.md).
+  - Classic is unchanged on DOOM2 MAP07. Pirates MAP43 shows a view-bob difference against a
+    dirty reference build, accepted by the user.
+  - New tooling: `abtest.py --set-a/--set-b`, `r_perflog v3`.
+  - Amended tickets: 09, 10, 11, 14, 15.

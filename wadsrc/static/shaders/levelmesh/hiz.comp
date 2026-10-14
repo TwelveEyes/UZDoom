@@ -1,0 +1,63 @@
+/*
+** hiz.comp
+**
+** Levelmesh Hi-Z pyramid: max depth, one dispatch per level
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+** Level 0 covers the viewport of the scene depth at full resolution; with
+** MSAA it is the maximum over all samples (sample 0 alone is not
+** conservative). Level n + 1 has floor(size / 2) texels; a texel takes the
+** maximum of its 2 x 2 source texels, and the last row / column of an
+** odd-sized source also takes the extra texel, so no source depth is dropped.
+*/
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#if defined(HIZ_FROM_DEPTH_MS)
+layout(set = 0, binding = 0) uniform sampler2DMS srcDepth;
+#elif defined(HIZ_FROM_DEPTH)
+layout(set = 0, binding = 0) uniform sampler2D srcDepth;
+#else
+layout(set = 0, binding = 0) uniform sampler2D srcLevel;
+#endif
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D dstLevel;
+
+layout(push_constant) uniform HiZConstants
+{
+	ivec2 srcOffset;	// level 0: viewport origin in the depth buffer
+	ivec2 srcSize;		// source level size (level 0: viewport size)
+	ivec2 dstSize;
+	int samples;
+	int padding;
+};
+
+void main()
+{
+	ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+	if (p.x >= dstSize.x || p.y >= dstSize.y) return;
+
+#if defined(HIZ_FROM_DEPTH_MS)
+	float z = 0.0;
+	for (int s = 0; s < samples; s++)
+		z = max(z, texelFetch(srcDepth, srcOffset + p, s).r);
+#elif defined(HIZ_FROM_DEPTH)
+	float z = texelFetch(srcDepth, srcOffset + p, 0).r;
+#else
+	ivec2 s0 = p * 2;
+	// The last texel of a row / column also covers the remainder of an odd size.
+	ivec2 s1 = min(s0 + 1, srcSize - 1);
+	ivec2 s2 = ivec2(p.x == dstSize.x - 1 ? srcSize.x - 1 : s1.x, p.y == dstSize.y - 1 ? srcSize.y - 1 : s1.y);
+	float z = 0.0;
+	for (int y = s0.y; y <= s2.y; y++)
+		for (int x = s0.x; x <= s2.x; x++)
+			z = max(z, texelFetch(srcLevel, ivec2(x, y), 0).r);
+#endif
+	imageStore(dstLevel, p, vec4(z));
+}

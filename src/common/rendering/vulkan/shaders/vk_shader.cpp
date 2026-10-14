@@ -30,6 +30,7 @@
 #include "version.h"
 #include "cmdlib.h"
 #include "hw_viewpointuniforms.h"
+#include "vulkan/renderer/vk_levelmesh.h"
 
 ShaderIncludeResult VkShaderManager::OnInclude(FString headerName, FString includerName, size_t depth)
 {
@@ -257,7 +258,8 @@ static const char *shaderBindings = R"(
 	    mat4 bones[];
 	};
 
-	// textures
+	// textures (the levelmesh binds its material layers bindlessly: lm_frag.glsl)
+	#ifndef LEVELMESH
 	layout(set = 2, binding = 0) uniform sampler2D tex;
 	layout(set = 2, binding = 1) uniform sampler2D texture2;
 	layout(set = 2, binding = 2) uniform sampler2D texture3;
@@ -270,6 +272,7 @@ static const char *shaderBindings = R"(
 	layout(set = 2, binding = 9) uniform sampler2D texture10;
 	layout(set = 2, binding = 10) uniform sampler2D texture11;
 	layout(set = 2, binding = 11) uniform sampler2D texture12;
+	#endif
 
 	// This must match the PushConstants struct
 	layout(push_constant) uniform PushConstants
@@ -295,7 +298,7 @@ static const char *shaderBindings = R"(
 		int uBoneIndexBase;
 
 		int uDataIndex;
-		int padding2, padding3;
+		int uLevelMeshFlags, padding3;
 	};
 
 	// material types
@@ -385,10 +388,12 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadVertShader(FString shadername
 		.Create(shadername.GetChars(), fb->device.get());
 }
 
-std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type)
+std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type, bool levelmesh)
 {
 	FString pre_placeholder = GetTargetGlslVersion();
 	pre_placeholder << "#extension GL_GOOGLE_include_directive : enable\n";
+	if (levelmesh)
+		pre_placeholder << "#extension GL_EXT_nonuniform_qualifier : enable\n";
 	if (fb->RaytracingEnabled())
 		pre_placeholder << "\n#define SUPPORTS_RAYTRACING\n";
 
@@ -405,6 +410,7 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername
 	if (!fb->device->EnabledFeatures.Features.shaderClipDistance) code << "#define NO_CLIPDISTANCE_SUPPORT\n";
 	if (!alphatest) code << "#define NO_ALPHATEST\n";
 	if (gbufferpass) code << "#define GBUFFER_PASS\n";
+	if (levelmesh) code << "#include \"shaders/levelmesh/lm_frag.glsl\"\n";
 
 	code << "\n#line 1\n";
 	code << LoadPrivateShaderLump(frag_lump).GetChars() << "\n";
@@ -476,6 +482,78 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername
 
 	return ShaderBuilder()
 		.Type(ShaderType::Fragment)
+		.AddSource(shadername.GetChars(), code.GetChars())
+		.DebugName(shadername.GetChars())
+		.OnIncludeLocal(OnInclude)
+		.OnIncludeSystem(OnInclude)
+		.Create(shadername.GetChars(), fb->device.get());
+}
+
+//==========================================================================
+//
+// Levelmesh shaders (compiled on first use)
+//
+// The vertex stage is the levelmesh variant (shaders/levelmesh/levelmesh.vp,
+// vertex pulling, no vertex inputs); the fragment stage is the shared main.fp
+// with the default material, its samplers redirected to the bindless table.
+//
+//==========================================================================
+
+VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passType)
+{
+	auto &prog = mLevelMeshShaders[alphatest ? 1 : 0][passType];
+	if (!prog.frag)
+	{
+		FString defines = VkLevelMesh::ShaderDefines(VkLevelMesh::LM_SET_INDEX, VkLevelMesh::LM_TEXTURE_SET_INDEX);
+		FString name = FStringf("levelmesh%s%s", alphatest ? "" : "_nat", passType == GBUFFER_PASS ? "_gbuffer" : "");
+		if (!mLevelMeshVert)
+			mLevelMeshVert = LoadLevelMeshVertShader("levelmesh_vert", defines.GetChars());
+		prog.frag = LoadFragShader(name, "shaders/glsl/main.fp", defaultshaders[SHADER_Default].gettexelfunc, defaultshaders[SHADER_Default].lightfunc,
+			defines.GetChars(), alphatest, passType == GBUFFER_PASS, static_cast<AllShaderIndex>(SHADER_Default), true);
+	}
+	return &prog;
+}
+
+std::unique_ptr<VulkanShader> VkShaderManager::LoadLevelMeshVertShader(FString shadername, const char *defines)
+{
+	FString code = GetTargetGlslVersion();
+	code << "#extension GL_GOOGLE_include_directive : enable\n";
+	code << defines;
+	code << "\n#define MAX_STREAM_DATA " << std::to_string(MAX_STREAM_DATA).c_str() << "\n";
+#ifdef NPOT_EMULATION
+	code << "#define NPOT_EMULATION\n";
+#endif
+	code << shaderBindings;
+	code << "layout(set = 1, binding = 0, std140) uniform readonly ViewpointUBO" << ShaderInputsOutputs::GenerateStruct<HWViewpointUniforms>() << ";\n";
+	// Outputs only: the levelmesh pulls its vertices from the LevelMeshSet.
+	FString io = ShaderInputsOutputs::GenerateInputsOutputs(true, false, static_cast<AllShaderIndex>(SHADER_Default), false, fb->device->EnabledFeatures.Features.shaderClipDistance);
+	for (auto &line : io.Split("\n"))
+	{
+		if (line.IndexOf(") in ") < 0) code << line << "\n";
+	}
+	if (!fb->device->EnabledFeatures.Features.shaderClipDistance) code << "#define NO_CLIPDISTANCE_SUPPORT\n";
+	code << "#line 1\n";
+	code << LoadPrivateShaderLump("shaders/levelmesh/levelmesh.vp").GetChars() << "\n";
+
+	return ShaderBuilder()
+		.Type(ShaderType::Vertex)
+		.AddSource(shadername.GetChars(), code.GetChars())
+		.DebugName(shadername.GetChars())
+		.OnIncludeLocal(OnInclude)
+		.OnIncludeSystem(OnInclude)
+		.Create(shadername.GetChars(), fb->device.get());
+}
+
+std::unique_ptr<VulkanShader> VkShaderManager::LoadComputeShader(FString shadername, const char *lump, const char *defines)
+{
+	FString code = GetTargetGlslVersion();
+	code << "#extension GL_GOOGLE_include_directive : enable\n";
+	code << defines;
+	code << "\n#line 1\n";
+	code << LoadPrivateShaderLump(lump).GetChars() << "\n";
+
+	return ShaderBuilder()
+		.Type(ShaderType::Compute)
 		.AddSource(shadername.GetChars(), code.GetChars())
 		.DebugName(shadername.GetChars())
 		.OnIncludeLocal(OnInclude)

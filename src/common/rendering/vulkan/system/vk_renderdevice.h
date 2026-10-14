@@ -44,6 +44,7 @@ class VkHardwareTexture;
 class VkRenderBuffers;
 class VkPostprocess;
 class VkLevelMesh;
+class VkLevelMeshRenderer;
 
 class VulkanRenderDevice : public SystemBaseFrameBuffer
 {
@@ -95,6 +96,8 @@ public:
 	void SetLevelMeshData(const LevelMeshUploadData *data) override;
 	bool LevelMeshResident(uint64_t id) override;
 	void PrintLevelMeshStats() override;
+	bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) override;
+	bool GetLevelMeshStats(LevelMeshPerfStats &stats) override;
 	void UpdateShadowMap() override;
 	void SetSaveBuffers(bool yes) override;
 	void ImageTransitionScene(bool unknown) override;
@@ -138,6 +141,7 @@ private:
 	std::unique_ptr<VkRenderPassManager> mRenderPassManager;
 	std::unique_ptr<VkRaytrace> mRaytrace;
 	std::unique_ptr<VkLevelMesh> mLevelMesh;
+	std::unique_ptr<VkLevelMeshRenderer> mLevelMeshRenderer;
 	std::unique_ptr<VkRenderState> mRenderState;
 
 	VkRenderBuffers *mActiveRenderBuffers = nullptr;

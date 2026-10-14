@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "zvulkan/vulkanobjects.h"
+#include "zstring.h"
 #include "hwrenderer/data/buffers.h"
 #include "hwrenderer/data/hw_levelmeshdata.h"
 
@@ -62,6 +63,10 @@ public:
 	VkLevelMesh(VulkanRenderDevice *fb);
 	~VkLevelMesh();
 
+	// GLSL constants mirroring hw_levelmeshdata.h / ELevelMeshBinding for the
+	// levelmesh shaders, with the LevelMeshSet at lmSet.
+	static FString ShaderDefines(int lmSet, int textureSet);
+
 	bool Supported(bool report);
 	void SetData(const LevelMeshUploadData *data);
 	bool IsResident(uint64_t id) const { return mResident && mId == id; }
@@ -95,6 +100,8 @@ public:
 	VulkanPipelineLayout *GetPipelineLayout() { return mPipelineLayout.get(); }
 	unsigned GetClusterCount() const { return mCounts[LMBIND_CLUSTERS]; }
 	unsigned GetIndexCount() const { return mCounts[LMBIND_INDICES]; }
+	unsigned GetBucketIndexCount(int bucket) const { return mBucketIndices[bucket]; }
+	uint64_t GetId() const { return mResident ? mId : 0; }
 
 private:
 	void CreateDeviceObjects();
@@ -129,6 +136,7 @@ private:
 	std::unique_ptr<VulkanBuffer> mBuffers[LMBIND_NUMBUFFERS];
 	size_t mSizes[LMBIND_NUMBUFFERS] = {};
 	unsigned mCounts[LMBIND_NUMBUFFERS] = {};
+	unsigned mBucketIndices[LMB_COUNT] = {};	// per bucket, over all clusters
 	std::unique_ptr<VulkanDescriptorSet> mSet;
 	bool mSamplersDirty = false;
 	double mUploadMs = 0;

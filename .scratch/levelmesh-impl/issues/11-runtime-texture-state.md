@@ -54,4 +54,12 @@
   - Indexed (palette) materials bind their base layer only.
   - `LMSF_MASKED` from the bake is unreliable (textures unloaded at bake time; see 07
     Comments). Bucket membership has to come from the material state here.
-
+- 2026-10-14 (from 08): the classic-vs-levelmesh demo A/B shows this ticket's runtime state.
+  - Pirates MAP43: scrolling skull pillars, with side offsets moving in x and y.
+  - SOS MAP46: the animated blood texture. Static A/B passes until the animation advances, at
+    tick 10.
+  - Non-default material shaders (warp, specular/PBR, user shaders, canvases) are deferred to
+    classic by the bake (`NeedsClassicMaterial`). The levelmesh builds only the default material
+    program (`VkShaderManager::GetLevelMesh`).
+  - The masked bucket now follows the classic list rule (two-sided mids, masked 3D-floor sides,
+    3D-floor and portal planes), not `isMasked()`.

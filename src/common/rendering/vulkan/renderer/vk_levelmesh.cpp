@@ -155,6 +155,27 @@ bool VkLevelMesh::Supported(bool report)
 //
 //==========================================================================
 
+FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
+{
+	FString d;
+	d << "#define LEVELMESH\n";
+	d.AppendFormat("#define LM_SET %d\n#define LM_TEXTURE_SET %d\n", lmSet, textureSet);
+	d << "#define LM_MATERIAL_LOCATION 15\n";	// past the generated varyings
+	static const char *names[] = { "VERTICES", "INDICES", "SURFACES", "CLUSTERS", "CLUSTERSECTORS", "CLUSTERSURFACES",
+		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE" };
+	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "binding names out of sync");
+	for (int b = 0; b < LMBIND_NUMBUFFERS; b++) d.AppendFormat("#define LMBIND_%s %d\n", names[b], b);
+	d.AppendFormat("#define LMBIND_SAMPLERS %d\n#define NUMSAMPLERS %d\n", (int)LMBIND_SAMPLERS, (int)NUMSAMPLERS);
+	d.AppendFormat("#define LMB_COUNT %d\n#define LMB_DRAWN %uu\n", (int)LMB_COUNT, (unsigned)LMB_DRAWN);
+	d.AppendFormat("#define LM_NOPLANE 0x%xu\n#define LMV_REFMASK 0x%xu\n", LM_NOPLANE, (unsigned)LMV_REFMASK);
+	d.AppendFormat("#define LMSF_KINDMASK %uu\n#define LMSK_WALL %uu\n", (unsigned)LMSF_KINDMASK, (unsigned)LMSK_WALL);
+	d.AppendFormat("#define LMSF_CLAMPX %uu\n#define LMSF_CLAMPY %uu\n#define LMSF_TEXCLAMPY %uu\n", (unsigned)LMSF_CLAMPX, (unsigned)LMSF_CLAMPY, (unsigned)LMSF_TEXCLAMPY);
+	d.AppendFormat("#define LM_TEXF_CLAMPY 0x%xu\n", (unsigned)TEXF_ClampY);
+	d.AppendFormat("#define LMVF_FULLBRIGHT %d\n", (int)LMVF_FULLBRIGHT);
+	d.AppendFormat("#define LMCULL_NONE %uu\n#define LMDRAW_COMPACT %uu\n", (unsigned)LMCULL_NONE, (unsigned)LMDRAW_COMPACT);
+	return d;
+}
+
 void VkLevelMesh::CreateDeviceObjects()
 {
 	if (mCreated) return;
@@ -220,6 +241,7 @@ void VkLevelMesh::ReleaseLevel()
 	deleteList->Add(std::move(mSet));
 	for (auto &s : mSizes) s = 0;
 	for (auto &c : mCounts) c = 0;
+	for (auto &c : mBucketIndices) c = 0;
 	mResident = false;
 	mId = 0;
 	mTable.clear();
@@ -284,6 +306,10 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
+	for (unsigned i = 0; i < data->clusters.size; i++)
+		for (int b = 0; b < (int)LMB_COUNT; b++)
+			mBucketIndices[b] += data->clusters.data[i].bucketIndices[b];
+
 	mSet = mSetPool->allocate(mSetLayout.get());
 	mSet->SetDebugName("VkLevelMesh.Set");
 	WriteDescriptors write;
@@ -292,7 +318,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 	write.Execute(dev);
 	WriteSamplers();
 
-	mTable.assign(data->translationTableSize, LevelMeshTextureEntry{ 0, 0 });
+	mTable.assign(data->translationTableSize, LevelMeshTextureEntry{});
 	mPendingFlag.assign(data->translationTableSize, 0);
 	for (unsigned i = 0; i < data->textureIds.size; i++)
 	{
@@ -392,10 +418,10 @@ void VkLevelMesh::FlushSlotWrites()
 LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 {
 	auto tex = TexMan.GetGameTexture(FSetTextureID(id), true);
-	if (tex == nullptr || !tex->isValid()) return { 0, 0 };
+	if (tex == nullptr || !tex->isValid()) return {};
 	int scaleflags = shouldUpscale(tex, UF_Texture) ? CTF_Upscale : 0;
 	auto mat = static_cast<VkMaterial *>(FMaterial::ValidateTexture(tex, scaleflags));
-	if (mat == nullptr) return { 0, 0 };
+	if (mat == nullptr) return {};
 
 	auto it = mMaterials.find(mat);
 	if (it == mMaterials.end())
@@ -407,7 +433,7 @@ LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 		if (first == 0)
 		{
 			mSlotOverflows++;
-			return { 0, 0 };
+			return {};
 		}
 		for (uint32_t i = 0; i < count; i++)
 		{
@@ -418,7 +444,9 @@ LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 		it = mMaterials.emplace(mat, MaterialSlots{ first, count, {} }).first;
 	}
 	it->second.ids.push_back(id);
-	return { it->second.first, it->second.count };
+	// Layer flags (TEXF_*, already in the high 16 bits) only describe layers that are bound.
+	uint32_t flags = it->second.count > 1 ? (uint32_t)mat->GetLayerFlags() & 0xffff0000u : 0;
+	return { it->second.first, it->second.count | flags, (float)tex->GetDisplayWidth(), (float)tex->GetDisplayHeight() };
 }
 
 void VkLevelMesh::MaterialInvalidated(VkMaterial *mat)
@@ -429,7 +457,7 @@ void VkLevelMesh::MaterialInvalidated(VkMaterial *mat)
 	for (int id : it->second.ids)
 	{
 		if ((unsigned)id >= mTable.size()) continue;
-		mTable[id] = { 0, 0 };
+		mTable[id] = {};
 		mTableDirtyMin = std::min(mTableDirtyMin, (uint32_t)id);
 		mTableDirtyMax = std::max(mTableDirtyMax, (uint32_t)id);
 		if (!mPendingFlag[id])

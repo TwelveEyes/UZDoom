@@ -45,6 +45,7 @@
 #include "vulkan/renderer/vk_postprocess.h"
 #include "vulkan/renderer/vk_raytrace.h"
 #include "vulkan/renderer/vk_levelmesh.h"
+#include "vulkan/renderer/vk_levelmeshrenderer.h"
 #include "vulkan/renderer/vk_renderpass.h"
 #include "vulkan/renderer/vk_renderstate.h"
 #include "vulkan/shaders/vk_shader.h"
@@ -144,6 +145,7 @@ VulkanRenderDevice::~VulkanRenderDevice()
 		mBufferManager->Deinit();
 	if (mShaderManager)
 		mShaderManager->Deinit();
+	mLevelMeshRenderer.reset();
 	mLevelMesh.reset();
 
 	mCommands->DeleteFrameObjects();
@@ -189,6 +191,7 @@ void VulkanRenderDevice::InitializeState()
 	mRenderPassManager.reset(new VkRenderPassManager(this));
 	mRaytrace.reset(new VkRaytrace(this));
 	mLevelMesh.reset(new VkLevelMesh(this));
+	mLevelMeshRenderer.reset(new VkLevelMeshRenderer(this));
 
 	mVertexData = new FFlatVertexBuffer(GetWidth(), GetHeight());
 	mSkyData = new FSkyVertexBuffer;
@@ -473,6 +476,7 @@ void VulkanRenderDevice::BeginFrame()
 	mRenderState->BeginFrame();
 	mDescriptorSetManager->BeginFrame();
 	mLevelMesh->BeginFrame();
+	if (mLevelMeshRenderer) mLevelMeshRenderer->BeginFrame();
 }
 
 void VulkanRenderDevice::InitLightmap(int LMTextureSize, int LMTextureCount, TArray<uint16_t>& LMTextureData)
@@ -555,6 +559,20 @@ void VulkanRenderDevice::SetLevelMeshData(const LevelMeshUploadData *data)
 bool VulkanRenderDevice::LevelMeshResident(uint64_t id)
 {
 	return mLevelMesh && mLevelMesh->IsResident(id);
+}
+
+bool VulkanRenderDevice::DrawLevelMesh(const LevelMeshView &view, FRenderState &state)
+{
+	// The main scene of the screen only (not the savegame picture buffers).
+	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get() || &state != mRenderState.get()) return false;
+	return mLevelMeshRenderer->Draw(view);
+}
+
+bool VulkanRenderDevice::GetLevelMeshStats(LevelMeshPerfStats &stats)
+{
+	if (!mLevelMeshRenderer || mLevelMeshRenderer->GetStats().serial == 0) return false;
+	stats = mLevelMeshRenderer->GetStats();
+	return true;
 }
 
 void VulkanRenderDevice::PrintLevelMeshStats()

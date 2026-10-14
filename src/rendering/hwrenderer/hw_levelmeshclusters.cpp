@@ -39,6 +39,7 @@ namespace
 
 uint32_t SurfaceBucket(const LevelMeshSurface &surf)
 {
+	if (surf.flags & LMSF_DEFERRED) return LMB_DEFERRED;
 	return (surf.flags & LMSF_MASKED) ? LMB_MASKED : LMB_OPAQUE;
 }
 
@@ -141,7 +142,8 @@ struct ClusterBuilder
 		cur.numSurfaces = Bake->ClusterSurfaces.Size() - cur.firstSurface;
 		for (uint32_t b = 0; b < LMB_COUNT; b++)
 			if (cur.bucketIndices[b]) cur.bucketMask |= 1u << b;
-		if ((cur.bucketMask & (cur.bucketMask - 1)) != 0) Bake->ClusterStats.mixedBucketClusters++;
+		uint32_t drawn = cur.bucketMask & ((1u << LMB_DRAWN) - 1);
+		if ((drawn & (drawn - 1)) != 0) Bake->ClusterStats.mixedBucketClusters++;
 		Bake->Clusters.Push(cur);
 		ClusterTris.Push(curTris);
 	}

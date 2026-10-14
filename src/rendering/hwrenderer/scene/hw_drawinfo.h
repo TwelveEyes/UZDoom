@@ -269,6 +269,7 @@ public:
 	void DrawScene(int drawmode);
 	void CreateScene(bool drawpsprites);
 	void RenderScene(FRenderState &state);
+	bool DrawLevelMesh(FRenderState &state);
 	void RenderTranslucent(FRenderState &state);
 	void RenderPortal(HWPortal *p, FRenderState &state, bool usestencil);
 	void EndDrawScene(sector_t * viewsector, FRenderState &state);

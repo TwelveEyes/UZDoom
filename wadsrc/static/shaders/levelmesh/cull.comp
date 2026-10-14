@@ -1,0 +1,260 @@
+/*
+** cull.comp
+**
+** Levelmesh cluster culling: frustum + Hi-Z, two-phase
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+** One workgroup per cluster. Thread 0 classifies the cluster; for a drawn
+** cluster the workgroup then either copies its bucket index ranges into the
+** compacted index buffer (LMDRAW_COMPACT: one draw per bucket and phase) or
+** thread 0 writes one indirect command per bucket (LMDRAW_CLUSTERS, drawn
+** with vkCmdDrawIndexedIndirectCount).
+**
+** Phases (LMPHASE_*):
+**  FIRST   clusters visible last frame, frustum-tested.
+**  SECOND  every cluster, frustum + Hi-Z of the first phase's depth; draws
+**          the newly visible ones and rewrites the visibility for all.
+**  SINGLE  one pass, frustum only (LMCULL_FRUSTUM) or nothing (LMCULL_NONE);
+**          rewrites the visibility.
+**
+** LMPHASE_FINALIZE (one invocation) turns the compaction counters into the
+** draw arguments of the phase that just ran (pc.finalizePhase).
+*/
+
+layout(local_size_x = 64) in;
+
+#include "shaders/levelmesh/lm_data.glsl"
+
+struct DrawIndexedIndirect
+{
+	uint indexCount;
+	uint instanceCount;
+	uint firstIndex;
+	int vertexOffset;
+	uint firstInstance;
+};
+
+layout(set = LM_CULL_SET, binding = 0, std430) buffer VisibilityBuffer { uint visibility[]; };
+layout(set = LM_CULL_SET, binding = 1, std430) buffer CounterBuffer { uint counters[]; };
+layout(set = LM_CULL_SET, binding = 2, std430) buffer DrawArgsBuffer { DrawIndexedIndirect drawArgs[]; };
+layout(set = LM_CULL_SET, binding = 3, std430) buffer writeonly CompactBuffer { uint compactIndices[]; };
+layout(set = LM_CULL_SET, binding = 4) uniform sampler2D hiz;
+
+layout(push_constant) uniform CullConstants
+{
+	mat4 viewProj;
+	vec4 viewport;		// x, y, width, height (render target pixels)
+	uint phase;
+	uint cullMode;
+	uint drawMode;
+	uint numClusters;
+	uint bucketBase0, bucketBase1;	// compacted index regions per drawn bucket
+	uint hizLevels;
+	uint finalizePhase;
+};
+
+shared uint sDraw;
+shared uint sDest[LMB_DRAWN];
+
+uint BucketBase(uint b) { return b == 0u ? bucketBase0 : bucketBase1; }
+
+// Clip-space AABB test. Returns 0 = outside, 1 = inside (no occlusion
+// information), 2 = inside with a valid screen rect / nearest depth.
+uint ProjectBox(LMCluster c, out vec4 rect, out float minz)
+{
+	vec3 bmin = vec3(c.bmin[0], c.bmin[1], c.bmin[2]);
+	vec3 bmax = vec3(c.bmax[0], c.bmax[1], c.bmax[2]);
+	bool behind = false;
+	vec2 smin = vec2(1e30), smax = vec2(-1e30);
+	minz = 1.0;
+	uint allOut = 31u;
+	for (int i = 0; i < 8; i++)
+	{
+		vec3 p = vec3((i & 1) != 0 ? bmax.x : bmin.x, (i & 2) != 0 ? bmax.y : bmin.y, (i & 4) != 0 ? bmax.z : bmin.z);
+		vec4 clip = viewProj * vec4(p.x, p.z, p.y, 1.0);	// map space -> GL world space
+		uint codes = 0u;
+		if (clip.x < -clip.w) codes |= 1u;
+		if (clip.x > clip.w) codes |= 2u;
+		if (clip.y < -clip.w) codes |= 4u;
+		if (clip.y > clip.w) codes |= 8u;
+		// No near / far plane rejection: the scene draws with depth clamp, so
+		// geometry between the eye and the near plane (or past the far plane)
+		// still rasterizes. Only a box wholly behind the eye is invisible.
+		if (clip.w <= 0.0) codes |= 16u;
+		allOut &= codes;
+		if (clip.w <= 1e-4)
+		{
+			behind = true;
+		}
+		else
+		{
+			vec3 ndc = clip.xyz / clip.w;
+			smin = min(smin, ndc.xy);
+			smax = max(smax, ndc.xy);
+			minz = min(minz, (ndc.z + 1.0) * 0.5);	// main.vp: z = (z + w) / 2
+		}
+	}
+	if (allOut != 0u) return 0u;
+	if (behind) return 1u;
+	// NDC -> pixels relative to the viewport origin (Vulkan viewport transform).
+	rect = vec4((smin * 0.5 + 0.5) * viewport.zw, (smax * 0.5 + 0.5) * viewport.zw);
+	return 2u;
+}
+
+bool HiZVisible(vec4 rect, float minz)
+{
+	ivec2 size0 = textureSize(hiz, 0);
+	ivec2 p0 = clamp(ivec2(floor(rect.xy)), ivec2(0), size0 - 1);
+	ivec2 p1 = clamp(ivec2(floor(rect.zw)), ivec2(0), size0 - 1);
+	// The coarsest level where the rect spans at most 2 x 2 texels. Mip sizes
+	// round down; the last row / column of a level covers the extra source
+	// texel, so clamping a texel coordinate is conservative.
+	int level = 0;
+	while (level + 1 < int(hizLevels) && (((p1.x >> level) - (p0.x >> level)) > 1 || ((p1.y >> level) - (p0.y >> level)) > 1))
+		level++;
+	ivec2 size = textureSize(hiz, level);
+	ivec2 t0 = min(p0 >> level, size - 1);
+	ivec2 t1 = min(p1 >> level, size - 1);
+	// Still wider than 2 x 2 on the coarsest level (very wide viewports): no test.
+	if (t1.x - t0.x > 1 || t1.y - t0.y > 1) return true;
+	float maxz = texelFetch(hiz, t0, level).r;
+	maxz = max(maxz, texelFetch(hiz, ivec2(t1.x, t0.y), level).r);
+	maxz = max(maxz, texelFetch(hiz, ivec2(t0.x, t1.y), level).r);
+	maxz = max(maxz, texelFetch(hiz, t1, level).r);
+	// The depth buffer rounds to its format (D24: 2^-24); stay conservative.
+	return minz <= maxz + 1e-6;
+}
+
+void Finalize()
+{
+	// Compaction: counters[b] runs over both phases; counters[LMC_P1END + b]
+	// holds the end of the first phase.
+	for (uint b = 0u; b < LMB_DRAWN; b++)
+	{
+		uint total = counters[LMC_COMPACT + b];
+		uint start = finalizePhase == LMPHASE_SECOND ? counters[LMC_P1END + b] : 0u;
+		if (finalizePhase != LMPHASE_SECOND) counters[LMC_P1END + b] = total;
+		uint slot = (finalizePhase == LMPHASE_SECOND ? 1u : 0u) * LMB_DRAWN + b;
+		drawArgs[slot].indexCount = total - start;
+		drawArgs[slot].instanceCount = 1u;
+		drawArgs[slot].firstIndex = BucketBase(b) + start;
+		drawArgs[slot].vertexOffset = 0;
+		drawArgs[slot].firstInstance = 0u;
+	}
+}
+
+void main()
+{
+	if (phase == LMPHASE_FINALIZE)
+	{
+		if (gl_LocalInvocationIndex == 0u) Finalize();
+		return;
+	}
+
+	uint ci = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
+	if (ci >= numClusters) return;	// uniform per workgroup
+	LMCluster c = lmClusters[ci];
+
+	if (gl_LocalInvocationIndex == 0u)
+	{
+		uint prev = visibility[ci];
+		bool draw = false;
+		if (phase == LMPHASE_FIRST)
+		{
+			if (prev != 0u)
+			{
+				vec4 rect;
+				float minz;
+				draw = ProjectBox(c, rect, minz) != 0u;
+			}
+		}
+		else
+		{
+			bool vis = true;
+			if (cullMode != LMCULL_NONE)
+			{
+				vec4 rect;
+				float minz;
+				uint r = ProjectBox(c, rect, minz);
+				vis = r != 0u;
+				if (r == 0u) atomicAdd(counters[LMC_FRUSTUMCULLED], 1u);
+				if (vis && phase == LMPHASE_SECOND && r == 2u)
+				{
+					vis = HiZVisible(rect, minz);
+					if (!vis) atomicAdd(counters[LMC_OCCLUDED], 1u);
+				}
+			}
+			visibility[ci] = vis ? 1u : 0u;
+			// Second phase: drawn in the first phase = visible last frame and
+			// inside the frustum now; a visible cluster is either that or new.
+			if (phase == LMPHASE_SECOND)
+			{
+				bool drawnFirst = false;
+				if (prev != 0u)
+				{
+					vec4 rect;
+					float minz;
+					drawnFirst = ProjectBox(c, rect, minz) != 0u;
+				}
+				draw = vis && !drawnFirst;
+			}
+			else
+			{
+				draw = vis;
+			}
+		}
+
+		uint pslot = phase == LMPHASE_SECOND ? 1u : 0u;
+		sDraw = draw ? 1u : 0u;
+		if (draw)
+		{
+			atomicAdd(counters[LMC_CLUSTERS + pslot], 1u);
+			uint first = c.firstIndex;
+			for (uint b = 0u; b < LMB_DRAWN; b++)
+			{
+				uint n = c.bucketIndices[b];
+				if (n != 0u)
+				{
+					atomicAdd(counters[LMC_INDICES + pslot * LMB_DRAWN + b], n);
+					if (drawMode == LMDRAW_COMPACT)
+					{
+						sDest[b] = BucketBase(b) + atomicAdd(counters[LMC_COMPACT + b], n);
+					}
+					else
+					{
+						uint slot = pslot * LMB_DRAWN + b;
+						uint k = atomicAdd(counters[LMC_COMMANDS + slot], 1u);
+						uint at = LMB_DRAWN * 2u + slot * numClusters + k;
+						drawArgs[at].indexCount = n;
+						drawArgs[at].instanceCount = 1u;
+						drawArgs[at].firstIndex = first;
+						drawArgs[at].vertexOffset = 0;
+						drawArgs[at].firstInstance = 0u;
+					}
+				}
+				first += n;
+			}
+		}
+	}
+
+	if (drawMode != LMDRAW_COMPACT) return;	// uniform
+	barrier();
+	if (sDraw == 0u) return;	// uniform per workgroup (shared)
+
+	uint first = c.firstIndex;
+	for (uint b = 0u; b < LMB_DRAWN; b++)
+	{
+		uint n = c.bucketIndices[b];
+		uint dest = sDest[b];
+		for (uint i = gl_LocalInvocationIndex; i < n; i += 64u)
+			compactIndices[dest + i] = lmIndices[first + i];
+		first += n;
+	}
+}

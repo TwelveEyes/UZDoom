@@ -33,6 +33,18 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   - `--fullbright` sets `r_ab_fullbright 1`: every view renders as a plain fullbright scene
     (no light levels, fog, dynamic lights or special colormaps), for geometry/visibility A/B
     before levelmesh lighting exists (ticket 08).
+  - `--set-a 'CVAR VALUE'` / `--set-b 'CVAR VALUE'` (repeatable) add a pin to one path only,
+    written after the template, so they also override `gl_uselevelmesh`. Levelmesh-vs-levelmesh
+    A/B, e.g. Hi-Z against frustum-only (ticket 08):
+    `--set-a 'gl_uselevelmesh 1' --set-a 'lm_cullmode 1' --set-b 'lm_cullmode 2'`.
+- **Levelmesh debug cvars** (not saved): `lm_draw 0` skips the levelmesh draw (the classic
+  lists keep everything); `lm_cullmode` 0 none / 1 frustum / 2 two-phase Hi-Z (default);
+  `lm_drawmode` 0 compacted indices (default) / 1 one indirect command per cluster;
+  `lm_backfacecull 0` disables back-face culling.
+- **Never pass `+set vk_debug 1` without a scratch `-config`:** `vk_debug` is archived, so it
+  persists into the user's ini and silently puts the validation layer into every later perf
+  run. The A/B driver and `lm_bake_survey.py` already use fresh configs; `run_matrix.sh` does
+  not, so its `--set` values persist too (e.g. `gl_multisample`).
 - **Pins** (every run): `show_messages 0`. Notify lines tick through real-time startup tics,
   so the tour demos' cheat messages made captures non-deterministic. `r_dynlights 0` stays
   until ticket 19.
@@ -47,7 +59,10 @@ changes listed here.
 - **Pacing:** `baseline.cfg` pins `r_ticstability 0`. The engine default busy-waits on every
   frame without a new sim tic.
 - **Perflog:** `r_perflog v2` adds `wall`, the real interval between logged frames. Use it, not
-  `total`, as the frame time.
+  `total`, as the frame time. `v3` (ticket 08) adds the levelmesh columns `lm`, `lmcm`, `lmdm`,
+  `lmcl1/2`, `lmtri1/2`, `lmfc`, `lmocc` and the GPU times `lmc1`, `lmd1`, `lmhz`, `lmc2`, `lmd2`,
+  `lmgpu` (see the log header). They lag by the frames in flight and appear only once a
+  levelmesh draw has completed.
 - **Demos:** `make_demo.py --path tour` (default) warps the camera to 26 stops in the map's main
   playable area, with a 360° pan per stop; god + noclip. Output is in `demos/v2/`. `--path
   vantage --at x,y --turn N` holds a single view. The v1 spiral (`--path spiral`, `demos/*.lmp`)

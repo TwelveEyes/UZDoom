@@ -77,7 +77,8 @@ struct PushConstants
 	int uBoneIndexBase;
 
 	int uDataIndex;
-	int padding1, padding2, padding3;
+	int uLevelMeshFlags;	// levelmesh pipelines only (LMVF_*); 0 for classic draws
+	int padding2, padding3;
 };
 
 class VkShaderProgram
@@ -101,12 +102,19 @@ public:
 
 	VkPPShader* GetVkShader(PPShader* shader);
 
+	// Levelmesh: the vertex shader is shared by all programs (vert is null in
+	// the returned program; use GetLevelMeshVert).
+	VkShaderProgram *GetLevelMesh(bool alphatest, EPassType passType);
+	VulkanShader *GetLevelMeshVert() { return mLevelMeshVert.get(); }
+	std::unique_ptr<VulkanShader> LoadComputeShader(FString shadername, const char *lump, const char *defines);
+
 	void AddVkPPShader(VkPPShader* shader);
 	void RemoveVkPPShader(VkPPShader* shader);
 
 private:
 	std::unique_ptr<VulkanShader> LoadVertShader(FString shadername, const char *vert_lump, const char *defines, AllShaderIndex type);
-	std::unique_ptr<VulkanShader> LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type);
+	std::unique_ptr<VulkanShader> LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type, bool levelmesh = false);
+	std::unique_ptr<VulkanShader> LoadLevelMeshVertShader(FString shadername, const char *defines);
 
 	FString GetTargetGlslVersion();
 	FString LoadPublicShaderLump(const char *lumpname);
@@ -119,6 +127,8 @@ private:
 	std::vector<VkShaderProgram> mMaterialShaders[MAX_PASS_TYPES];
 	std::vector<VkShaderProgram> mMaterialShadersNAT[MAX_PASS_TYPES];
 	std::vector<VkShaderProgram> mEffectShaders[MAX_PASS_TYPES];
+	VkShaderProgram mLevelMeshShaders[2][MAX_PASS_TYPES];
+	std::unique_ptr<VulkanShader> mLevelMeshVert;
 	uint8_t compilePass = 0, compileState = 0;
 	int compileIndex = 0;
 

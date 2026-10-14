@@ -36,6 +36,7 @@ runs `promote --reviewer NAME`, which moves only reviewed entries.
 Subcommands:
   run        [--determinism] [--map N] [--only P] [--mode M] [--backend B]
              [--gamestate] [--fullbright] [--runs DIR] [--timeout S]
+             [--set-a 'CVAR VALUE']... [--set-b 'CVAR VALUE']...
   calibrate  [--map N] [--mode M] [--repeats K]   classic-vs-classic stats
   diff       DIRA DIRB --map N [--mode M] [--strict]
   statediff  DIRA DIRB --map N [--mode M]
@@ -483,7 +484,7 @@ set r_ab_capture {ticks}:{outdir}
 """
 
 
-def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir):
+def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir, path_tag=""):
     """One fresh-level-load capture launch. Returns (ok, detail, elapsed)."""
     try:
         # M_ScreenShot does not create missing directories for an explicit
@@ -499,6 +500,11 @@ def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir
                 backend=BACKEND_CVAR[backend], cvar=cvar_value,
                 fullbright=int(args.fullbright), gamestate=int(args.gamestate),
                 ticks=",".join(str(t) for t in ticks), outdir=outdir))
+            # Per-path pins (--set-a / --set-b) come last, so they override
+            # the template, gl_uselevelmesh included.
+            extra = (getattr(args, f"set_{path_tag}", None) or []) if path_tag in ("a", "b") else []
+            for pin in extra:
+                f.write(f"set {pin}\n")
     except OSError as e:
         return False, f"cannot write run config: {e}", 0.0
     w, h = manifest["resolution"]
@@ -554,7 +560,7 @@ def capture_side(args, manifest, root, mp, mode, backend, cvar, ticks, tag):
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
     png = os.path.join(work, "png")
-    ok, detail, _ = launch(args, manifest, mp, mode, backend, cvar, ticks, png, work)
+    ok, detail, _ = launch(args, manifest, mp, mode, backend, cvar, ticks, png, work, tag)
     print(f"   {tag}: {detail}")
     return ok, png
 
@@ -617,6 +623,10 @@ def cmd_run(args):
         cvar_b = 0 if args.determinism else 1
         label = "determinism (classic vs classic)" if args.determinism else "A/B"
         print(f"== {label}: {combo}  A cvar=0  B cvar={cvar_b}  ({len(ticks)} ticks)")
+        for tag in ("a", "b"):
+            pins = getattr(args, f"set_{tag}") or []
+            if pins:
+                print(f"   {tag} pins: {'; '.join(pins)}")
         entries = []
         if not args.determinism:
             entries, err = load_allowlist(args.allowlists, mp["name"])
@@ -645,6 +655,7 @@ def cmd_run(args):
     with open(os.path.join(root, "results.json"), "w") as f:
         json.dump({"manifest": args.manifest, "timestamp": stamp, "tolerance": tol_m,
                    "gamestate": args.gamestate, "fullbright": args.fullbright,
+                   "set_a": args.set_a or [], "set_b": args.set_b or [],
                    "results": results}, f, indent=1)
     n_ok = sum(1 for r in results if r["ok"])
     print(f"----\n{len(results)} combos: {n_ok} pass, {len(results) - n_ok} fail "
@@ -911,6 +922,11 @@ def main():
                            help="dump + set-diff exposure state (r_ab_gamestate 1)")
 
     p = sub.add_parser("run", help="launch capture pairs and compare")
+    p.add_argument("--set-a", action="append", metavar="'CVAR VALUE'",
+                   help="extra cvar pin on path A only (repeatable; overrides the template, "
+                        "e.g. 'gl_uselevelmesh 1' for a levelmesh-vs-levelmesh A/B)")
+    p.add_argument("--set-b", action="append", metavar="'CVAR VALUE'",
+                   help="extra cvar pin on path B only (repeatable)")
     p.add_argument("--determinism", action="store_true",
                    help="classic vs classic, strict (no tolerance, no allowlist)")
     p.add_argument("--map")

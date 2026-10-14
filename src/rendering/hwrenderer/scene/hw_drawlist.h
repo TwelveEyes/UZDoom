@@ -43,6 +43,8 @@ enum HWDrawItemType
 	DrawType_SPRITE,
 };
 
+class LevelMeshBake;
+
 struct HWDrawItem
 {
 	HWDrawItemType rendertype;
@@ -111,6 +113,8 @@ public:
 	void Reset();
 	void SortWalls();
 	void SortFlats();
+	// Drops the walls / flats the levelmesh drew (LevelMeshBake ownership tables).
+	void RemoveLevelMeshOwned(const LevelMeshBake *bake);
 
 
 	void MakeSortList();
