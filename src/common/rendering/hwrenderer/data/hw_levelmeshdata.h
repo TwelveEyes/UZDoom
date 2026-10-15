@@ -86,7 +86,7 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_SKY = 1 << 12,			// unused for mesh surfaces (sky goes to side lists); reserved
 	LMSF_DEFERRED = 1 << 13,	// not drawn by the levelmesh yet: the classic path owns it (LMB_DEFERRED)
 	LMSF_TEXCLAMPY = 1 << 14,	// TEXF_ClampY texture mode (classic SetTextureClamp: clamped two-sided mid texture)
-	// 1 << 15 unused (fullbright flat textures follow the animation: LMTE_FULLBRIGHT)
+	LMSF_STATETEXTURE = 1 << 15,	// the texture is the streamed one (side tier / plane), not textureId
 	LMSF_NOSECTORFOG = 1 << 16,	// walls: fog of light 255 without the sector colormap (RENDERWALL_M2SNF)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
 };
@@ -203,6 +203,16 @@ struct LevelMeshSectorState
 };
 static_assert(sizeof(LevelMeshSectorState) == 24 * 4, "LevelMeshSectorState must stay std430-compatible");
 
+// LevelMeshSideState / LevelMeshPlaneXform flags.
+enum ELevelMeshTextureStateFlags : uint32_t
+{
+	// The current state is not expressible by the baked surfaces (a texture
+	// of another size or material, a changed scale, a geometry-moving
+	// offset): the classic path draws the tier / plane, the levelmesh skips
+	// its surfaces.
+	LMTS_DEFERRED = 1,
+};
+
 // Per side x tier (index side * 3 + tier). std430-compatible: 8 x 32 bit.
 // Streamed dirty-only like the sector records (LevelMesh_FillSideState).
 struct LevelMeshSideState
@@ -210,20 +220,23 @@ struct LevelMeshSideState
 	int32_t textureId;			// untranslated
 	float xOffset, yOffset;		// side_t::GetTextureX/YOffset
 	float xScale, yScale;
-	uint32_t reserved[3];
+	uint32_t flags;				// LMTS_*
+	uint32_t reserved[2];
 };
 static_assert(sizeof(LevelMeshSideState) == 8 * 4, "LevelMeshSideState must stay std430-compatible");
 
-// Per sector x plane (index = plane ref). std430-compatible: 8 x 32 bit.
+// Per sector x plane (index = plane ref). std430-compatible: 12 x 32 bit.
 // Streamed dirty-only (LevelMesh_FillPlaneXform).
 struct LevelMeshPlaneXform
 {
 	float xOffset, yOffset, baseyOffset;
 	float xScale, yScale;
 	float angle, baseAngle;		// degrees
-	uint32_t reserved;
+	int32_t textureId;			// untranslated plane texture
+	uint32_t flags;				// LMTS_*
+	uint32_t reserved[3];
 };
-static_assert(sizeof(LevelMeshPlaneXform) == 8 * 4, "LevelMeshPlaneXform must stay std430-compatible");
+static_assert(sizeof(LevelMeshPlaneXform) == 12 * 4, "LevelMeshPlaneXform must stay std430-compatible");
 
 // Texture translation table entry, indexed by the untranslated texture id.
 // Layer i of the material is bindless slot (slot + i). Slot 0 is the null

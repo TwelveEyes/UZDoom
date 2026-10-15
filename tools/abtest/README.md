@@ -71,6 +71,14 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   A run whose stdout reports a levelmesh fallback (`Levelmesh: ... failed`) fails.
   `lm_shading 0` is the debug switch that draws the levelmesh with the render state's
   fullbright light instead of the resolve.
+- **Runtime texture state (ticket 11):** `ab_manifest_texturetest.json` replays
+  `demos/texturetest/` over `wads/texturetest.wad` (`make_texturetest.py`; copy the wad into
+  the build's `wads/` too): animated wall + flat, a wall and a floor scroller, a switch, a floor
+  texture change (`Floor_LowerToLowestTxTy`), `Line_SetTextureOffset`, `Line_SetTextureScale`
+  (a state the bake cannot express: the tier goes to the classic path and back) and an
+  unwrapped mid texture's y offset (classic path). `--set-b 'lm_statelog 1'` prints every
+  tier / plane that switches between the levelmesh and the classic path, and every swap that
+  waits a frame for an unresolved texture, to the run's stdout.
 - **Never pass `+set vk_debug 1` without a scratch `-config`:** `vk_debug` is archived, so it
   persists into the user's ini and silently puts the validation layer into every later perf
   run. The A/B driver and `lm_bake_survey.py` already use fresh configs; `run_matrix.sh` does

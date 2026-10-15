@@ -113,7 +113,7 @@ void main()
 	uint ref = v.anchor & LMV_REFMASK;
 	float z = LM_PlaneZ(lmSectors[ref >> 1].planes[ref & 1u], v.x, v.y) + v.zOffset;
 
-	LMTextureEntry tex = lmTextures[surf.textureId];
+	LMTextureEntry tex = lmTextures[LM_SurfaceTexture(surf)];
 	uint kind = surf.flags & LMSF_KINDMASK;
 	// A wall tier whose planes crossed collapses (LevelMeshSurface::edgeTop;
 	// LevelMeshBake::VertexZ is the CPU reference).
@@ -212,6 +212,9 @@ void main()
 
 	gl_Position = ProjectionMatrix * eyeCoordPos;
 	gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
+	// The classic path draws this surface for now (LMTS_DEFERRED): every
+	// vertex outside the clip volume, so its triangles are clipped away.
+	if (LM_StateDeferred(surf)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 
 	if (uClipHeightDirection != 0.0) // clip planes used for reflective flats
 	{

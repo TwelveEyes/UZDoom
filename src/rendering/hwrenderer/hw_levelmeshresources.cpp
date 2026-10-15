@@ -23,6 +23,7 @@
 #include "hw_levelmeshbake.h"
 #include "g_levellocals.h"
 #include "texturemanager.h"
+#include "animations.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
 #include "printf.h"
@@ -54,7 +55,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 		LevelMesh_FillSectorState(sec, sectors[i]);
 		for (int p = 0; p < 2; p++)
 		{
-			LevelMesh_FillPlaneXform(sec, p, xforms[i * 2 + p]);
+			LevelMesh_FillPlaneXform(bake, sec, p, xforms[i * 2 + p]);
 			use(sec.GetTexture(p).GetIndex());
 		}
 	}
@@ -62,8 +63,20 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	{
 		for (int t = 0; t < 3; t++)
 		{
-			LevelMesh_FillSideState(Level->sides[i], t, sides[i * 3 + t]);
-			use(sides[i * 3 + t].textureId);
+			LevelMesh_FillSideState(bake, Level->sides[i], t, sides[i * 3 + t]);
+			int id = sides[i * 3 + t].textureId;
+			use(id);
+			// Switch textures (both states and their animation frames), so a
+			// switch press does not wait a frame for the new texture.
+			if (FSwitchDef *sw = TexAnim.FindSwitch(FSetTextureID(id)))
+			{
+				for (FSwitchDef *def : { sw, sw->PairDef })
+				{
+					if (def == nullptr) continue;
+					use(def->PreTexture.GetIndex());
+					for (int f = 0; f < def->NumFrames; f++) use(def->frames[f].Texture.GetIndex());
+				}
+			}
 		}
 	}
 	for (auto &surf : bake->Surfaces) use(surf.textureId);

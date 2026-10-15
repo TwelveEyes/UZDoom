@@ -184,6 +184,7 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LMSK_FLOOR %uu\n#define LMSK_CEILING %uu\n", (unsigned)LMSK_FLOOR, (unsigned)LMSK_CEILING);
 	d.AppendFormat("#define LMSF_DEFERRED %uu\n#define LMSF_NOSECTORFOG %uu\n", (unsigned)LMSF_DEFERRED, (unsigned)LMSF_NOSECTORFOG);
 	d.AppendFormat("#define LMTE_TEXFMASK 0x%xu\n#define LMTE_FULLBRIGHT 0x%xu\n", (unsigned)LMTE_TEXFMASK, (unsigned)LMTE_FULLBRIGHT);
+	d.AppendFormat("#define LMSF_STATETEXTURE %uu\n#define LMTS_DEFERRED %uu\n", (unsigned)LMSF_STATETEXTURE, (unsigned)LMTS_DEFERRED);
 	d.AppendFormat("#define LMSD_ABSLIGHTING %uu\n#define LMSD_ABSLIGHTING_TIER %uu\n#define LMSD_NOFAKECONTRAST %uu\n",
 		(unsigned)LMSD_ABSLIGHTING, (unsigned)LMSD_ABSLIGHTING_TIER, (unsigned)LMSD_NOFAKECONTRAST);
 	d.AppendFormat("#define LMSD_SMOOTHLIGHTING %uu\n#define LMSD_LIGHT_FOG %uu\n", (unsigned)LMSD_SMOOTHLIGHTING, (unsigned)LMSD_LIGHT_FOG);
@@ -267,6 +268,7 @@ void VkLevelMesh::ReleaseLevel()
 	mTable.clear();
 	mFrame.clear();
 	mUsedIds.clear();
+	mUsedFlag.clear();
 	mPendingFlag.clear();
 	mPending.clear();
 	mTableDirtyMin = ~0u;
@@ -344,6 +346,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 
 	mTable.assign(data->translationTableSize, LevelMeshTextureEntry{});
 	mFrame.assign(data->translationTableSize, nullptr);
+	mUsedFlag.assign(data->translationTableSize, 0);
 	mPendingFlag.assign(data->translationTableSize, 0);
 	for (unsigned i = 0; i < data->textureIds.size; i++)
 	{
@@ -353,6 +356,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 			mPendingFlag[id] = 1;
 			mPending.push_back(id);
 			mUsedIds.push_back(id);
+			mUsedFlag[id] = 1;
 		}
 	}
 
@@ -476,6 +480,23 @@ LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 	uint32_t flags = it->second.count > 1 ? (uint32_t)mat->GetLayerFlags() & LMTE_TEXFMASK : 0;
 	if (tex->isFullbright()) flags |= LMTE_FULLBRIGHT;
 	return { it->second.first, it->second.count | flags, (float)tex->GetDisplayWidth(), (float)tex->GetDisplayHeight() };
+}
+
+bool VkLevelMesh::TextureReady(int id)
+{
+	if (!mResident || id <= 0 || (unsigned)id >= mTable.size()) return true;	// out of range: the table entry stays null
+	if (!mUsedFlag[id])
+	{
+		mUsedFlag[id] = 1;
+		mUsedIds.push_back(id);
+		if (!mPendingFlag[id])
+		{
+			mPendingFlag[id] = 1;
+			mPending.push_back(id);
+		}
+		return false;
+	}
+	return !mPendingFlag[id];
 }
 
 void VkLevelMesh::MaterialInvalidated(VkMaterial *mat)

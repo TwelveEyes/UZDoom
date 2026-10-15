@@ -101,7 +101,8 @@ struct LMSideState
 	int textureId;
 	float xOffset, yOffset;
 	float xScale, yScale;
-	uint reserved[3];
+	uint flags;
+	uint reserved[2];
 };
 
 struct LMPlaneXform
@@ -109,7 +110,9 @@ struct LMPlaneXform
 	float xOffset, yOffset, baseyOffset;
 	float xScale, yScale;
 	float angle, baseAngle;
-	uint reserved;
+	int textureId;
+	uint flags;
+	uint reserved[3];
 };
 
 struct LMTextureEntry
@@ -130,6 +133,23 @@ layout(set = LM_SET, binding = LMBIND_TEXTURETABLE, std430) buffer readonly LMTe
 #ifndef LM_RESOLVE_WRITER
 layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolvedBuffer { LMResolved lmResolved[]; };
 #endif
+
+// The surface's current texture (untranslated id) and whether the classic
+// path draws it instead (LMTS_DEFERRED): walls follow their side tier,
+// sector planes their plane (LMSF_STATETEXTURE).
+int LM_SurfaceTexture(LMSurface surf)
+{
+	if ((surf.flags & LMSF_STATETEXTURE) == 0u) return surf.textureId;
+	if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) return lmSides[surf.sideRef].textureId;
+	return lmPlaneXforms[surf.planeRefs[0]].textureId;
+}
+
+bool LM_StateDeferred(LMSurface surf)
+{
+	if ((surf.flags & LMSF_STATETEXTURE) == 0u) return false;
+	if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) return (lmSides[surf.sideRef].flags & LMTS_DEFERRED) != 0u;
+	return (lmPlaneXforms[surf.planeRefs[0]].flags & LMTS_DEFERRED) != 0u;
+}
 
 // LM_PlaneZ: same operation order as the C++ (no contraction into FMA).
 float LM_PlaneZ(LMPlane p, float x, float y)

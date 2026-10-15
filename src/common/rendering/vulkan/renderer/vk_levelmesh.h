@@ -79,6 +79,9 @@ public:
 	// texture resolves, bindless descriptor writes, translation table upload.
 	void BeginFrame();
 	void MaterialInvalidated(VkMaterial *mat);
+	// Texture swaps: true when the id's table entry is resolved, otherwise
+	// the id joins the level's ids and is resolved at the next BeginFrame.
+	bool TextureReady(int id);
 
 	// Dirty state stream: copies the records into the staging ring and
 	// records one scatter dispatch into the transfer commands, ahead of
@@ -173,6 +176,7 @@ private:
 	std::vector<LevelMeshTextureEntry> mTable;
 	std::vector<FGameTexture *> mFrame;	// per id: the animation frame the entry was resolved from
 	std::vector<int> mUsedIds;			// ids the level references
+	std::vector<uint8_t> mUsedFlag;
 	std::vector<uint8_t> mPendingFlag;
 	std::vector<int> mPending;
 	uint32_t mTableDirtyMin = ~0u, mTableDirtyMax = 0;

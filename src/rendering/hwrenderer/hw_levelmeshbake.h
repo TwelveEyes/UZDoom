@@ -115,6 +115,20 @@ template<class T> struct LevelMeshRecordStream
 	}
 };
 
+// What a side tier's baked surfaces assume about its texture state: the
+// FTexCoordInfo the u / v were computed with. A state that changes any of it
+// (another texture size, a side scale) defers the tier to the classic path
+// (LMTS_DEFERRED); offsets are applied by the vertex stage.
+struct LevelMeshTierBase
+{
+	int renderWidth = 0, renderHeight = 0;
+	float scaleX = 0, scaleY = 0;
+	bool worldPanning = false;
+	bool valid = false;			// the tier has levelmesh surfaces
+	bool midClip = false;		// two-sided mid texture without wrap: the y offset moves its geometry
+	float yOffset = 0;			// at bake (midClip)
+};
+
 // The dirty state stream's bookkeeping (hw_levelmeshstate.cpp).
 struct LevelMeshStateStream
 {
@@ -176,6 +190,11 @@ public:
 	// (sector * 2 + plane). Everything else stays on the classic path.
 	TArray<uint8_t> SideTierOwned;
 	TArray<uint8_t> SectorPlaneOwned;
+	// The same at bake; the state stream clears an entry of the arrays above
+	// while the tier / plane is LMTS_DEFERRED.
+	TArray<uint8_t> SideTierBaked;
+	TArray<uint8_t> SectorPlaneBaked;
+	TArray<LevelMeshTierBase> TierBase;	// per side tier
 
 	uint64_t Id = 0;				// unique per bake (backend residency)
 	bool GeometryReleased = false;	// Vertices / Indices freed after the upload
@@ -217,10 +236,15 @@ void LevelMesh_UpdateResources(FLevelLocals *Level);
 // Releases the device resources of the level's levelmesh (level teardown).
 void LevelMesh_ReleaseResources(FLevelLocals *Level);
 
-// Packs a sector's / side tier's / plane's GPU state record.
+// Packs a sector's / side tier's / plane's GPU state record. The side and
+// plane records carry LMTS_DEFERRED when the current state is not
+// expressible by the bake's surfaces.
 void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out);
-void LevelMesh_FillSideState(side_t &side, int tier, LevelMeshSideState &out);
-void LevelMesh_FillPlaneXform(sector_t &sec, int pos, LevelMeshPlaneXform &out);
+void LevelMesh_FillSideState(const LevelMeshBake *bake, side_t &side, int tier, LevelMeshSideState &out);
+void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos, LevelMeshPlaneXform &out);
+
+// Non-default material shaders the levelmesh cannot draw yet (classic path).
+bool LevelMesh_NeedsClassicMaterial(FGameTexture *tex);
 
 // Resets the dirty state stream to the records just uploaded and attaches
 // the change hooks to the level.

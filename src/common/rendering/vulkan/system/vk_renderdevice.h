@@ -96,6 +96,7 @@ public:
 	void SetLevelMeshData(const LevelMeshUploadData *data) override;
 	size_t UpdateLevelMeshState(const LevelMeshStateUpdate &update) override;
 	bool LevelMeshResident(uint64_t id) override;
+	bool LevelMeshTextureReady(int id) override;
 	void PrintLevelMeshStats() override;
 	bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) override;
 	bool GetLevelMeshStats(LevelMeshPerfStats &stats) override;

@@ -566,6 +566,11 @@ bool VulkanRenderDevice::LevelMeshResident(uint64_t id)
 	return mLevelMesh && mLevelMesh->IsResident(id);
 }
 
+bool VulkanRenderDevice::LevelMeshTextureReady(int id)
+{
+	return !mLevelMesh || mLevelMesh->TextureReady(id);
+}
+
 bool VulkanRenderDevice::DrawLevelMesh(const LevelMeshView &view, FRenderState &state)
 {
 	// The main scene of the screen only (not the savegame picture buffers).

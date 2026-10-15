@@ -79,6 +79,9 @@ CVAR(Bool, lm_statefull, false, CVAR_NOSAVE)
 // Debug: refresh the z-ranges of clusters anchored to moved planes (0 keeps
 // the load heights: the negative control for the culling-hole test).
 CVAR(Bool, lm_clusterz, true, CVAR_NOSAVE)
+// Debug: print every side tier / plane that switches between the levelmesh
+// and the classic path (LMTS_DEFERRED).
+CVAR(Bool, lm_statelog, false, CVAR_NOSAVE)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -147,19 +150,51 @@ void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out)
 //
 //==========================================================================
 
-void LevelMesh_FillSideState(side_t &side, int tier, LevelMeshSideState &out)
+// Whether the baked surfaces of a side tier can show its current state:
+// the vertex stage applies offsets, but the u / v (and a clipped mid
+// texture's height) were computed with the bake's FTexCoordInfo, so a
+// texture of another size or a changed scale needs the classic emitter.
+static bool SideStateExpressible(const LevelMeshTierBase &tb, side_t &side, int tier, FTextureID texid)
+{
+	if (!texid.isValid()) return false;		// no texture: the classic decides what (if anything) to draw
+	auto tex = TexMan.GetGameTexture(texid, true);
+	if (tex == nullptr || !tex->isValid() || LevelMesh_NeedsClassicMaterial(tex)) return false;
+	FTexCoordInfo tci;
+	tci.GetFromTexture(tex, (float)side.GetTextureXScale(tier), (float)side.GetTextureYScale(tier),
+		!!(side.GetLevel()->flags3 & LEVEL3_FORCEWORLDPANNING));
+	if (tci.mRenderWidth != tb.renderWidth || tci.mRenderHeight != tb.renderHeight || tci.mScale.X != tb.scaleX ||
+		tci.mScale.Y != tb.scaleY || tci.mWorldPanning != tb.worldPanning)
+		return false;
+	// HWWall::DoMidTexture clips an unwrapped two-sided mid texture to its
+	// height above / below the y offset.
+	if (tb.midClip && (float)side.GetTextureYOffset(tier) != tb.yOffset) return false;
+	return true;
+}
+
+void LevelMesh_FillSideState(const LevelMeshBake *bake, side_t &side, int tier, LevelMeshSideState &out)
 {
 	out = {};
-	out.textureId = side.GetTexture(tier).GetIndex();
+	FTextureID texid = side.GetTexture(tier);
+	out.textureId = texid.GetIndex();
 	out.xOffset = (float)side.GetTextureXOffset(tier);
 	out.yOffset = (float)side.GetTextureYOffset(tier);
 	out.xScale = (float)side.GetTextureXScale(tier);
 	out.yScale = (float)side.GetTextureYScale(tier);
+	unsigned ref = side.Index() * 3 + tier;
+	if (ref < bake->TierBase.Size() && bake->TierBase[ref].valid && !SideStateExpressible(bake->TierBase[ref], side, tier, texid))
+		out.flags |= LMTS_DEFERRED;
 }
 
-void LevelMesh_FillPlaneXform(sector_t &sec, int pos, LevelMeshPlaneXform &out)
+void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos, LevelMeshPlaneXform &out)
 {
 	out = {};
+	FTextureID texid = sec.GetTexture(pos);
+	out.textureId = texid.GetIndex();
+	// HWFlat::ProcessSector draws no sky plane; material shaders and
+	// untextured planes stay classic.
+	auto tex = TexMan.GetGameTexture(texid, true);
+	if (texid == skyflatnum || !texid.isValid() || tex == nullptr || !tex->isValid() || LevelMesh_NeedsClassicMaterial(tex))
+		out.flags |= LMTS_DEFERRED;
 	auto &xf = sec.planes[pos].xform;
 	out.xOffset = (float)xf.xOffs;
 	out.yOffset = (float)xf.yOffs;
@@ -297,6 +332,53 @@ static LevelMeshClusterZ ClusterZ(const LevelMeshBake *bake, uint32_t c)
 
 //==========================================================================
 //
+// Side tier / plane records as streamed
+//
+// A texture the backend has not resolved yet (a swap to an id the level did
+// not reference at load) would draw as the null texture: the record keeps
+// the previous texture for the frame the backend needs to resolve the new
+// one, and the record is checked again next update.
+//
+//==========================================================================
+
+static void FillStreamedSide(FLevelLocals *Level, LevelMeshBake *bake, unsigned i, LevelMeshSideState &out)
+{
+	LevelMesh_FillSideState(bake, Level->sides[i / 3], i % 3, out);
+	const LevelMeshSideState &prev = bake->Stream.Sides.Records[i];
+	if (!(out.flags & LMTS_DEFERRED) && out.textureId != prev.textureId && !screen->LevelMeshTextureReady(out.textureId))
+	{
+		if (lm_statelog) Printf("Levelmesh state: side %u tier %u waits a frame for texture %d\n", i / 3, i % 3, out.textureId);
+		out.textureId = prev.textureId;
+		bake->Stream.Sides.Touch(i);
+	}
+}
+
+static void FillStreamedPlane(FLevelLocals *Level, LevelMeshBake *bake, unsigned i, LevelMeshPlaneXform &out)
+{
+	sector_t &sec = Level->sectors[i >> 1];
+	LevelMesh_FillPlaneXform(bake, sec, i & 1, out);
+	const LevelMeshPlaneXform &prev = bake->Stream.Xforms.Records[i];
+	if (out.textureId == prev.textureId) return;
+	if (!(out.flags & LMTS_DEFERRED) && !screen->LevelMeshTextureReady(out.textureId))
+	{
+		if (lm_statelog) Printf("Levelmesh state: sector %u plane %u waits a frame for texture %d\n", i >> 1, i & 1, out.textureId);
+		out.textureId = prev.textureId;
+		bake->Stream.Xforms.Touch(i);
+		return;
+	}
+	// The plane texture changed: the sector's wall glow may follow it now.
+	LevelMesh_SectorChanged(&sec);
+	auto &glow = bake->Stream.AnimatedGlow;
+	unsigned s = i >> 1;
+	if (glow.Find(s) == glow.Size())
+	{
+		auto tex = TexMan.GetGameTexture(sec.GetTexture(i & 1));
+		if (tex && tex->isGlowing() && !tex->isAutoGlowing() && sec.GetGlowColor(i & 1) == 0) glow.Push(s);
+	}
+}
+
+//==========================================================================
+//
 // One record stream's candidates, compared with the last uploaded records
 //
 //==========================================================================
@@ -395,6 +477,16 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	PreviousXformRecords.Clear();
 	unsigned candidates = 0;
 
+	// Side tiers and plane textures first: a plane texture change can change
+	// its sector's wall glow (FillStreamedPlane reports the sector).
+	unsigned recordSweep = (unsigned)std::max<int>(lm_statesweep, 0);
+	candidates += StreamRecords(st.Sides, stamp, lm_statefull, recordSweep,
+		[&](unsigned i, LevelMeshSideState &out) { FillStreamedSide(Level, bake, i, out); },
+		DirtySides, DirtySideRecords, PreviousSideRecords);
+	candidates += StreamRecords(st.Xforms, stamp, lm_statefull, recordSweep,
+		[&](unsigned i, LevelMeshPlaneXform &out) { FillStreamedPlane(Level, bake, i, out); },
+		DirtyXforms, DirtyXformRecords, PreviousXformRecords);
+
 	auto check = [&](unsigned s)
 	{
 		if (s >= nsec || st.SectorStamp[s] == stamp) return;
@@ -452,13 +544,6 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		}
 	}
 
-	unsigned sweep = (unsigned)std::max<int>(lm_statesweep, 0);
-	candidates += StreamRecords(st.Sides, stamp, lm_statefull, sweep,
-		[&](unsigned i, LevelMeshSideState &out) { LevelMesh_FillSideState(Level->sides[i / 3], i % 3, out); },
-		DirtySides, DirtySideRecords, PreviousSideRecords);
-	candidates += StreamRecords(st.Xforms, stamp, lm_statefull, sweep,
-		[&](unsigned i, LevelMeshPlaneXform &out) { LevelMesh_FillPlaneXform(Level->sectors[i >> 1], i & 1, out); },
-		DirtyXforms, DirtyXformRecords, PreviousXformRecords);
 
 	for (uint32_t c : DirtyClusters)
 	{
@@ -498,6 +583,29 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 				bake->Clusters[z.cluster].bmax[2] = z.zmax;
 			}
 			ClusterUpdates.Clear();
+		}
+	}
+	// Classic draw-list ownership follows LMTS_DEFERRED (uploaded records only).
+	for (unsigned k = 0; k < DirtySides.Size(); k++)
+	{
+		uint32_t ref = DirtySides[k];
+		if (ref < bake->SideTierOwned.Size())
+		{
+			uint8_t owned = bake->SideTierBaked[ref] && !(DirtySideRecords[k].flags & LMTS_DEFERRED);
+			if (lm_statelog && owned != bake->SideTierOwned[ref])
+				Printf("Levelmesh state: side %u tier %u -> %s\n", ref / 3, ref % 3, owned ? "levelmesh" : "classic");
+			bake->SideTierOwned[ref] = owned;
+		}
+	}
+	for (unsigned k = 0; k < DirtyXforms.Size(); k++)
+	{
+		uint32_t ref = DirtyXforms[k];
+		if (ref < bake->SectorPlaneOwned.Size())
+		{
+			uint8_t owned = bake->SectorPlaneBaked[ref] && !(DirtyXformRecords[k].flags & LMTS_DEFERRED);
+			if (lm_statelog && owned != bake->SectorPlaneOwned[ref])
+				Printf("Levelmesh state: sector %u plane %u -> %s\n", ref >> 1, ref & 1, owned ? "levelmesh" : "classic");
+			bake->SectorPlaneOwned[ref] = owned;
 		}
 	}
 	st.Changed.Append(DirtySectors);

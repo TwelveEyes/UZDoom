@@ -270,6 +270,8 @@ void Baker::ProcessSides()
 	HWMeshHelper mh;
 	HWWallDispatcher disp(Level, &mh, getRealLightmode(Level, true));
 	sector_t backcopy;
+	Out->TierBase.Resize(Level->sides.Size() * 3);
+	for (auto &tb : Out->TierBase) tb = {};
 
 	for (auto &side : Level->sides)
 	{
@@ -329,10 +331,12 @@ void Baker::ProcessSides()
 	}
 }
 
+} // namespace
+
 // Materials the levelmesh fragment stage cannot draw yet: it only builds the
 // default material shader (no warp, specular / PBR, paletted, user shaders
 // or canvases). Animation frames are assumed to share their base's shader.
-static bool NeedsClassicMaterial(FGameTexture *tex)
+bool LevelMesh_NeedsClassicMaterial(FGameTexture *tex)
 {
 	if (tex == nullptr) return false;
 	if (tex->isWarped() || tex->isHardwareCanvas() || tex->GetUseType() == ETextureType::SWCanvas) return true;
@@ -340,6 +344,9 @@ static bool NeedsClassicMaterial(FGameTexture *tex)
 	if (tex->GetNormalmap() != nullptr) return true;	// specular / PBR
 	return false;
 }
+
+namespace
+{
 
 static bool SameColormap(const FColormap &a, const FColormap &b)
 {
@@ -649,7 +656,22 @@ void Baker::BakeWall(HWWall &w)
 		surf.texOffsetScale = (sx == 1.f || tci.mWorldPanning) ? 1.f : sx;
 		surf.rowOffsetScale = (sy == 1.f || tci.mWorldPanning) ? 1.f : sy;
 		surf.renderWidth = (float)tci.mRenderWidth;
-		if (w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF) surf.wrapWidth = tci.TextureAdjustWidth();
+		bool mid2 = w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF;
+		if (mid2) surf.wrapWidth = tci.TextureAdjustWidth();
+		if (surf.textureId == sideTex.GetIndex())
+		{
+			surf.flags |= LMSF_STATETEXTURE;
+			auto &tb = Out->TierBase[surf.sideRef];
+			tb.renderWidth = tci.mRenderWidth;
+			tb.renderHeight = tci.mRenderHeight;
+			tb.scaleX = tci.mScale.X;
+			tb.scaleY = tci.mScale.Y;
+			tb.worldPanning = tci.mWorldPanning;
+			tb.valid = true;
+			bool wrap = (w.seg->linedef->flags & ML_WRAP_MIDTEX) || (side->Flags & WALLF_WRAP_MIDTEX);
+			tb.midClip = mid2 && !wrap;
+			tb.yOffset = surf.yOffsetBase;
+		}
 	}
 	surf.lightSector = rf->Index();
 	surf.lightList = -1;
@@ -684,7 +706,7 @@ void Baker::BakeWall(HWWall &w)
 	// resolve covers light, fog, desaturation and glow). The values
 	// HWWall::RenderTexturedWall applies are tested, not WALLF_EXTCOLOR: the
 	// map loader sets that flag on every side (sector_t::CheckExColorFlag).
-	if (NeedsClassicMaterial(w.texture) || HasWallColorEffects(side, tier, w.frontsector)) surf.flags |= LMSF_DEFERRED;
+	if (LevelMesh_NeedsClassicMaterial(w.texture) || HasWallColorEffects(side, tier, w.frontsector)) surf.flags |= LMSF_DEFERRED;
 	float dx = w.glseg.x2 - w.glseg.x1, dy = w.glseg.y2 - w.glseg.y1;
 	float len = sqrtf(dx * dx + dy * dy);
 	if (len > 0)
@@ -791,13 +813,15 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 	auto tex = TexMan.GetGameTexture(texid, true);
 	// As walls: material shaders and the plane colors / texture manipulation
 	// HWFlat::DrawFlat applies (ticket 11).
-	if (NeedsClassicMaterial(tex) || model->SpecialColors[mplane] != 0xffffffff || (model->AdditiveColors[mplane] & 0xffffff) != 0 ||
+	if (LevelMesh_NeedsClassicMaterial(tex) || model->SpecialColors[mplane] != 0xffffffff || (model->AdditiveColors[mplane] & 0xffffff) != 0 ||
 		model->planes[mplane].TextureFx.AddColor.a != 0)
 		surf.flags |= LMSF_DEFERRED;
 	// HWDrawInfo::AddFlat: only 3D-floor and portal planes are alpha tested.
 	if (tex && tex->isMasked() && (ffloor || portal)) surf.flags |= LMSF_MASKED;
 	surf.vScale = 0;
 	surf.textureId = texid.GetIndex();
+	// Sector planes follow their plane's streamed texture (3D-floor planes stay baked, ticket 12).
+	if (!ffloor) surf.flags |= LMSF_STATETEXTURE;
 	surf.sideRef = 0xffffffffu;
 	surf.lightSector = sec->Index();
 	surf.lightList = -1;
@@ -920,6 +944,8 @@ void Baker::ComputeOwnership()
 	for (unsigned i = 0; i < tiers.Size(); i++) Out->SideTierOwned[i] = tiers[i] == HAS_MESH;
 	Out->SectorPlaneOwned.Resize(planes.Size());
 	for (unsigned i = 0; i < planes.Size(); i++) Out->SectorPlaneOwned[i] = planes[i] == HAS_MESH;
+	Out->SideTierBaked = Out->SideTierOwned;
+	Out->SectorPlaneBaked = Out->SectorPlaneOwned;
 }
 
 } // namespace

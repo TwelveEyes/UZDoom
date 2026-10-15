@@ -187,6 +187,9 @@ public:
 	// Streams dirty state records into the resident levelmesh; returns the bytes uploaded.
 	virtual size_t UpdateLevelMeshState(const LevelMeshStateUpdate &update) { return 0; }
 	virtual bool LevelMeshResident(uint64_t id) { return false; }
+	// True when the texture id's translation table entry is resolved; otherwise
+	// queues it for the next frame start and returns false.
+	virtual bool LevelMeshTextureReady(int id) { return true; }
 	virtual void PrintLevelMeshStats() { }
 	// Draws the levelmesh for the current view into the scene (opaque and
 	// masked buckets). False = nothing drawn: the classic lists draw everything.
