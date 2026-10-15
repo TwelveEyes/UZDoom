@@ -1,7 +1,8 @@
 /*
 ** scatter.comp
 **
-** Levelmesh dirty state scatter: sector records and cluster z-ranges
+** Levelmesh dirty state scatter: sector, side and plane-xform records and
+** cluster z-ranges
 **
 **---------------------------------------------------------------------------
 **
@@ -12,17 +13,20 @@
 **---------------------------------------------------------------------------
 **
 ** One dispatch per state update (VkLevelMesh::UpdateState). The staging
-** buffer holds, at the pushed word offsets: the sector indices, the sector
-** records (LM_SECTOR_WORDS each, parallel to the indices) and the cluster
-** z entries (LevelMeshClusterZ: cluster, zmin, zmax, reserved). Every
-** invocation copies one word of a sector record or one cluster z-range;
-** the indices are unique, so no two invocations write the same word.
+** buffer holds, at the pushed word offsets, per record kind the indices and
+** the records (parallel to the indices): sectors (LM_SECTOR_WORDS each),
+** side tiers (LM_SIDE_WORDS), plane xforms (LM_XFORM_WORDS); then the
+** cluster z entries (LevelMeshClusterZ: cluster, zmin, zmax, reserved).
+** Every invocation copies one record word or one cluster z-range; the
+** indices of a kind are unique, so no two invocations write the same word.
 */
 
 layout(local_size_x = 64) in;
 
 layout(set = 0, binding = LMBIND_SECTORSTATE, std430) buffer SectorWords { uint sectorWords[]; };
 layout(set = 0, binding = LMBIND_CLUSTERS, std430) buffer ClusterWords { uint clusterWords[]; };
+layout(set = 0, binding = LMBIND_SIDESTATE, std430) buffer SideWords { uint sideWords[]; };
+layout(set = 0, binding = LMBIND_PLANEXFORM, std430) buffer XformWords { uint xformWords[]; };
 layout(set = 1, binding = 0, std430) buffer readonly SourceWords { uint src[]; };
 
 // Keep in sync with VkLevelMesh::ScatterConstants.
@@ -33,13 +37,21 @@ layout(push_constant) uniform ScatterConstants
 	uint numSectors;
 	uint clusterEntries;
 	uint numClusters;
-	uint padding0, padding1, padding2;
+	uint sideIndices;
+	uint sideRecords;
+	uint numSides;
+	uint xformIndices;
+	uint xformRecords;
+	uint numXforms;
+	uint padding0;
 };
 
 void main()
 {
 	uint sectorItems = numSectors * LM_SECTOR_WORDS;
-	uint total = sectorItems + numClusters;
+	uint sideItems = numSides * LM_SIDE_WORDS;
+	uint xformItems = numXforms * LM_XFORM_WORDS;
+	uint total = sectorItems + sideItems + xformItems + numClusters;
 	uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
 	for (uint i = gl_GlobalInvocationID.x; i < total; i += stride)
 	{
@@ -49,13 +61,30 @@ void main()
 			uint word = i - record * LM_SECTOR_WORDS;
 			uint sector = src[sectorIndices + record];
 			sectorWords[sector * LM_SECTOR_WORDS + word] = src[sectorRecords + i];
+			continue;
 		}
-		else
+		uint k = i - sectorItems;
+		if (k < sideItems)
 		{
-			uint e = clusterEntries + (i - sectorItems) * LM_CLUSTERZ_WORDS;
-			uint c = src[e];
-			clusterWords[c * LM_CLUSTER_WORDS + LM_CLUSTER_ZMIN] = src[e + 1u];
-			clusterWords[c * LM_CLUSTER_WORDS + LM_CLUSTER_ZMAX] = src[e + 2u];
+			uint record = k / LM_SIDE_WORDS;
+			uint word = k - record * LM_SIDE_WORDS;
+			uint side = src[sideIndices + record];
+			sideWords[side * LM_SIDE_WORDS + word] = src[sideRecords + k];
+			continue;
 		}
+		k -= sideItems;
+		if (k < xformItems)
+		{
+			uint record = k / LM_XFORM_WORDS;
+			uint word = k - record * LM_XFORM_WORDS;
+			uint plane = src[xformIndices + record];
+			xformWords[plane * LM_XFORM_WORDS + word] = src[xformRecords + k];
+			continue;
+		}
+		k -= xformItems;
+		uint e = clusterEntries + k * LM_CLUSTERZ_WORDS;
+		uint c = src[e];
+		clusterWords[c * LM_CLUSTER_WORDS + LM_CLUSTER_ZMIN] = src[e + 1u];
+		clusterWords[c * LM_CLUSTER_WORDS + LM_CLUSTER_ZMAX] = src[e + 2u];
 	}
 }

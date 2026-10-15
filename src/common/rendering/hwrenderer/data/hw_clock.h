@@ -60,8 +60,10 @@ extern int rendered_levelmesh;	// levelmesh draws this frame
 // over its calls (one per rendered viewpoint).
 struct LevelMeshStateStats
 {
-	unsigned candidates = 0;	// sector records compared
+	unsigned candidates = 0;	// records compared (sectors, side tiers, plane xforms)
 	unsigned sectors = 0;		// sector records uploaded
+	unsigned sides = 0;			// side tier records uploaded
+	unsigned xforms = 0;		// plane xform records uploaded
 	unsigned clusters = 0;		// cluster z-ranges uploaded
 	size_t bytes = 0;			// staging bytes uploaded
 };

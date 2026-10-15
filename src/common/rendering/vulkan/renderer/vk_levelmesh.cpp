@@ -182,8 +182,8 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LM_SAMPLER_CLAMPY %uu\n", (unsigned)CLAMP_Y);
 	d.AppendFormat("#define LMVF_FULLBRIGHT %d\n", (int)LMVF_FULLBRIGHT);
 	d.AppendFormat("#define LMSK_FLOOR %uu\n#define LMSK_CEILING %uu\n", (unsigned)LMSK_FLOOR, (unsigned)LMSK_CEILING);
-	d.AppendFormat("#define LMSF_DEFERRED %uu\n#define LMSF_TEXFULLBRIGHT %uu\n#define LMSF_NOSECTORFOG %uu\n",
-		(unsigned)LMSF_DEFERRED, (unsigned)LMSF_TEXFULLBRIGHT, (unsigned)LMSF_NOSECTORFOG);
+	d.AppendFormat("#define LMSF_DEFERRED %uu\n#define LMSF_NOSECTORFOG %uu\n", (unsigned)LMSF_DEFERRED, (unsigned)LMSF_NOSECTORFOG);
+	d.AppendFormat("#define LMTE_TEXFMASK 0x%xu\n#define LMTE_FULLBRIGHT 0x%xu\n", (unsigned)LMTE_TEXFMASK, (unsigned)LMTE_FULLBRIGHT);
 	d.AppendFormat("#define LMSD_ABSLIGHTING %uu\n#define LMSD_ABSLIGHTING_TIER %uu\n#define LMSD_NOFAKECONTRAST %uu\n",
 		(unsigned)LMSD_ABSLIGHTING, (unsigned)LMSD_ABSLIGHTING_TIER, (unsigned)LMSD_NOFAKECONTRAST);
 	d.AppendFormat("#define LMSD_SMOOTHLIGHTING %uu\n#define LMSD_LIGHT_FOG %uu\n", (unsigned)LMSD_SMOOTHLIGHTING, (unsigned)LMSD_LIGHT_FOG);
@@ -265,6 +265,8 @@ void VkLevelMesh::ReleaseLevel()
 	mResident = false;
 	mId = 0;
 	mTable.clear();
+	mFrame.clear();
+	mUsedIds.clear();
 	mPendingFlag.clear();
 	mPending.clear();
 	mTableDirtyMin = ~0u;
@@ -341,6 +343,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 	WriteSamplers();
 
 	mTable.assign(data->translationTableSize, LevelMeshTextureEntry{});
+	mFrame.assign(data->translationTableSize, nullptr);
 	mPendingFlag.assign(data->translationTableSize, 0);
 	for (unsigned i = 0; i < data->textureIds.size; i++)
 	{
@@ -349,6 +352,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		{
 			mPendingFlag[id] = 1;
 			mPending.push_back(id);
+			mUsedIds.push_back(id);
 		}
 	}
 
@@ -440,6 +444,7 @@ void VkLevelMesh::FlushSlotWrites()
 LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 {
 	auto tex = TexMan.GetGameTexture(FSetTextureID(id), true);
+	mFrame[id] = tex;
 	if (tex == nullptr || !tex->isValid()) return {};
 	int scaleflags = shouldUpscale(tex, UF_Texture) ? CTF_Upscale : 0;
 	auto mat = static_cast<VkMaterial *>(FMaterial::ValidateTexture(tex, scaleflags));
@@ -465,9 +470,11 @@ LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 		}
 		it = mMaterials.emplace(mat, MaterialSlots{ first, count, {} }).first;
 	}
-	it->second.ids.push_back(id);
-	// Layer flags (TEXF_*, already in the high 16 bits) only describe layers that are bound.
-	uint32_t flags = it->second.count > 1 ? (uint32_t)mat->GetLayerFlags() & 0xffff0000u : 0;
+	auto &ids = it->second.ids;
+	if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+	// Layer flags (TEXF_*, already in place) only describe layers that are bound.
+	uint32_t flags = it->second.count > 1 ? (uint32_t)mat->GetLayerFlags() & LMTE_TEXFMASK : 0;
+	if (tex->isFullbright()) flags |= LMTE_FULLBRIGHT;
 	return { it->second.first, it->second.count | flags, (float)tex->GetDisplayWidth(), (float)tex->GetDisplayHeight() };
 }
 
@@ -504,6 +511,17 @@ void VkLevelMesh::BeginFrame()
 	if (!mResident) return;
 
 	if (mSamplersDirty) WriteSamplers();
+
+	// Texture animation (FTextureAnimator::UpdateAnimations ran for this
+	// frame): re-resolve the ids whose current frame changed.
+	for (int id : mUsedIds)
+	{
+		if (!mPendingFlag[id] && TexMan.GetGameTexture(FSetTextureID(id), true) != mFrame[id])
+		{
+			mPendingFlag[id] = 1;
+			mPending.push_back(id);
+		}
+	}
 
 	if (!mPending.empty())
 	{
@@ -562,6 +580,8 @@ bool VkLevelMesh::CreateScatter()
 	defines.AppendFormat("#define LM_CLUSTER_ZMIN %uu\n#define LM_CLUSTER_ZMAX %uu\n",
 		(unsigned)(offsetof(LevelMeshCluster, bmin) / 4 + 2), (unsigned)(offsetof(LevelMeshCluster, bmax) / 4 + 2));
 	defines.AppendFormat("#define LM_CLUSTERZ_WORDS %uu\n", (unsigned)(sizeof(LevelMeshClusterZ) / 4));
+	defines.AppendFormat("#define LM_SIDE_WORDS %uu\n#define LM_XFORM_WORDS %uu\n",
+		(unsigned)(sizeof(LevelMeshSideState) / 4), (unsigned)(sizeof(LevelMeshPlaneXform) / 4));
 	static_assert(offsetof(LevelMeshClusterZ, cluster) == 0 && offsetof(LevelMeshClusterZ, zmin) == 4 && offsetof(LevelMeshClusterZ, zmax) == 8, "scatter.comp reads LevelMeshClusterZ by word");
 	try
 	{
@@ -602,25 +622,45 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	if (!mResident || update.id != mId || !mSet) return 0;
 	unsigned nsec = std::min(update.sectorIndices.size, update.sectors.size);
 	unsigned ncl = update.clusters.size;
-	if (nsec == 0 && ncl == 0) return 0;
+	unsigned nside = std::min(update.sideIndices.size, update.sides.size);
+	unsigned nxf = std::min(update.xformIndices.size, update.xforms.size);
+	if (nsec == 0 && ncl == 0 && nside == 0 && nxf == 0) return 0;
 	for (unsigned i = 0; i < nsec; i++)
 		if (update.sectorIndices.data[i] >= mCounts[LMBIND_SECTORSTATE]) return 0;
 	for (unsigned i = 0; i < ncl; i++)
 		if (update.clusters.data[i].cluster >= mCounts[LMBIND_CLUSTERS]) return 0;
+	for (unsigned i = 0; i < nside; i++)
+		if (update.sideIndices.data[i] >= mCounts[LMBIND_SIDESTATE]) return 0;
+	for (unsigned i = 0; i < nxf; i++)
+		if (update.xformIndices.data[i] >= mCounts[LMBIND_PLANEXFORM]) return 0;
 	if (!CreateScatter()) return 0;
 
-	size_t indexBytes = (nsec * sizeof(uint32_t) + 15) & ~(size_t)15;
-	size_t recordBytes = nsec * sizeof(LevelMeshSectorState);
-	size_t clusterBytes = ncl * sizeof(LevelMeshClusterZ);
-	size_t size = indexBytes + recordBytes + clusterBytes;
+	// Layout: [indices | records] per record kind, then the cluster entries;
+	// every block 16-byte aligned.
+	auto align = [](size_t n) { return (n + 15) & ~(size_t)15; };
+	size_t secIdx = 0, secRec = secIdx + align(nsec * 4);
+	size_t sideIdx = secRec + nsec * sizeof(LevelMeshSectorState), sideRec = sideIdx + align(nside * 4);
+	size_t xfIdx = sideRec + nside * sizeof(LevelMeshSideState), xfRec = xfIdx + align(nxf * 4);
+	size_t clRec = xfRec + nxf * sizeof(LevelMeshPlaneXform);
+	size_t size = clRec + ncl * sizeof(LevelMeshClusterZ);
 	auto alloc = AllocUpload(size);
 	uint8_t *dst = (uint8_t *)alloc.data;
 	if (nsec)
 	{
-		memcpy(dst, update.sectorIndices.data, nsec * sizeof(uint32_t));
-		memcpy(dst + indexBytes, update.sectors.data, recordBytes);
+		memcpy(dst + secIdx, update.sectorIndices.data, nsec * 4);
+		memcpy(dst + secRec, update.sectors.data, nsec * sizeof(LevelMeshSectorState));
 	}
-	if (ncl) memcpy(dst + indexBytes + recordBytes, update.clusters.data, clusterBytes);
+	if (nside)
+	{
+		memcpy(dst + sideIdx, update.sideIndices.data, nside * 4);
+		memcpy(dst + sideRec, update.sides.data, nside * sizeof(LevelMeshSideState));
+	}
+	if (nxf)
+	{
+		memcpy(dst + xfIdx, update.xformIndices.data, nxf * 4);
+		memcpy(dst + xfRec, update.xforms.data, nxf * sizeof(LevelMeshPlaneXform));
+	}
+	if (ncl) memcpy(dst + clRec, update.clusters.data, ncl * sizeof(LevelMeshClusterZ));
 
 	auto &slot = mRing[mRingIndex];
 	if (!slot.scatterSet || slot.scatterSetBuffer != alloc.buffer)
@@ -634,12 +674,19 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 		slot.scatterSetBuffer = alloc.buffer;
 	}
 
+	auto word = [&](size_t offset) { return (uint32_t)((alloc.offset + offset) / 4); };
 	ScatterConstants pc = {};
-	pc.sectorIndices = (uint32_t)(alloc.offset / 4);
-	pc.sectorRecords = (uint32_t)((alloc.offset + indexBytes) / 4);
+	pc.sectorIndices = word(secIdx);
+	pc.sectorRecords = word(secRec);
 	pc.numSectors = nsec;
-	pc.clusterEntries = (uint32_t)((alloc.offset + indexBytes + recordBytes) / 4);
+	pc.clusterEntries = word(clRec);
 	pc.numClusters = ncl;
+	pc.sideIndices = word(sideIdx);
+	pc.sideRecords = word(sideRec);
+	pc.numSides = nside;
+	pc.xformIndices = word(xfIdx);
+	pc.xformRecords = word(xfRec);
+	pc.numXforms = nxf;
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();
 	// Earlier writes (level upload, earlier scatters) before this one.
@@ -650,7 +697,8 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mScatterLayout.get(), 0, mSet.get());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mScatterLayout.get(), 1, slot.scatterSet.get());
 	cmd->pushConstants(mScatterLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ScatterConstants), &pc);
-	size_t items = (size_t)nsec * (sizeof(LevelMeshSectorState) / 4) + ncl;
+	size_t items = (size_t)nsec * (sizeof(LevelMeshSectorState) / 4) + ncl + (size_t)nside * (sizeof(LevelMeshSideState) / 4) +
+		(size_t)nxf * (sizeof(LevelMeshPlaneXform) / 4);
 	cmd->dispatch((uint32_t)std::min<size_t>((items + 63) / 64, 65535), 1, 1);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)

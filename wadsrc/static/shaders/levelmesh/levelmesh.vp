@@ -45,6 +45,46 @@ float LM_WallV(LMVertex v, LMSurface surf, float z)
 	return v.vOffset + surf.vScale * (z - texz);
 }
 
+// FTexCoordInfo::TextureOffset / RowOffset of a side offset, as texture
+// coordinates (FloatToTexU / the texturetop term of FloatToTexV). Two-sided
+// mid textures first wrap the x offset into the texture width
+// (HWWall::DoMidTexture).
+float LM_WallU(LMSurface surf, float xoffset)
+{
+	float t = xoffset;
+	if (surf.wrapWidth > 0.0)
+	{
+		float texwidth = surf.wrapWidth;
+		if (t >= 0.0)
+		{
+			float div = t / texwidth;
+			t = (div - floor(div)) * texwidth;
+		}
+		else
+		{
+			float div = (-t) / texwidth;
+			t = texwidth - (div - floor(div)) * texwidth;
+		}
+	}
+	return (t / surf.texOffsetScale) / surf.renderWidth;
+}
+
+// Wall texture coordinates with the side tier's current offsets: the baked
+// u / v hold the offsets at bake (LevelMeshSurface::xOffsetBase), so only
+// the difference is applied. v = (texturetop - z) / mRenderHeight, and
+// vScale = dv/dz = -1 / mRenderHeight.
+vec2 LM_WallTexCoord(LMVertex v, LMSurface surf, float z)
+{
+	vec2 tc = vec2(v.u, LM_WallV(v, surf, z));
+	if (surf.sideRef == 0xffffffffu || surf.renderWidth == 0.0) return tc;
+	LMSideState ss = lmSides[surf.sideRef];
+	if (ss.xOffset != surf.xOffsetBase)
+		tc.x += LM_WallU(surf, ss.xOffset) - LM_WallU(surf, surf.xOffsetBase);
+	if (ss.yOffset != surf.yOffsetBase)
+		tc.y -= (ss.yOffset / surf.rowOffsetScale - surf.yOffsetBase / surf.rowOffsetScale) * surf.vScale;
+	return tc;
+}
+
 // Flat texture coordinates: the classic plane texture matrix
 // (hw_SetPlaneTextureRotation: scale1 * translate * scale2 * rotate),
 // expanded into the same products the VSMatrix calls produce.
@@ -80,17 +120,21 @@ void main()
 	if (kind == LMSK_WALL && surf.edgeTop != LM_NOPLANE && (v.anchor >> LMV_ROLESHIFT) != LMV_TOP)
 		z = min(z, LM_PlaneZ(lmSectors[surf.edgeTop >> 1].planes[surf.edgeTop & 1u], v.x, v.y));
 	vec2 tc;
-	if (kind == LMSK_WALL) tc = vec2(v.u, LM_WallV(v, surf, z));
+	if (kind == LMSK_WALL) tc = LM_WallTexCoord(v, surf, z);
 	else tc = LM_FlatTexCoord(v, surf, tex);
 
 	// Material for the fragment stage: bindless base slot, layer count,
 	// sampler (classic clamp mode: walls pass HWF_CLAMPX/Y, flats CLAMP_NONE),
 	// texture-mode flags (material layers + ClampY, see LMSF_TEXCLAMPY).
 	uint samplerMode = 0u;
-	uint texflags = tex.layers & 0xffff0000u;
+	uint texflags = tex.layers & LMTE_TEXFMASK;
 	if (kind == LMSK_WALL)
 	{
-		if ((surf.flags & LMSF_CLAMPX) != 0u) samplerMode |= 1u;
+		// The classic sets HWF_CLAMPX only while the u range lies within one
+		// texture width (HWWall::DoMidTexture, CheckTexturePosition for
+		// skybox sectors); a side scrolled in x is taken to leave it.
+		bool scrolledX = surf.sideRef != 0xffffffffu && surf.renderWidth != 0.0 && lmSides[surf.sideRef].xOffset != surf.xOffsetBase;
+		if ((surf.flags & LMSF_CLAMPX) != 0u && !scrolledX) samplerMode |= 1u;
 		if ((surf.flags & LMSF_CLAMPY) != 0u) samplerMode |= 2u;
 		if ((surf.flags & LMSF_TEXCLAMPY) != 0u) texflags |= LM_TEXF_CLAMPY;
 	}

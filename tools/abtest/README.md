@@ -27,6 +27,10 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   abtest.py calibrate --mode static      # classic stats: Vulkan x3 launches, GL33 vs Vulkan
   abtest.py diff | statediff | record | promote | validate
   ```
+- **Inspecting a run:** `ab_sheet.py` (run id, path or `latest`):
+  `sheet RUN COMBO TICK...` writes A | B | diff rows to `<run>/<combo>/report/`
+  (`--crop x0,y0,x1,y1`); `summary RUN` gives per-combo verdicts, total differing pixels and
+  the worst tick; `failsets RUN_A RUN_B` lists the ticks that fail in only one of two runs.
 - **Flags:**
   - `--gamestate` sets `r_ab_gamestate 1`: each capture also writes `<map>_<tick>.gstate`
     (per-subsector `SSECMF_DRAWN`, per-line `ML_MAPPED`), and the two paths are set-diffed.

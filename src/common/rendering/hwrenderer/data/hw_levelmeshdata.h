@@ -86,7 +86,7 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_SKY = 1 << 12,			// unused for mesh surfaces (sky goes to side lists); reserved
 	LMSF_DEFERRED = 1 << 13,	// not drawn by the levelmesh yet: the classic path owns it (LMB_DEFERRED)
 	LMSF_TEXCLAMPY = 1 << 14,	// TEXF_ClampY texture mode (classic SetTextureClamp: clamped two-sided mid texture)
-	LMSF_TEXFULLBRIGHT = 1 << 15,	// flats: FGameTexture::isFullbright (HWFlat::Process: white colormap, light 255)
+	// 1 << 15 unused (fullbright flat textures follow the animation: LMTE_FULLBRIGHT)
 	LMSF_NOSECTORFOG = 1 << 16,	// walls: fog of light 255 without the sector colormap (RENDERWALL_M2SNF)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
 };
@@ -109,7 +109,7 @@ enum ELevelMeshSurfaceKind : uint32_t
 	LMSK_CEILING,
 };
 
-// std430-compatible: 28 x 32 bit.
+// std430-compatible: 32 x 32 bit.
 struct LevelMeshSurface
 {
 	uint32_t flags;			// LMSF_* | kind
@@ -136,9 +136,20 @@ struct LevelMeshSurface
 	// a lift lowered past the front floor) collapses instead of turning
 	// inside out, like the classic, which stops emitting it.
 	uint32_t edgeTop;
-	uint32_t reserved[3];
+	// Walls: the texture offsets of the side tier at bake and the
+	// FTexCoordInfo values that turn them into texture coordinates
+	// (HWWall::SetWallCoordinates / DoTexture / DoMidTexture). The vertex
+	// stage adds the difference between the streamed side state
+	// (LevelMeshSideState) and these to the baked u / v, the way the classic
+	// recomputes them from the current offsets.
+	float xOffsetBase, yOffsetBase;
+	float texOffsetScale;	// FTexCoordInfo::TextureOffset divisor (1: unscaled or world panning)
+	float rowOffsetScale;	// FTexCoordInfo::RowOffset divisor
+	float renderWidth;		// FTexCoordInfo::mRenderWidth (FloatToTexU)
+	float wrapWidth;		// two-sided mid textures: TextureAdjustWidth (DoMidTexture wraps the x offset into it); 0 = no wrap
+	uint32_t reserved;
 };
-static_assert(sizeof(LevelMeshSurface) == 28 * 4, "LevelMeshSurface must stay std430-compatible");
+static_assert(sizeof(LevelMeshSurface) == 32 * 4, "LevelMeshSurface must stay std430-compatible");
 
 // Material buckets. Inside a cluster the index range is ordered by bucket.
 // Opaque and masked follow the classic draw lists (HWDrawInfo::AddWall /
@@ -193,16 +204,18 @@ struct LevelMeshSectorState
 static_assert(sizeof(LevelMeshSectorState) == 24 * 4, "LevelMeshSectorState must stay std430-compatible");
 
 // Per side x tier (index side * 3 + tier). std430-compatible: 8 x 32 bit.
+// Streamed dirty-only like the sector records (LevelMesh_FillSideState).
 struct LevelMeshSideState
 {
 	int32_t textureId;			// untranslated
-	float xOffset, yOffset;
+	float xOffset, yOffset;		// side_t::GetTextureX/YOffset
 	float xScale, yScale;
 	uint32_t reserved[3];
 };
 static_assert(sizeof(LevelMeshSideState) == 8 * 4, "LevelMeshSideState must stay std430-compatible");
 
 // Per sector x plane (index = plane ref). std430-compatible: 8 x 32 bit.
+// Streamed dirty-only (LevelMesh_FillPlaneXform).
 struct LevelMeshPlaneXform
 {
 	float xOffset, yOffset, baseyOffset;
@@ -216,10 +229,18 @@ static_assert(sizeof(LevelMeshPlaneXform) == 8 * 4, "LevelMeshPlaneXform must st
 // Layer i of the material is bindless slot (slot + i). Slot 0 is the null
 // texture; an unresolved or invalid texture maps to all zeros.
 // std430-compatible: 4 x 32 bit.
+// The entry follows the texture animation: it describes the frame the
+// untranslated id currently shows (TexMan.GetGameTexture(id, true)).
+enum ELevelMeshTextureEntryFlags : uint32_t
+{
+	LMTE_TEXFMASK = 0x00ff0000u,	// material layer flags (TEXF_*)
+	LMTE_FULLBRIGHT = 1u << 31,		// FGameTexture::isFullbright of the current frame
+};
+
 struct LevelMeshTextureEntry
 {
 	uint32_t slot;
-	uint32_t layers;		// number of layers (low 16 bits) | material layer flags (TEXF_*, high 16 bits)
+	uint32_t layers;		// number of layers (low 16 bits) | TEXF_* (LMTE_TEXFMASK) | LMTE_*
 	float displayWidth, displayHeight;	// FGameTexture display size (flat texture matrix)
 };
 
@@ -334,6 +355,10 @@ struct LevelMeshStateUpdate
 	LevelMeshSpan<uint32_t> sectorIndices;
 	LevelMeshSpan<LevelMeshSectorState> sectors;	// parallel to sectorIndices
 	LevelMeshSpan<LevelMeshClusterZ> clusters;
+	LevelMeshSpan<uint32_t> sideIndices;			// side * 3 + tier
+	LevelMeshSpan<LevelMeshSideState> sides;		// parallel to sideIndices
+	LevelMeshSpan<uint32_t> xformIndices;			// plane refs
+	LevelMeshSpan<LevelMeshPlaneXform> xforms;		// parallel to xformIndices
 };
 
 // Everything the backend uploads at level setup. The arrays only need to

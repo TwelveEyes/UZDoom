@@ -1,7 +1,8 @@
 /*
 ** hw_levelmeshstate.cpp
 **
-** Levelmesh dirty state stream: sector records and cluster z-ranges
+** Levelmesh dirty state stream: sector, side and plane-xform records and
+** cluster z-ranges
 **
 **---------------------------------------------------------------------------
 **
@@ -38,7 +39,16 @@
 ** reproduces the vertex z bounds exactly; sloped planes are evaluated at the
 ** box corners and padded against rounding.
 **
-** Diagnostics: lm_statefull compares every sector every frame, lm_clusterz 0
+** Side tiers (texture, offsets, scales) and plane texture transforms are
+** separate record streams with the same scheme. Their candidates are the
+** previous frame's changes, the records reported by the change hooks in the
+** side_t / sector_t setters (scrollers, their interpolations, switches,
+** Line_SetTextureOffset, ...: LevelMesh_SideChanged, LevelMesh_PlaneChanged)
+** and a round-robin sweep. The hooks find the record by pointer arithmetic
+** on the level's arrays, never through the object: the map loader calls the
+** setters before a side's sector pointer is valid.
+**
+** Diagnostics: lm_statefull compares every record every frame, lm_clusterz 0
 ** stops the cluster z refresh, lm_stateupdate 0 freezes the GPU state at the
 ** load values.
 */
@@ -89,6 +99,17 @@ TArray<uint32_t> DirtyClusters;
 TArray<LevelMeshClusterZ> ClusterUpdates;
 TArray<LevelMeshClusterZ> PreviousClusterZ;	// parallel to ClusterUpdates
 TArray<uint32_t> Candidates;
+TArray<uint32_t> DirtySides;
+TArray<LevelMeshSideState> DirtySideRecords, PreviousSideRecords;
+TArray<uint32_t> DirtyXforms;
+TArray<LevelMeshPlaneXform> DirtyXformRecords, PreviousXformRecords;
+
+// The level the change hooks report into (set once its records are resident).
+LevelMeshBake *HookBake;
+side_t *HookSides;
+unsigned HookSideCount;
+sector_t *HookSectors;
+unsigned HookSectorCount;
 
 } // namespace
 
@@ -122,13 +143,55 @@ void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out)
 
 //==========================================================================
 //
+// LevelMesh_FillSideState / LevelMesh_FillPlaneXform
+//
+//==========================================================================
+
+void LevelMesh_FillSideState(side_t &side, int tier, LevelMeshSideState &out)
+{
+	out = {};
+	out.textureId = side.GetTexture(tier).GetIndex();
+	out.xOffset = (float)side.GetTextureXOffset(tier);
+	out.yOffset = (float)side.GetTextureYOffset(tier);
+	out.xScale = (float)side.GetTextureXScale(tier);
+	out.yScale = (float)side.GetTextureYScale(tier);
+}
+
+void LevelMesh_FillPlaneXform(sector_t &sec, int pos, LevelMeshPlaneXform &out)
+{
+	out = {};
+	auto &xf = sec.planes[pos].xform;
+	out.xOffset = (float)xf.xOffs;
+	out.yOffset = (float)xf.yOffs;
+	out.baseyOffset = (float)xf.baseyOffs;
+	out.xScale = (float)xf.xScale;
+	out.yScale = (float)xf.yScale;
+	out.angle = (float)xf.Angle.Degrees();
+	out.baseAngle = (float)xf.baseAngle.Degrees();
+}
+
+//==========================================================================
+//
 // LevelMesh_ResetState
 //
 //==========================================================================
 
-void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors)
+LevelMeshBake::~LevelMeshBake()
+{
+	if (HookBake == this) HookBake = nullptr;
+}
+
+void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors,
+	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms)
 {
 	auto &st = bake->Stream;
+	st.Sides.Reset(sides);
+	st.Xforms.Reset(xforms);
+	HookBake = bake;
+	HookSides = Level->sides.Size() ? &Level->sides[0] : nullptr;
+	HookSideCount = Level->sides.Size();
+	HookSectors = Level->sectors.Size() ? &Level->sectors[0] : nullptr;
+	HookSectorCount = Level->sectors.Size();
 	st.Sectors = sectors;
 	st.SectorStamp.Resize(sectors.Size());
 	for (auto &s : st.SectorStamp) s = 0;
@@ -177,6 +240,21 @@ void LevelMesh_SectorChanged(sector_t *sec)
 	st.Touched.Push(s);
 }
 
+void LevelMesh_SideChanged(side_t *side, int tier)
+{
+	if (HookBake == nullptr || side < HookSides || side >= HookSides + HookSideCount) return;
+	unsigned s = unsigned(side - HookSides);
+	auto &rs = HookBake->Stream.Sides;
+	if (tier >= 0 && tier < 3) rs.Touch(s * 3 + tier);
+	else for (int t = 0; t < 3; t++) rs.Touch(s * 3 + t);
+}
+
+void LevelMesh_PlaneChanged(sector_t *sec, int pos)
+{
+	if (HookBake == nullptr || sec < HookSectors || sec >= HookSectors + HookSectorCount || pos < 0 || pos > 1) return;
+	HookBake->Stream.Xforms.Touch(unsigned(sec - HookSectors) * 2 + pos);
+}
+
 void LevelMesh_BeginFrame()
 {
 	StreamFrame++;
@@ -219,6 +297,53 @@ static LevelMeshClusterZ ClusterZ(const LevelMeshBake *bake, uint32_t c)
 
 //==========================================================================
 //
+// One record stream's candidates, compared with the last uploaded records
+//
+//==========================================================================
+
+template<class T, class Fill>
+static unsigned StreamRecords(LevelMeshRecordStream<T> &rs, uint32_t stamp, bool full, unsigned sweep, Fill fill,
+	TArray<uint32_t> &indices, TArray<T> &records, TArray<T> &previous)
+{
+	unsigned n = rs.Records.Size(), candidates = 0;
+	auto check = [&](unsigned i)
+	{
+		if (i >= n || rs.Stamp[i] == stamp) return;
+		rs.Stamp[i] = stamp;
+		candidates++;
+		T rec;
+		fill(i, rec);
+		if (memcmp(&rec, &rs.Records[i], sizeof(rec)) == 0) return;
+		previous.Push(rs.Records[i]);
+		rs.Records[i] = rec;
+		indices.Push(i);
+		records.Push(rec);
+	};
+	if (full)
+	{
+		for (unsigned i = 0; i < n; i++) check(i);
+		return candidates;
+	}
+	for (uint32_t i : rs.ChangedBefore) check(i);
+	for (uint32_t i : rs.Changed) check(i);
+	Candidates = std::move(rs.Touched);
+	rs.Touched.Clear();
+	for (uint32_t i : Candidates)
+	{
+		rs.TouchedFlag[i] = 0;
+		check(i);
+	}
+	sweep = std::min(sweep, n);
+	for (unsigned k = 0; k < sweep; k++)
+	{
+		check(rs.SweepCursor);
+		if (++rs.SweepCursor >= n) rs.SweepCursor = 0;
+	}
+	return candidates;
+}
+
+//==========================================================================
+//
 // LevelMesh_UpdateState
 //
 //==========================================================================
@@ -231,7 +356,8 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	unsigned nsec = Level->sectors.Size();
 	unsigned ncl = bake->Clusters.Size();
 	if (st.Sectors.Size() != nsec || st.SectorStamp.Size() != nsec || st.ClusterStamp.Size() != ncl ||
-		bake->ClusterPlaneStart.Size() != (ncl ? ncl + 1 : 0) || bake->SectorClusterStart.Size() != nsec + 1) return;
+		bake->ClusterPlaneStart.Size() != (ncl ? ncl + 1 : 0) || bake->SectorClusterStart.Size() != nsec + 1 ||
+		st.Sides.Records.Size() != Level->sides.Size() * 3 || st.Xforms.Records.Size() != nsec * 2) return;
 
 	LevelMeshStateTime.Clock();
 	if (st.Frame != StreamFrame)
@@ -241,11 +367,17 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		st.Frame = StreamFrame;
 		std::swap(st.ChangedBefore, st.Changed);
 		st.Changed.Clear();
+		std::swap(st.Sides.ChangedBefore, st.Sides.Changed);
+		st.Sides.Changed.Clear();
+		std::swap(st.Xforms.ChangedBefore, st.Xforms.Changed);
+		st.Xforms.Changed.Clear();
 	}
 	if (++st.Stamp == 0)
 	{
 		for (auto &s : st.SectorStamp) s = 0;
 		for (auto &s : st.ClusterStamp) s = 0;
+		for (auto &s : st.Sides.Stamp) s = 0;
+		for (auto &s : st.Xforms.Stamp) s = 0;
 		st.Stamp = 1;
 	}
 	const uint32_t stamp = st.Stamp;
@@ -255,6 +387,12 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	DirtyClusters.Clear();
 	ClusterUpdates.Clear();
 	PreviousClusterZ.Clear();
+	DirtySides.Clear();
+	DirtySideRecords.Clear();
+	PreviousSideRecords.Clear();
+	DirtyXforms.Clear();
+	DirtyXformRecords.Clear();
+	PreviousXformRecords.Clear();
 	unsigned candidates = 0;
 
 	auto check = [&](unsigned s)
@@ -314,6 +452,14 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		}
 	}
 
+	unsigned sweep = (unsigned)std::max<int>(lm_statesweep, 0);
+	candidates += StreamRecords(st.Sides, stamp, lm_statefull, sweep,
+		[&](unsigned i, LevelMeshSideState &out) { LevelMesh_FillSideState(Level->sides[i / 3], i % 3, out); },
+		DirtySides, DirtySideRecords, PreviousSideRecords);
+	candidates += StreamRecords(st.Xforms, stamp, lm_statefull, sweep,
+		[&](unsigned i, LevelMeshPlaneXform &out) { LevelMesh_FillPlaneXform(Level->sectors[i >> 1], i & 1, out); },
+		DirtyXforms, DirtyXformRecords, PreviousXformRecords);
+
 	for (uint32_t c : DirtyClusters)
 	{
 		auto &cl = bake->Clusters[c];
@@ -325,19 +471,27 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	}
 
 	size_t bytes = 0;
-	if (DirtySectors.Size() || ClusterUpdates.Size())
+	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size())
 	{
 		LevelMeshStateUpdate update;
 		update.id = bake->Id;
 		update.sectorIndices = LM_Span(DirtySectors);
 		update.sectors = LM_Span(DirtyRecords);
 		update.clusters = LM_Span(ClusterUpdates);
+		update.sideIndices = LM_Span(DirtySides);
+		update.sides = LM_Span(DirtySideRecords);
+		update.xformIndices = LM_Span(DirtyXforms);
+		update.xforms = LM_Span(DirtyXformRecords);
 		bytes = screen->UpdateLevelMeshState(update);
 		if (bytes == 0)
 		{
 			// Not uploaded: keep the mirror equal to the device, so the
 			// changes are found again by the next update.
 			for (unsigned i = 0; i < DirtySectors.Size(); i++) st.Sectors[DirtySectors[i]] = PreviousRecords[i];
+			for (unsigned i = 0; i < DirtySides.Size(); i++) st.Sides.Records[DirtySides[i]] = PreviousSideRecords[i];
+			for (unsigned i = 0; i < DirtyXforms.Size(); i++) st.Xforms.Records[DirtyXforms[i]] = PreviousXformRecords[i];
+			DirtySides.Clear();
+			DirtyXforms.Clear();
 			for (auto &z : PreviousClusterZ)
 			{
 				bake->Clusters[z.cluster].bmin[2] = z.zmin;
@@ -347,10 +501,14 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		}
 	}
 	st.Changed.Append(DirtySectors);
+	st.Sides.Changed.Append(DirtySides);
+	st.Xforms.Changed.Append(DirtyXforms);
 	LevelMeshStateTime.Unclock();
 
 	lmStateStats.candidates += candidates;
 	lmStateStats.sectors += bytes ? DirtySectors.Size() : 0;
+	lmStateStats.sides += DirtySides.Size();
+	lmStateStats.xforms += DirtyXforms.Size();
 	lmStateStats.clusters += ClusterUpdates.Size();
 	lmStateStats.bytes += bytes;
 }

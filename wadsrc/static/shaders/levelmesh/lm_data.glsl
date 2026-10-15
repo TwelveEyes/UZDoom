@@ -46,7 +46,11 @@ struct LMSurface
 	uint firstVertex, numVertices;
 	uint firstIndex, numIndices;
 	uint edgeTop;
-	uint reserved[3];
+	float xOffsetBase, yOffsetBase;
+	float texOffsetScale, rowOffsetScale;
+	float renderWidth;
+	float wrapWidth;
+	uint reserved;
 };
 
 struct LMCluster
@@ -92,6 +96,14 @@ struct LMResolved
 	uint reserved[4];
 };
 
+struct LMSideState
+{
+	int textureId;
+	float xOffset, yOffset;
+	float xScale, yScale;
+	uint reserved[3];
+};
+
 struct LMPlaneXform
 {
 	float xOffset, yOffset, baseyOffset;
@@ -112,6 +124,7 @@ layout(set = LM_SET, binding = LMBIND_INDICES, std430) buffer readonly LMIndexBu
 layout(set = LM_SET, binding = LMBIND_SURFACES, std430) buffer readonly LMSurfaceBuffer { LMSurface lmSurfaces[]; };
 layout(set = LM_SET, binding = LMBIND_CLUSTERS, std430) buffer readonly LMClusterBuffer { LMCluster lmClusters[]; };
 layout(set = LM_SET, binding = LMBIND_SECTORSTATE, std430) buffer readonly LMSectorBuffer { LMSectorState lmSectors[]; };
+layout(set = LM_SET, binding = LMBIND_SIDESTATE, std430) buffer readonly LMSideBuffer { LMSideState lmSides[]; };
 layout(set = LM_SET, binding = LMBIND_PLANEXFORM, std430) buffer readonly LMPlaneXformBuffer { LMPlaneXform lmPlaneXforms[]; };
 layout(set = LM_SET, binding = LMBIND_TEXTURETABLE, std430) buffer readonly LMTextureBuffer { LMTextureEntry lmTextures[]; };
 #ifndef LM_RESOLVE_WRITER

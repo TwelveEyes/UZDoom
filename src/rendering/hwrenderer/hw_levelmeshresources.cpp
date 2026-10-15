@@ -38,29 +38,6 @@ CVAR(Bool, lm_keepgeometry, false, 0)
 namespace
 {
 
-void FillSideState(side_t &side, int tier, LevelMeshSideState &out)
-{
-	out = {};
-	out.textureId = side.GetTexture(tier).GetIndex();
-	out.xOffset = (float)side.GetTextureXOffset(tier);
-	out.yOffset = (float)side.GetTextureYOffset(tier);
-	out.xScale = (float)side.GetTextureXScale(tier);
-	out.yScale = (float)side.GetTextureYScale(tier);
-}
-
-void FillPlaneXform(sector_t &sec, int pos, LevelMeshPlaneXform &out)
-{
-	out = {};
-	auto &xf = sec.planes[pos].xform;
-	out.xOffset = (float)xf.xOffs;
-	out.yOffset = (float)xf.yOffs;
-	out.baseyOffset = (float)xf.baseyOffs;
-	out.xScale = (float)xf.xScale;
-	out.yScale = (float)xf.yScale;
-	out.angle = (float)xf.Angle.Degrees();
-	out.baseAngle = (float)xf.baseAngle.Degrees();
-}
-
 void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 {
 	TArray<LevelMeshSectorState> sectors(Level->sectors.Size(), true);
@@ -77,7 +54,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 		LevelMesh_FillSectorState(sec, sectors[i]);
 		for (int p = 0; p < 2; p++)
 		{
-			FillPlaneXform(sec, p, xforms[i * 2 + p]);
+			LevelMesh_FillPlaneXform(sec, p, xforms[i * 2 + p]);
 			use(sec.GetTexture(p).GetIndex());
 		}
 	}
@@ -85,7 +62,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	{
 		for (int t = 0; t < 3; t++)
 		{
-			FillSideState(Level->sides[i], t, sides[i * 3 + t]);
+			LevelMesh_FillSideState(Level->sides[i], t, sides[i * 3 + t]);
 			use(sides[i * 3 + t].textureId);
 		}
 	}
@@ -108,7 +85,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	data.textureIds = LM_Span(textureIds);
 	data.translationTableSize = ntex;
 	screen->SetLevelMeshData(&data);
-	LevelMesh_ResetState(Level, bake, sectors);
+	LevelMesh_ResetState(Level, bake, sectors, sides, xforms);
 
 	if (!lm_keepgeometry)
 	{

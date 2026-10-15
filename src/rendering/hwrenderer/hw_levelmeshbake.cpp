@@ -627,8 +627,30 @@ void Baker::BakeWall(HWWall &w)
 	surf.vRef = vref;
 	surf.vScale = vscale;
 	surf.edgeTop = WallEdgeTop(w, rf, rb, firstv, n);
-	surf.textureId = w.texture->GetID().GetIndex();
+	// The untranslated id, so the translation table follows the animation:
+	// w.texture is the frame current at bake.
+	FTextureID sideTex = side->GetTexture(tier);
+	if (!is3d && TexMan.GetGameTexture(sideTex, true) == w.texture) surf.textureId = sideTex.GetIndex();
+	else
+	{
+		surf.textureId = w.texture->GetID().GetIndex();
+		if (!is3d) st.wallTextureNotSide++;
+	}
 	surf.sideRef = uint32_t(side->Index()) * 3 + tier;
+	if (!is3d)
+	{
+		// The texture offsets the baked u / v contain, and the FTexCoordInfo
+		// that maps them (GetTexCoordInfo in hw_walls.cpp).
+		FTexCoordInfo tci;
+		tci.GetFromTexture(w.texture, (float)side->GetTextureXScale(tier), (float)side->GetTextureYScale(tier), !!(Level->flags3 & LEVEL3_FORCEWORLDPANNING));
+		float sx = fabsf(tci.mScale.X), sy = fabsf(tci.mScale.Y);
+		surf.xOffsetBase = (float)side->GetTextureXOffset(tier);
+		surf.yOffsetBase = (float)side->GetTextureYOffset(tier);
+		surf.texOffsetScale = (sx == 1.f || tci.mWorldPanning) ? 1.f : sx;
+		surf.rowOffsetScale = (sy == 1.f || tci.mWorldPanning) ? 1.f : sy;
+		surf.renderWidth = (float)tci.mRenderWidth;
+		if (w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF) surf.wrapWidth = tci.TextureAdjustWidth();
+	}
 	surf.lightSector = rf->Index();
 	surf.lightList = -1;
 	if (w.lightlist)
@@ -774,7 +796,6 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 		surf.flags |= LMSF_DEFERRED;
 	// HWDrawInfo::AddFlat: only 3D-floor and portal planes are alpha tested.
 	if (tex && tex->isMasked() && (ffloor || portal)) surf.flags |= LMSF_MASKED;
-	if (tex && tex->isFullbright()) surf.flags |= LMSF_TEXFULLBRIGHT;
 	surf.vScale = 0;
 	surf.textureId = texid.GetIndex();
 	surf.sideRef = 0xffffffffu;
@@ -934,7 +955,8 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 	Printf("LevelMeshBake %s: sides %u (poly skipped %u); side lists: translucent walls %u, portal walls %u, fog walls %u, upper missing %u, lower missing %u, translucent flats %u, portal/sky flats %u; untextured flats %u; heightsec surfaces %u\n",
 		mapname, s.sidesProcessed, s.polySidesSkipped, s.translucentWalls, s.portalWalls, s.fogWalls, s.upperMissing, s.lowerMissing,
 		s.translucentFlats, s.portalFlats, s.untexturedFlats, s.heightsecSurfaces);
-	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier)\n", mapname, s.deferredSurfaces, s.deferredByTier);
+	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier); walls not drawn with their side texture %u\n", mapname,
+		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);
 	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u; unbounded wall tops %u\n",
 		mapname, s.zMismatch, s.vMismatch, s.zInexact, s.vInexact, s.offsetAnchored[LMV_BOTTOM], s.offsetAnchored[LMV_TOP], s.offsetAnchored[LMV_SIDE], s.offsetAnchored[LMV_FLAT],
 		s.vScaleInconsistent, s.planeRefOverflow, s.ffloorVRefHeuristic, s.edgeUnbounded);

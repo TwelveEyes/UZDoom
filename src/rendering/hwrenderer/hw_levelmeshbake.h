@@ -66,6 +66,7 @@ struct LevelMeshBakeStats
 	unsigned offsetAnchored[4] = {};			// per role: no plane matched exactly, anchored with an offset
 	unsigned vScaleInconsistent = 0;			// left/right dv/dz disagree
 	unsigned planeRefOverflow = 0;				// surfaces with more than 4 distinct anchor planes
+	unsigned wallTextureNotSide = 0;			// walls drawn with a texture that is not their side tier's (animation not followed)
 	unsigned ffloorVRefHeuristic = 0;			// 3D-floor sides whose vRef was taken from the top-left anchor
 	unsigned edgeUnbounded = 0;					// walls left without edgeTop (a non-top vertex above it at load)
 	unsigned deferredSurfaces = 0;				// LMSF_DEFERRED: drawn by the classic path (ticket 08)
@@ -81,6 +82,39 @@ struct LevelMeshClusterPlane
 	float minOffset, maxOffset;
 };
 
+// One dirty-only record stream (side tiers, plane xforms): the records as
+// last handed to the backend and the candidate lists (hw_levelmeshstate.cpp).
+template<class T> struct LevelMeshRecordStream
+{
+	TArray<T> Records;
+	TArray<uint32_t> Stamp;				// last update that compared the record
+	TArray<uint32_t> Changed;			// changed by this frame's updates
+	TArray<uint32_t> ChangedBefore;		// changed by the previous frame's updates
+	TArray<uint32_t> Touched;			// reported by a change hook since the last update
+	TArray<uint8_t> TouchedFlag;
+	unsigned SweepCursor = 0;
+
+	void Reset(const TArray<T> &records)
+	{
+		Records = records;
+		Stamp.Resize(records.Size());
+		for (auto &s : Stamp) s = 0;
+		TouchedFlag.Resize(records.Size());
+		for (auto &f : TouchedFlag) f = 0;
+		Touched.Clear();
+		Changed.Clear();
+		ChangedBefore.Clear();
+		SweepCursor = 0;
+	}
+
+	void Touch(unsigned i)
+	{
+		if (i >= TouchedFlag.Size() || TouchedFlag[i]) return;
+		TouchedFlag[i] = 1;
+		Touched.Push(i);
+	}
+};
+
 // The dirty state stream's bookkeeping (hw_levelmeshstate.cpp).
 struct LevelMeshStateStream
 {
@@ -94,6 +128,8 @@ struct LevelMeshStateStream
 	uint64_t Frame = 0;						// LevelMesh_BeginFrame serial of the last update
 	uint32_t Stamp = 0;
 	unsigned SweepCursor = 0;
+	LevelMeshRecordStream<LevelMeshSideState> Sides;		// side * 3 + tier
+	LevelMeshRecordStream<LevelMeshPlaneXform> Xforms;		// plane ref
 };
 
 struct LevelMeshClusterStats
@@ -133,6 +169,7 @@ public:
 	TArray<LevelMeshClusterPlane> ClusterPlanes;
 
 	LevelMeshStateStream Stream;
+	~LevelMeshBake();	// detaches the change hooks (hw_levelmeshstate.cpp)
 
 	// Classic draw-list entries the levelmesh replaces (1 = owned): per side
 	// tier (side * 3 + side_t::top/mid/bottom) and per sector plane
@@ -180,11 +217,15 @@ void LevelMesh_UpdateResources(FLevelLocals *Level);
 // Releases the device resources of the level's levelmesh (level teardown).
 void LevelMesh_ReleaseResources(FLevelLocals *Level);
 
-// Packs a sector's GPU state record.
+// Packs a sector's / side tier's / plane's GPU state record.
 void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out);
+void LevelMesh_FillSideState(side_t &side, int tier, LevelMeshSideState &out);
+void LevelMesh_FillPlaneXform(sector_t &sec, int pos, LevelMeshPlaneXform &out);
 
-// Resets the dirty state stream to the records just uploaded.
-void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors);
+// Resets the dirty state stream to the records just uploaded and attaches
+// the change hooks to the level.
+void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors,
+	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms);
 
 // Frame boundary for the state stream (once per rendered frame, before any
 // viewpoint).

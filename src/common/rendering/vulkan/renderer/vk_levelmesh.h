@@ -36,6 +36,7 @@
 
 class VulkanRenderDevice;
 class VkMaterial;
+class FGameTexture;
 
 // LevelMeshSet bindings (set LM_SET_INDEX of the levelmesh pipeline layout).
 enum ELevelMeshBinding
@@ -170,6 +171,8 @@ private:
 
 	// Translation table (CPU mirror)
 	std::vector<LevelMeshTextureEntry> mTable;
+	std::vector<FGameTexture *> mFrame;	// per id: the animation frame the entry was resolved from
+	std::vector<int> mUsedIds;			// ids the level references
 	std::vector<uint8_t> mPendingFlag;
 	std::vector<int> mPending;
 	uint32_t mTableDirtyMin = ~0u, mTableDirtyMax = 0;
@@ -180,9 +183,11 @@ private:
 	{
 		uint32_t sectorIndices, sectorRecords, numSectors;	// word offsets into the staging buffer
 		uint32_t clusterEntries, numClusters;
-		uint32_t padding[3];
+		uint32_t sideIndices, sideRecords, numSides;
+		uint32_t xformIndices, xformRecords, numXforms;
+		uint32_t padding;
 	};
-	static_assert(sizeof(ScatterConstants) == 8 * 4, "scatter.comp declares 8 words of push constants");
+	static_assert(sizeof(ScatterConstants) == 12 * 4, "scatter.comp declares 12 words of push constants");
 	bool mScatterCreated = false, mScatterFailed = false;
 	std::unique_ptr<VulkanShader> mScatterShader;
 	std::unique_ptr<VulkanDescriptorSetLayout> mScatterSetLayout;

@@ -410,7 +410,8 @@ LMResolved Resolve(LMSurface surf)
 	{
 		// HWFlat::ProcessSector / Process / PutFlat
 		int lightlevel = RescaleLightLevel(sec.planeLight[kind == LMSK_CEILING ? 1 : 0]);
-		if ((surf.flags & LMSF_TEXFULLBRIGHT) != 0u)
+		// The current animation frame (LevelMeshTextureEntry follows it).
+		if ((lmTextures[surf.textureId].layers & LMTE_FULLBRIGHT) != 0u)
 		{
 			cm.lightColor = 0xffffffffu;	// FColormap::MakeWhite
 			lightlevel = 255;

@@ -44,7 +44,8 @@ def parse(lines):
                          ("v_mismatch", r"v mismatches (\d+)"), ("z_ulp", r"within 1 ulp: z (\d+)"), ("v_ulp", r"within 1 ulp: z \d+, v (\d+)"), ("off_bottom", r"offset-anchored bottom (\d+)"),
                          ("off_top", r" top (\d+) side"), ("off_side", r" side (\d+) flat"), ("off_flat", r" flat (\d+);"),
                          ("vscale_inconsistent", r"vScale inconsistent (\d+)"), ("planeref_overflow", r"planeRef overflow (\d+)"),
-                         ("ff_vref_heuristic", r"3D vRef heuristic (\d+)"), ("edge_unbounded", r"unbounded wall tops (\d+)")):
+                         ("ff_vref_heuristic", r"3D vRef heuristic (\d+)"), ("edge_unbounded", r"unbounded wall tops (\d+)"),
+                         ("deferred", r"deferred to the classic path (\d+)"), ("wall_tex_not_side", r"not drawn with their side texture (\d+)")):
             if "LevelMeshBake" in l:
                 m = re.search(pat, l)
                 if m and key not in d:
@@ -129,7 +130,7 @@ def main():
     cols = ["label", "map", "sides", "surfaces", "walls", "flats", "flats3d", "triangles", "ms", "wall_ms", "flat_ms",
             "z_mismatch", "v_mismatch", "z_ulp", "v_ulp", "translucent_walls", "portal_walls", "fog_walls", "upper_missing", "lower_missing",
             "translucent_flats", "portal_flats", "heightsec", "off_bottom", "off_top", "off_side", "off_flat",
-            "vscale_inconsistent", "planeref_overflow", "ff_vref_heuristic", "poly_skipped"]
+            "vscale_inconsistent", "planeref_overflow", "ff_vref_heuristic", "poly_skipped", "deferred", "wall_tex_not_side"]
     ccols = ["label", "map", "triangles", "clusters", "cl_ms", "cl_min", "cl_p50", "cl_p90", "cl_max", "cl_hist", "chunked_leaves",
              "chunk_clusters", "split_surfaces", "mixed_bucket", "cl_sector_refs", "max_fanout", "fallback_leaves", "hole_surfaces",
              "dev_mb", "upload_ms", "materials", "slots", "slot_overflows", "tex_resolved"] + (["vuids"] if a.vkdebug else [])

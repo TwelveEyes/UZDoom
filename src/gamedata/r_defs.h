@@ -55,6 +55,10 @@ struct FLevelLocals;
 // Levelmesh dirty state stream: a sector's GPU-visible state changed
 // (hw_levelmeshstate.cpp; a no-op unless the level has a levelmesh).
 void LevelMesh_SectorChanged(sector_t *sec);
+// ... a sector plane's texture transform or texture changed.
+void LevelMesh_PlaneChanged(sector_t *sec, int pos);
+// ... a side tier's texture, offsets or scales changed (tier -1: all three).
+void LevelMesh_SideChanged(struct side_t *side, int tier);
 
 struct LightmapSurface;
 struct LightProbe;
@@ -830,11 +834,13 @@ public:
 	void SetXOffset(int pos, double o)
 	{
 		planes[pos].xform.xOffs = o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	void AddXOffset(int pos, double o)
 	{
 		planes[pos].xform.xOffs += o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	double GetXOffset(int pos) const
@@ -845,11 +851,13 @@ public:
 	void SetYOffset(int pos, double o)
 	{
 		planes[pos].xform.yOffs = o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	void AddYOffset(int pos, double o)
 	{
 		planes[pos].xform.yOffs += o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	double GetYOffset(int pos, bool addbase = true) const
@@ -867,6 +875,7 @@ public:
 	void SetXScale(int pos, double o)
 	{
 		planes[pos].xform.xScale = o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	double GetXScale(int pos) const
@@ -877,6 +886,7 @@ public:
 	void SetYScale(int pos, double o)
 	{
 		planes[pos].xform.yScale = o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	double GetYScale(int pos) const
@@ -887,6 +897,7 @@ public:
 	void SetAngle(int pos, DAngle o)
 	{
 		planes[pos].xform.Angle = o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	DAngle GetAngle(int pos, bool addbase = true) const
@@ -905,6 +916,7 @@ public:
 	{
 		planes[pos].xform.baseyOffs = y;
 		planes[pos].xform.baseAngle = o;
+		LevelMesh_PlaneChanged(this, pos);
 	}
 
 	void SetAlpha(int pos, double o)
@@ -1320,11 +1332,13 @@ struct side_t
 	void SetTexture(int which, FTextureID tex)
 	{
 		textures[which].texture = tex;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureXOffset(int which, double offset)
 	{
 		textures[which].xOffset = offset;;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureXOffset(double offset)
@@ -1332,6 +1346,7 @@ struct side_t
 		textures[top].xOffset =
 		textures[mid].xOffset =
 		textures[bottom].xOffset = offset;
+		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureXOffset(int which) const
@@ -1342,11 +1357,13 @@ struct side_t
 	void AddTextureXOffset(int which, double delta)
 	{
 		textures[which].xOffset += delta;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYOffset(int which, double offset)
 	{
 		textures[which].yOffset = offset;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYOffset(double offset)
@@ -1354,6 +1371,7 @@ struct side_t
 		textures[top].yOffset =
 		textures[mid].yOffset =
 		textures[bottom].yOffset = offset;
+		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureYOffset(int which) const
@@ -1364,16 +1382,19 @@ struct side_t
 	void AddTextureYOffset(int which, double delta)
 	{
 		textures[which].yOffset += delta;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureXScale(int which, double scale)
 	{
 		textures[which].xScale = scale == 0 ? 1. : scale;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureXScale(double scale)
 	{
 		textures[top].xScale = textures[mid].xScale = textures[bottom].xScale = scale == 0 ? 1. : scale;
+		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureXScale(int which) const
@@ -1384,16 +1405,19 @@ struct side_t
 	void MultiplyTextureXScale(int which, double delta)
 	{
 		textures[which].xScale *= delta;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYScale(int which, double scale)
 	{
 		textures[which].yScale = scale == 0 ? 1. : scale;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYScale(double scale)
 	{
 		textures[top].yScale = textures[mid].yScale = textures[bottom].yScale = scale == 0 ? 1. : scale;
+		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureYScale(int which) const
@@ -1404,6 +1428,7 @@ struct side_t
 	void MultiplyTextureYScale(int which, double delta)
 	{
 		textures[which].yScale *= delta;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	int GetTextureFlags(int which)
