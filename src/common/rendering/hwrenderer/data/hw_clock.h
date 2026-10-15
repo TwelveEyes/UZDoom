@@ -52,7 +52,7 @@ struct LevelMeshPerfStats
 	int cullMode = -1, drawMode = -1;	// LMCULL_* / LMDRAW_* of that draw
 	unsigned clusters[2] = {}, triangles[2] = {};	// drawn per phase
 	unsigned frustumCulled = 0, occluded = 0;	// clusters
-	double cullMs[2] = {}, drawMs[2] = {}, hizMs = 0, totalMs = 0;	// GPU time
+	double cullMs[2] = {}, resolveMs[2] = {}, drawMs[2] = {}, hizMs = 0, totalMs = 0;	// GPU time
 };
 extern int rendered_levelmesh;	// levelmesh draws this frame
 

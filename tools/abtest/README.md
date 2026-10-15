@@ -55,6 +55,18 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
     `--set-a 'gl_uselevelmesh 1' --set-a 'lm_cullmode 0' --set-b 'lm_cullmode 2'`, also
     with `lm_cluster_budget 16` on both paths. Adding `--set-b 'lm_clusterz 0'` is the
     negative control: MAP01 then fails while its door opens.
+- **Shading resolve (ticket 10):** `ab_manifest_lighttest.json` replays `demos/lighttest/`
+  over `wads/lighttest.wad`, a generated map (`make_lighttest.py`; copy the wad into the
+  build's `wads/` too) with one room per light-chain feature: colored light and
+  desaturation, fade colors, sector fog density, sector and texture glow, a fullbright
+  flat, side lights (absolute, per tier, nofakecontrast, smoothlighting, lightfog) and
+  absolute / relative plane lights. MAP02 adds level fog density, outside fog,
+  smoothlighting and forcefakecontrast; MAP03 a fade table. Run it without `--fullbright`
+  (the point is the light). Sweep a cvar on both paths with `--set-a X --set-b X`. The tours
+  fire the pistol (`make_demo.py` step `attack@T`) so weapon flashes reach some captures.
+  A run whose stdout reports a levelmesh fallback (`Levelmesh: ... failed`) fails.
+  `lm_shading 0` is the debug switch that draws the levelmesh with the render state's
+  fullbright light instead of the resolve.
 - **Never pass `+set vk_debug 1` without a scratch `-config`:** `vk_debug` is archived, so it
   persists into the user's ini and silently puts the validation layer into every later perf
   run. The A/B driver and `lm_bake_survey.py` already use fresh configs; `run_matrix.sh` does

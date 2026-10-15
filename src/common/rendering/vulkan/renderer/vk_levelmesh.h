@@ -50,6 +50,8 @@ enum ELevelMeshBinding
 	LMBIND_SIDESTATE,
 	LMBIND_PLANEXFORM,
 	LMBIND_TEXTURETABLE,
+	LMBIND_RESOLVED,		// per surface: LevelMeshResolved of the current view (resolve.comp)
+	LMBIND_SHADING,			// LevelMeshShading of the current view
 	LMBIND_NUMBUFFERS,
 	LMBIND_SAMPLERS = LMBIND_NUMBUFFERS,	// sampler[NUMSAMPLERS], indexed by clamp mode
 };

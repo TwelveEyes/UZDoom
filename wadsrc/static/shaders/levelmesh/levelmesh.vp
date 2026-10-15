@@ -16,12 +16,26 @@
 ** and every output the shared main.fp reads is produced exactly as main.vp
 ** produces it, in the same order of operations, so depth and clipping
 ** match the classic path. Per-surface material data travels as one flat
-** varying (vLMMaterial, see lm_frag.glsl).
+** varying (vLMMaterial, see lm_frag.glsl), the surface's resolved shading
+** (resolve.comp) as the flat vLMLight / vLMFog / vLMGlow* / vLMFogMode,
+** standing in for the render state values the classic draw sets.
 */
 
 #include "shaders/levelmesh/lm_data.glsl"
 
 layout(location = LM_MATERIAL_LOCATION) flat out uvec4 vLMMaterial;
+layout(location = LM_SHADE_LOCATION) flat out vec4 vLMLight;		// uLightLevel, uFogDensity, uLightFactor, uLightDist
+layout(location = LM_SHADE_LOCATION + 1) flat out vec4 vLMFog;		// uFogColor.rgb, uDesaturationFactor
+layout(location = LM_SHADE_LOCATION + 2) flat out vec4 vLMGlowTop;	// uGlowTopColor
+layout(location = LM_SHADE_LOCATION + 3) flat out vec4 vLMGlowBottom;	// uGlowBottomColor
+layout(location = LM_SHADE_LOCATION + 4) flat out int vLMFogMode;	// uFogEnabled
+
+// FRenderState::SetColor / SetFog: a PalEntry channel as a float.
+float LM_Channel(uint c, uint shift)
+{
+	const float scale = 1.0 / 255.0;
+	return float((c >> shift) & 0xffu) * scale;
+}
 
 // Wall texture v: anchored to the texture-top plane (LevelMeshBake::VertexV).
 float LM_WallV(LMVertex v, LMSurface surf, float z)
@@ -85,25 +99,46 @@ void main()
 	vec4 worldcoord = ModelMatrix * vec4(v.x, z, v.y, 1.0);
 	vec4 eyeCoordPos = ViewMatrix * worldcoord;
 
-	// Interim light (until the shading resolve, ticket 10): the render state
-	// carries the color; without the fullbright override every surface is
-	// scaled by its baked classic light level.
-	vColor = uVertexColor;
-	if ((uLevelMeshFlags & LMVF_FULLBRIGHT) == 0)
+	// Shading: the resolved record of the surface, or (lm_shading 0) the
+	// render state's fullbright light for everything.
+	vec4 glowTop = vec4(0.0), glowBottom = vec4(0.0);
+	if ((uLevelMeshFlags & LMVF_FULLBRIGHT) != 0)
 	{
-		float light = clamp(float(surf.lightLevel + surf.relLight) / 255.0, 0.0, 1.0);
-		vColor.rgb *= light;
+		vColor = uVertexColor;
+		vLMLight = vec4(uLightLevel, uFogDensity, uLightFactor, uLightDist);
+		vLMFog = vec4(uFogColor.rgb, uDesaturationFactor);
+		vLMFogMode = uFogEnabled;
 	}
+	else
+	{
+		LMResolved res = lmResolved[v.surface];
+		// FRenderState::SetColorAlpha: the levelmesh draws opaque and masked surfaces (alpha 1).
+		vColor = vec4(LM_Channel(res.color, 0u), LM_Channel(res.color, 8u), LM_Channel(res.color, 16u), 1.0);
+		vLMLight = vec4(res.softLight, res.fogDensity, res.lightFactor, res.lightDist);
+		vLMFog = vec4(LM_Channel(res.fogColor, 16u), LM_Channel(res.fogColor, 8u), LM_Channel(res.fogColor, 0u), LM_Channel(res.color, 24u));
+		vLMFogMode = res.fogMode;
+		if ((res.glow & 1u) != 0u)
+		{
+			// HWWall::RenderTexturedWall: sector_t::GetWallGlow of the front sector.
+			LMSectorState gs = lmSectors[surf.lightSector];
+			glowTop = vec4(gs.glowTop[0], gs.glowTop[1], gs.glowTop[2], gs.glowTop[3]);
+			glowBottom = vec4(gs.glowBottom[0], gs.glowBottom[1], gs.glowBottom[2], gs.glowBottom[3]);
+		}
+	}
+	vLMGlowTop = glowTop;
+	vLMGlowBottom = glowBottom;
 
 	vLightmap = vec3(v.lu, v.lv, float(surf.lightmapPage));
 
 	pixelpos.xyz = worldcoord.xyz;
 	pixelpos.w = -eyeCoordPos.z/eyeCoordPos.w;
 
-	if (uGlowTopColor.a > 0 || uGlowBottomColor.a > 0)
+	if (glowTop.a > 0 || glowBottom.a > 0)
 	{
-		float topatpoint = (uGlowTopPlane.w + uGlowTopPlane.x * worldcoord.x + uGlowTopPlane.y * worldcoord.z) * uGlowTopPlane.z;
-		float bottomatpoint = (uGlowBottomPlane.w + uGlowBottomPlane.x * worldcoord.x + uGlowBottomPlane.y * worldcoord.z) * uGlowBottomPlane.z;
+		// SetGlowPlanes(frontsector->ceilingplane, frontsector->floorplane)
+		LMSectorState gs = lmSectors[surf.lightSector];
+		float topatpoint = (gs.planes[1].d + gs.planes[1].nx * worldcoord.x + gs.planes[1].ny * worldcoord.z) * gs.planes[1].negiC;
+		float bottomatpoint = (gs.planes[0].d + gs.planes[0].nx * worldcoord.x + gs.planes[0].ny * worldcoord.z) * gs.planes[0].negiC;
 		glowdist.x = topatpoint - worldcoord.y;
 		glowdist.y = worldcoord.y - bottomatpoint;
 		glowdist.z = clamp(glowdist.x / (topatpoint - bottomatpoint), 0.0, 1.0);

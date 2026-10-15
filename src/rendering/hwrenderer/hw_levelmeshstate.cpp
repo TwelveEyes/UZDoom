@@ -24,7 +24,9 @@
 **  - the sectors of every sector effect and light thinker (movers that do
 **    not interpolate, such as animated doors, and light changes);
 **  - the sectors reported by the change hooks (LevelMesh_SectorChanged:
-**    light level and colormap setters, used by ACS and the light specials);
+**    light level, colormap and glow setters, used by ACS and the light
+**    specials);
+**  - the sectors whose wall glow comes from an animated texture;
 **  - a round-robin sweep of lm_statesweep sectors, the backstop for state
 **    that scripts write directly (bounded latency, not per frame).
 **
@@ -54,6 +56,7 @@
 #include "hw_clock.h"
 #include "c_cvars.h"
 #include "v_video.h"
+#include "texturemanager.h"
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
@@ -104,9 +107,11 @@ void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out)
 	{
 		out.planes[p] = LM_PackPlane(sec.GetSecPlane(p));
 		out.texZ[p] = (float)sec.GetPlaneTexZ(p);
-		out.glowColor[p] = sec.GetGlowColor(p).d;
-		out.glowHeight[p] = (float)sec.GetGlowHeight(p);
 	}
+	// Without the result (HWF_GLOW) the classic draws no glow at all, even
+	// where a color has a height: the floor's sector glow overwrites the
+	// ceiling's result.
+	if (!sec.GetWallGlow(out.glowTop, out.glowBottom)) out.glowTop[3] = out.glowBottom[3] = 0.f;
 	out.lightLevel = sec.lightlevel;
 	out.planeLight[0] = sec.GetFloorLight();
 	out.planeLight[1] = sec.GetCeilingLight();
@@ -121,7 +126,7 @@ void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out)
 //
 //==========================================================================
 
-void LevelMesh_ResetState(LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors)
+void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors)
 {
 	auto &st = bake->Stream;
 	st.Sectors = sectors;
@@ -132,6 +137,22 @@ void LevelMesh_ResetState(LevelMeshBake *bake, const TArray<LevelMeshSectorState
 	st.TouchedFlag.Resize(sectors.Size());
 	for (auto &s : st.TouchedFlag) s = 0;
 	st.Touched.Clear();
+	// sector_t::GetWallGlow rechecks the animation frame of a glowing,
+	// not auto-glowing plane texture: that glow changes without a setter.
+	// (The plane textures themselves are fixed until ticket 11.)
+	st.AnimatedGlow.Clear();
+	for (unsigned s = 0; s < sectors.Size() && s < Level->sectors.Size(); s++)
+	{
+		for (int p = 0; p < 2; p++)
+		{
+			auto tex = TexMan.GetGameTexture(Level->sectors[s].GetTexture(p));
+			if (tex && tex->isGlowing() && !tex->isAutoGlowing() && Level->sectors[s].GetGlowColor(p) == 0)
+			{
+				st.AnimatedGlow.Push(s);
+				break;
+			}
+		}
+	}
 	st.Changed.Clear();
 	st.ChangedBefore.Clear();
 	st.Frame = 0;
@@ -276,6 +297,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 			check(s);
 		}
 		Level->interpolator.ForEachMovedSector([&](sector_t *sec) { check(sec->Index()); });
+		for (uint32_t s : st.AnimatedGlow) check(s);
 		for (int stat : { STAT_SECTOREFFECT, STAT_LIGHT })
 		{
 			TThinkerIterator<DSectorEffect> it(Level, stat);

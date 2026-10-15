@@ -31,18 +31,23 @@ inline int hw_ClampLight(int lightlevel)
 	return clamp(lightlevel, 0, 255);
 }
 
+// l * (255 - r_extralight) / 255 + r_extralight, in integers: the former
+// double expression rounded differently under fast math (hw_walls.cpp and
+// hw_flats.cpp build with it: 196 became 195), so the result depended on the
+// compiler flags. The levelmesh shading resolve tabulates this function.
 template<bool doClamp = true>
 inline int RescaleLightLevel(int lightlevel) // TODO/tidy: move out of hwrenderer namespace
 {
+	int extralight = r_extralight;
 	if constexpr(doClamp)
 	{
 		//max is needed for negative r_extralight values
-		return max(int((clamp(lightlevel, 0, 255) / 255.0) * (255.0 - r_extralight)) + r_extralight, 0);
+		return max(clamp(lightlevel, 0, 255) * (255 - extralight) / 255 + extralight, 0);
 	}
 	else
 	{
 		//max is needed for negative r_extralight values
-		return max(int((max(lightlevel, 0) / 255.0) * (255.0 - r_extralight)) + r_extralight, 0);
+		return max(max(lightlevel, 0) * (255 - extralight) / 255 + extralight, 0);
 	}
 }
 

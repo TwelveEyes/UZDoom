@@ -341,6 +341,36 @@ static bool NeedsClassicMaterial(FGameTexture *tex)
 	return false;
 }
 
+static bool SameColormap(const FColormap &a, const FColormap &b)
+{
+	return a.LightColor == b.LightColor && a.FadeColor == b.FadeColor && a.Desaturation == b.Desaturation &&
+		a.BlendFactor == b.BlendFactor && a.FogDensity == b.FogDensity;
+}
+
+// True if a wall the classic emitted carries its sector's own light (the
+// shading resolve recomputes that), false if HWWall::Put3DWall gave it the
+// light level or colormap of a 3D light.
+static bool SectorLit(HWWall &w, sector_t *rf, side_t *side, int tier)
+{
+	if (!SameColormap(w.Colormap, w.frontsector->Colormap)) return false;
+	bool foggy = !w.Colormap.FadeColor.isBlack() || (rf->Level->flags & LEVEL_HASFADETABLE);
+	int orglightlevel = hw_ClampLight(w.frontsector->lightlevel);
+	int rel;
+	return w.lightlevel == RescaleLightLevel(side->GetLightLevel(foggy, orglightlevel, tier, false, &rel));
+}
+
+// The side_t::GetLightLevel inputs of a tier, as LMSD_* bits.
+static uint32_t SideLightFlags(side_t *side, int tier)
+{
+	uint32_t f = 0;
+	if (side->Flags & WALLF_ABSLIGHTING) f |= LMSD_ABSLIGHTING;
+	if (side->Flags & (WALLF_ABSLIGHTING_TIER << tier)) f |= LMSD_ABSLIGHTING_TIER;
+	if (side->Flags & WALLF_NOFAKECONTRAST) f |= LMSD_NOFAKECONTRAST;
+	if (side->Flags & WALLF_SMOOTHLIGHTING) f |= LMSD_SMOOTHLIGHTING;
+	if (side->Flags & WALLF_LIGHT_FOG) f |= LMSD_LIGHT_FOG;
+	return f;
+}
+
 // Side colors, additive color and texture manipulation the classic wall draw
 // applies (HWWall::RenderTexturedWall); white / none draws unchanged.
 static bool HasWallColorEffects(side_t *side, int tier, sector_t *frontsector)
@@ -607,11 +637,18 @@ void Baker::BakeWall(HWWall &w)
 		surf.flags |= LMSF_LIGHTLIST;
 		surf.lightSector = (w.sub ? w.sub->sector : w.seg->frontsector)->Index();
 	}
+	else if (w.frontsector && w.frontsector->e->XFloor.lightlist.Size() > 0 && !SectorLit(w, rf, side, tier))
+	{
+		// Within one light layer: HWWall::Put3DWall took the light level or
+		// colormap of a 3D light, not the sector's (ticket 12).
+		surf.flags |= LMSF_LIGHTLIST;
+	}
 	surf.lightLevel = w.lightlevel;
 	surf.relLight = w.rellight;
 	surf.sideLight = (uint16_t)side->Light | (int32_t(side->TierLights[tier]) << 16);
 	surf.fakeContrast = (uint16_t)side->GetFakeContrastRel(true) | (int32_t(side->GetFakeContrastRel(false)) << 16);
-	surf.sideFlags = side->Flags;
+	surf.sideFlags = SideLightFlags(side, tier);
+	if (w.type == RENDERWALL_M2SNF) surf.flags |= LMSF_NOSECTORFOG;
 	surf.lightmapPage = w.lindex >= 0 ? int(w.lindex) : -1;
 	// Not drawn by the levelmesh yet: 3D floors and light bands (ticket 12),
 	// heightsecs (view-dependent fake, ticket 16), sky-hack mid textures (the
@@ -621,7 +658,8 @@ void Baker::BakeWall(HWWall &w)
 	// HWWall::RenderTexturedWall: clamped two-sided mids also clamp in the shader.
 	if ((w.flags & HWWall::HWF_CLAMPY) && (w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF) && !w.texture->isWarped()) surf.flags |= LMSF_TEXCLAMPY;
 	// Not yet expressible by the levelmesh shading: non-default material
-	// shaders, and side colors / texture manipulation (ticket 10). The values
+	// shaders, and side colors / texture manipulation (ticket 11; the
+	// resolve covers light, fog, desaturation and glow). The values
 	// HWWall::RenderTexturedWall applies are tested, not WALLF_EXTCOLOR: the
 	// map loader sets that flag on every side (sector_t::CheckExColorFlag).
 	if (NeedsClassicMaterial(w.texture) || HasWallColorEffects(side, tier, w.frontsector)) surf.flags |= LMSF_DEFERRED;
@@ -713,16 +751,30 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 		surf.flags |= LMSF_HEIGHTSEC;
 		st.heightsecSurfaces++;
 	}
-	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC)) surf.flags |= LMSF_DEFERRED;
+	// HWFlat::ProcessSector: in a sector with 3D floors the plane takes the
+	// light level and colormap of its 3D light (P_GetPlaneLight; ticket 12).
+	if (!ffloor && sec->e->XFloor.ffloors.Size() > 0)
+	{
+		lightlist_t *light = P_GetPlaneLight(sec, &sec->GetSecPlane(h), h == sector_t::ceiling);
+		FColormap cm = sec->Colormap;
+		CopyFrom3DLight(cm, light);
+		// The classic floor also takes the 3D light's level for an absolute
+		// plane light when the light has no source; the ceiling never does.
+		bool absolute = (sec->GetFlags(h) & PLANEF_ABSLIGHTING) && (h == sector_t::ceiling || light->lightsource != nullptr);
+		bool ownLight = absolute || light->p_lightlevel == &sec->lightlevel;
+		if (!ownLight || !SameColormap(cm, sec->Colormap)) surf.flags |= LMSF_LIGHTLIST;
+	}
+	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
 	FTextureID texid = model->GetTexture(mplane);
 	auto tex = TexMan.GetGameTexture(texid, true);
 	// As walls: material shaders and the plane colors / texture manipulation
-	// HWFlat::DrawFlat applies (ticket 10).
+	// HWFlat::DrawFlat applies (ticket 11).
 	if (NeedsClassicMaterial(tex) || model->SpecialColors[mplane] != 0xffffffff || (model->AdditiveColors[mplane] & 0xffffff) != 0 ||
 		model->planes[mplane].TextureFx.AddColor.a != 0)
 		surf.flags |= LMSF_DEFERRED;
 	// HWDrawInfo::AddFlat: only 3D-floor and portal planes are alpha tested.
 	if (tex && tex->isMasked() && (ffloor || portal)) surf.flags |= LMSF_MASKED;
+	if (tex && tex->isFullbright()) surf.flags |= LMSF_TEXFULLBRIGHT;
 	surf.vScale = 0;
 	surf.textureId = texid.GetIndex();
 	surf.sideRef = 0xffffffffu;

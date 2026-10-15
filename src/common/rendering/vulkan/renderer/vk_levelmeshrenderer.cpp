@@ -14,15 +14,18 @@
 ** Frame sequence of one Draw (LMCULL_HIZ):
 **
 **   end the scene pass
+**   upload the shading block if it changed
 **   reset counters, cull phase 1 (clusters visible last frame, frustum)
 **   finalize (compaction: write the draw arguments)
+**   resolve the shading of phase 1's clusters
 **   draw phase 1                          (resumes the scene pass)
 **   end the scene pass; depth -> read-only; build the Hi-Z pyramid; depth back
 **   cull phase 2 (all clusters, frustum + Hi-Z; rewrites the visibility)
 **   finalize, copy the counters to the readback ring
+**   resolve the shading of phase 2's clusters
 **   draw phase 2                          (resumes the scene pass)
 **
-** LMCULL_FRUSTUM / LMCULL_NONE run one cull and one draw. The render pass
+** LMCULL_FRUSTUM / LMCULL_NONE run one cull, resolve and draw. The render pass
 ** resumes with the attachments loaded; if the scene pass had not started
 ** yet, the first resume consumes the pending clear.
 **
@@ -79,13 +82,17 @@ enum
 {
 	TS_START,
 	TS_CULL1,
+	TS_RES1,
 	TS_DRAW1,
 	TS_HIZ,
 	TS_CULL2,
+	TS_RES2,
 	TS_DRAW2,
+	TS_COUNT
 };
 
 static_assert(LMB_DRAWN == 2, "the cull constants carry two bucket bases");
+static_assert(TS_COUNT <= 8, "VkLevelMeshRenderer::NumPoints");
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
@@ -133,6 +140,7 @@ bool VkLevelMeshRenderer::CreateObjects()
 	try
 	{
 		mCullShader = shaders->LoadComputeShader("levelmesh_cull", "shaders/levelmesh/cull.comp", CullDefines().GetChars());
+		mResolveShader = shaders->LoadComputeShader("levelmesh_resolve", "shaders/levelmesh/resolve.comp", CullDefines().GetChars());
 		mHiZShaders[0] = shaders->LoadComputeShader("levelmesh_hiz_depth", "shaders/levelmesh/hiz.comp", "#define HIZ_FROM_DEPTH\n");
 		mHiZShaders[1] = shaders->LoadComputeShader("levelmesh_hiz_depthms", "shaders/levelmesh/hiz.comp", "#define HIZ_FROM_DEPTH_MS\n");
 		mHiZShaders[2] = shaders->LoadComputeShader("levelmesh_hiz_level", "shaders/levelmesh/hiz.comp", "");
@@ -155,6 +163,7 @@ bool VkLevelMeshRenderer::CreateObjects()
 		.AddBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
 		.AddBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
 		.AddBinding(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.AddBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
 		.DebugName("VkLevelMeshRenderer.CullSetLayout")
 		.Create(dev);
 	mCullLayout = PipelineLayoutBuilder()
@@ -167,6 +176,17 @@ bool VkLevelMeshRenderer::CreateObjects()
 		.Layout(mCullLayout.get())
 		.ComputeShader(mCullShader.get())
 		.DebugName("VkLevelMeshRenderer.CullPipeline")
+		.Create(dev);
+	mResolveLayout = PipelineLayoutBuilder()
+		.AddSetLayout(lm->GetSetLayout())
+		.AddSetLayout(mCullSetLayout.get())
+		.AddPushConstantRange(VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ResolveConstants))
+		.DebugName("VkLevelMeshRenderer.ResolveLayout")
+		.Create(dev);
+	mResolvePipeline = ComputePipelineBuilder()
+		.Layout(mResolveLayout.get())
+		.ComputeShader(mResolveShader.get())
+		.DebugName("VkLevelMeshRenderer.ResolvePipeline")
 		.Create(dev);
 
 	mHiZSetLayout = DescriptorSetLayoutBuilder()
@@ -239,7 +259,9 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 	deleteList->Add(std::move(mCounters));
 	deleteList->Add(std::move(mDrawArgs));
 	deleteList->Add(std::move(mCompact));
+	deleteList->Add(std::move(mDrawn));
 	deleteList->Add(std::move(mCullSet));
+	mShading.reset();
 
 	mLevelId = lm->GetId();
 	mNumClusters = lm->GetClusterCount();
@@ -262,6 +284,11 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
 		.Size((2 * LMB_DRAWN + 2 * LMB_DRAWN * (size_t)std::max(mNumClusters, 1u)) * sizeof(VkDrawIndexedIndirectCommand))
 		.DebugName("VkLevelMeshRenderer.DrawArgs")
+		.Create(dev);
+	mDrawn = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+		.Size(std::max(mNumClusters, 1u) * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.Drawn")
 		.Create(dev);
 	mCompact = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
@@ -291,6 +318,7 @@ void VkLevelMeshRenderer::UpdateCullSet()
 		.AddBuffer(mCullSet.get(), 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mDrawArgs.get())
 		.AddBuffer(mCullSet.get(), 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mCompact.get())
 		.AddCombinedImageSampler(mCullSet.get(), 4, mHiZView.get(), mPointSampler.get(), VK_IMAGE_LAYOUT_GENERAL)
+		.AddBuffer(mCullSet.get(), 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mDrawn.get())
 		.Execute(fb->device.get());
 }
 
@@ -499,6 +527,43 @@ void VkLevelMeshRenderer::Cull(VulkanCommandBuffer *cmd, CullConstants &pc, uint
 			VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
 }
 
+void VkLevelMeshRenderer::Resolve(VulkanCommandBuffer *cmd)
+{
+	// The previous draw's vertex stage reads the records this rewrites.
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	ResolveConstants pc = {};
+	pc.numClusters = mNumClusters;
+	cmd->bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, mResolvePipeline.get());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mResolveLayout.get(), 0, fb->GetLevelMesh()->GetSet());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mResolveLayout.get(), 1, mCullSet.get());
+	cmd->pushConstants(mResolveLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ResolveConstants), &pc);
+	uint32_t groups = std::max(mNumClusters, 1u);
+	uint32_t gx = std::min(groups, 65535u);
+	cmd->dispatch(gx, (groups + gx - 1) / gx, 1);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
+}
+
+void VkLevelMeshRenderer::UploadShading(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshShading &shading)
+{
+	VulkanBuffer *buffer = lm->GetBuffer(LMBIND_SHADING);
+	if (mShading && mShadingBuffer == buffer && memcmp(mShading.get(), &shading, sizeof(shading)) == 0) return;
+	if (!mShading) mShading = std::make_unique<LevelMeshShading>();
+	*mShading = shading;
+	mShadingBuffer = buffer;
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+	static_assert(sizeof(LevelMeshShading) <= 65536 && sizeof(LevelMeshShading) % 4 == 0, "vkCmdUpdateBuffer limits");
+	cmd->updateBuffer(buffer->buffer, 0, sizeof(LevelMeshShading), &shading);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+}
+
 void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, int phaseSlot)
 {
 	auto state = fb->GetRenderState();
@@ -508,6 +573,7 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 	pc.uTextureMode &= 0xffff;	// the material layer flags are per surface (lm_frag.glsl)
 	pc.uLightIndex = -1;
 	pc.uLevelMeshFlags = (int)view.flags;
+	if (view.shading == nullptr) pc.uLevelMeshFlags |= LMVF_FULLBRIGHT;	// nothing resolved
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
 	bool compact = view.drawMode == LMDRAW_COMPACT;
@@ -583,11 +649,15 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 	if (mQueries) cmd->resetQueryPool(mQueries.get(), mSlot * NumPoints, NumPoints);
 	Timestamp(cmd, TS_START);
 
-	// The previous draws' indirect / index reads must finish before the
-	// counters and arguments are rewritten.
+	bool resolve = view.shading != nullptr && !(view.flags & LMVF_FULLBRIGHT);
+	if (resolve) UploadShading(lm, cmd, *view.shading);
+
+	// The previous draws' indirect / index reads, and the previous resolve's
+	// reads of drawn[], must finish before they are rewritten.
 	PipelineBarrier()
-		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 	cmd->fillBuffer(mCounters->buffer, 0, VK_WHOLE_SIZE, 0);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
@@ -618,6 +688,8 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 	{
 		Cull(cmd, pc, LMPHASE_FIRST);
 		Timestamp(cmd, TS_CULL1);
+		if (resolve) Resolve(cmd);
+		Timestamp(cmd, TS_RES1);
 		DrawPhase(lm, view, 0);
 		cmd = fb->GetCommands()->GetDrawCommands();
 		Timestamp(cmd, TS_DRAW1);
@@ -627,6 +699,8 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		Cull(cmd, pc, LMPHASE_SECOND);
 		copyCounters();
 		Timestamp(cmd, TS_CULL2);
+		if (resolve) Resolve(cmd);
+		Timestamp(cmd, TS_RES2);
 		DrawPhase(lm, view, 1);
 		Timestamp(cmd, TS_DRAW2);
 	}
@@ -635,6 +709,8 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		Cull(cmd, pc, LMPHASE_SINGLE);
 		copyCounters();
 		Timestamp(cmd, TS_CULL1);
+		if (resolve) Resolve(cmd);
+		Timestamp(cmd, TS_RES1);
 		DrawPhase(lm, view, 0);
 		Timestamp(cmd, TS_DRAW1);
 	}
@@ -688,10 +764,12 @@ void VkLevelMeshRenderer::Harvest()
 		s.frustumCulled = c[LMC_FRUSTUMCULLED];
 		s.occluded = c[LMC_OCCLUDED];
 		s.cullMs[0] = ms(TS_START, TS_CULL1);
-		s.drawMs[0] = ms(TS_CULL1, TS_DRAW1);
+		s.resolveMs[0] = ms(TS_CULL1, TS_RES1);
+		s.drawMs[0] = ms(TS_RES1, TS_DRAW1);
 		s.hizMs = ms(TS_DRAW1, TS_HIZ);
 		s.cullMs[1] = ms(TS_HIZ, TS_CULL2);
-		s.drawMs[1] = ms(TS_CULL2, TS_DRAW2);
+		s.resolveMs[1] = ms(TS_CULL2, TS_RES2);
+		s.drawMs[1] = ms(TS_RES2, TS_DRAW2);
 		s.totalMs = ms(TS_START, slot.cullMode == LMCULL_HIZ ? TS_DRAW2 : TS_DRAW1);
 	}
 }

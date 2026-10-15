@@ -33,3 +33,7 @@ The classic path builds a per-surface light list (`HWWall::SetupLights`, flats l
 - [ ] SSAO on: A/B passes.
 
 ## Comments
+- 2026-10-15 (from 10): the levelmesh fragment stage takes its light, fog and glow from flat
+  varyings (`lm_frag.glsl` maps the `u*` names); `uLightIndex` stays -1 in
+  `VkLevelMeshRenderer::DrawPhase`. Vertex output locations 10-15 are taken (generated
+  varyings end at 9); a froxel lookup needs no new varyings.

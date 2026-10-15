@@ -108,7 +108,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	data.textureIds = LM_Span(textureIds);
 	data.translationTableSize = ntex;
 	screen->SetLevelMeshData(&data);
-	LevelMesh_ResetState(bake, sectors);
+	LevelMesh_ResetState(Level, bake, sectors);
 
 	if (!lm_keepgeometry)
 	{

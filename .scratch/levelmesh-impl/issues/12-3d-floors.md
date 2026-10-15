@@ -50,3 +50,14 @@
     by a plane that later crosses it is not collapsed.
   - The classic clipping there is a min / max over the rover and the sector planes. Model it
     when 3D floors move into the mesh.
+- 2026-10-15 (from 10): surfaces lit by a 3D light are deferred to classic (`LMSF_LIGHTLIST`):
+  - walls whose classic light level or colormap differs from the sector's after
+    `HWWall::Put3DWall` (`SectorLit` in the bake), on top of the banded walls (`w.lightlist`);
+  - flats in sectors with 3D floors whose `P_GetPlaneLight` light is not the sector's own
+    (or whose colormap differs), as `HWFlat::ProcessSector` does.
+  - Pirates MAP43: 1087 -> 1718 deferred surfaces. The fullbright A/B had hidden it; with full
+    lighting the pillars there were 40% too bright.
+  - A wall whose 3D light equals the sector's light at bake stays on the levelmesh and follows
+    the sector. The 3D-light state buffer here should replace both rules with a per-surface
+    3D-light ref, resolved in `resolve.comp` (`SetColor` / `SetFog` with the 3D light's level
+    and `CopyFrom3DLight` colormap).

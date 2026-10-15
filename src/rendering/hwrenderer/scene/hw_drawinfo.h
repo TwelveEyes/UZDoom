@@ -372,6 +372,8 @@ inline bool isDarkLightMode(ELightMode lightmode)
 }
 
 int CalcLightLevel(ELightMode lightmode, int lightlevel, int rellight, bool weapon, int blendfactor, bool weaponPureLightLevel = false);
+int CalcDarkLightLevel(int lightlevel);
+const float *GetDistFogTable(int index);	// [256], index = lightmode != LinearStandard
 PalEntry CalcLightColor(ELightMode lightmode, int light, PalEntry pe, int blendfactor);
 float GetFogDensity(FLevelLocals* Level, ELightMode lightmode, int lightlevel, PalEntry fogcolor, int sectorfogdensity, int blendfactor);
 bool CheckFog(FLevelLocals* Level, sector_t* frontsector, sector_t* backsector, ELightMode lightmode);

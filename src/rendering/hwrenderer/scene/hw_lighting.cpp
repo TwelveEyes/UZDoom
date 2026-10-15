@@ -62,6 +62,30 @@ CUSTOM_CVAR(Int, gl_distfog, 70, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 //==========================================================================
 //
+// The dark light modes' remapping of a level in (100, 192), before rellight
+// (CalcLightLevel; also tabulated for the levelmesh resolve)
+//
+//==========================================================================
+
+int CalcDarkLightLevel(int lightlevel)
+{
+	return RoundHalfEven(192.f - (192 - lightlevel)* 1.87f);
+}
+
+//==========================================================================
+//
+// The black fog density table (GetFogDensity; also handed to the levelmesh
+// resolve)
+//
+//==========================================================================
+
+const float *GetDistFogTable(int index)
+{
+	return distfogtable[index];
+}
+
+//==========================================================================
+//
 // Get current light level
 //
 //==========================================================================
@@ -79,7 +103,7 @@ int CalcLightLevel(ELightMode lightmode, int lightlevel, int rellight, bool weap
 	{
 		if (lightlevel > 100)
 		{
-			light = RoundHalfEven(192.f - (192 - lightlevel)* 1.87f);
+			light = CalcDarkLightLevel(lightlevel);
 			if (light + rellight < 20)
 			{
 				light = 20 + (light + rellight - 20) / 5;

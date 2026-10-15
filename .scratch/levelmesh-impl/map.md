@@ -277,7 +277,7 @@ are included.
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–09 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–10 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -389,3 +389,18 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Pirates MAP43 tick 120 is a sky rule (ticket 14).
   - Perflog v4.
   - Amended tickets: 10, 11, 12, 13, 14, 18.
+- 2026-10-15: ticket 10 resolved → `shaders/levelmesh/resolve.comp`, `hw_levelmeshshade.cpp`,
+  `VkLevelMeshRenderer::Resolve`.
+  - After each cull phase, one compute pass resolves the drawn clusters' surfaces into a
+    12-word record (light color, desaturation, fog, soft light, light factor / distance, glow
+    kept). The vertex stage forwards it as flat varyings; `main.fp` is unchanged.
+  - The C++ chain stays authoritative: the game side fills a per-view block with the cvars,
+    level fields and tables (rescale, dark-mode rounding, black-fog table, l/255), and the
+    shader ports the per-surface functions line by line.
+  - Glow is resolved per sector on the CPU (`GetWallGlow`), not through a GPU texture table.
+  - User decision: the classic `RescaleLightLevel` now uses integer math. Under fast math it
+    had rounded 24 light levels one lower, depending on compiler flags.
+  - Surfaces lit by a 3D light are deferred to classic until ticket 12.
+  - Full-lighting A/B on a generated light-test map plus 10 tour maps and a 15-setting cvar
+    sweep: no shading differences (only the geometry / animation classes that fullbright also
+    shows). Resolve GPU time ≤ 0.017 ms (phase 1) and ≤ 0.004 ms (phase 2) on every vantage.

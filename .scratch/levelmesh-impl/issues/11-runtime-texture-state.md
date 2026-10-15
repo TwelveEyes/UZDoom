@@ -78,3 +78,20 @@
     - DOOM2 MAP30: the face wall, slime floors and green walls (`ab_manifest_movers.json`,
       MAP30 fails from tick 5).
     - DOOM2 MAP01: `FWATER` in the tour demo.
+- 2026-10-15 (from 10): the shading resolve exists (`resolve.comp`, `LevelMeshResolved`).
+  - It covers light, fog, desaturation and glow. Side / plane special colors, additive colors,
+    gradients and texture manipulation are still deferred at bake (`HasWallColorEffects` and
+    the plane checks in `hw_levelmeshbake.cpp`); moving them into the resolve means
+    `uObjectColor` / `uObjectColor2` / `uAddColor` / `uTextureAddColor` / ... as more flat
+    varyings, and the gradient planes in the vertex stage (locations 10-15 are used; the
+    resolved record has 4 reserved words).
+  - Side lights (`Light`, `TierLights`, the light flags as `LMSD_*`) are baked into the surface
+    record. A side state stream that tracks them would let the resolve follow scripted side
+    light changes.
+  - `LMSF_TEXFULLBRIGHT` (fullbright flat) is baked from the load-time frame. The classic tests
+    the current animation frame; with an animated translation table, test the table entry
+    instead (a per-texture fullbright bit).
+  - Texture glow is resolved per sector on the CPU (`sector_t::GetWallGlow` in
+    `LevelMesh_FillSectorState`); sectors whose plane texture glows without auto-glow are
+    candidates every frame (`LevelMeshStateStream::AnimatedGlow`, built at load). A plane
+    texture change must refresh that list and mark the sector changed.

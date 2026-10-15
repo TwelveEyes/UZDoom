@@ -64,6 +64,9 @@ CVAR(Bool, gl_texture, true, 0)
 CVAR(Bool, lm_draw, true, CVAR_NOSAVE)
 CVAR(Int, lm_cullmode, LMCULL_HIZ, CVAR_NOSAVE)
 CVAR(Int, lm_drawmode, LMDRAW_COMPACT, CVAR_NOSAVE)
+// Debug: 0 draws every levelmesh surface with the fullbright render state
+// instead of its resolved shading.
+CVAR(Bool, lm_shading, true, CVAR_NOSAVE)
 CVAR(Float, gl_mask_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Float, gl_mask_sprite_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
@@ -618,10 +621,11 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 //
 // DrawLevelMesh
 //
-// Main view only (portal / mirror views are ticket 15). The render state is
-// that of a classic fullbright wall; the levelmesh vertex stage applies the
-// interim per-surface light when the scene is not fullbright (ticket 10
-// replaces it with the shading resolve).
+// Main view only (portal / mirror views are ticket 15). Light, fog,
+// desaturation and glow are resolved per surface on the GPU
+// (LevelMesh_FillShading, resolve.comp); the render state is that of a
+// classic fullbright wall for everything else (and, with lm_shading 0,
+// for the light too).
 //
 //-----------------------------------------------------------------------------
 
@@ -636,8 +640,11 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	memcpy(view.viewProj, viewProj.get(), sizeof(view.viewProj));
 	view.cullMode = clamp<int>(lm_cullmode, LMCULL_NONE, LMCULL_HIZ);
 	view.drawMode = clamp<int>(lm_drawmode, LMDRAW_COMPACT, LMDRAW_CLUSTERS);
-	view.flags = isFullbrightScene() ? (uint32_t)LMVF_FULLBRIGHT : 0u;
+	view.flags = lm_shading ? 0u : (uint32_t)LMVF_FULLBRIGHT;
 	view.maskThreshold = gl_mask_threshold;
+	LevelMeshShading shading;
+	LevelMesh_FillShading(this, shading);
+	view.shading = &shading;
 
 	FColormap cm;
 	cm.Clear();

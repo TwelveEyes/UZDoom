@@ -38,6 +38,7 @@
 // TYPES -------------------------------------------------------------------
 
 struct FLevelLocals;
+struct HWDrawInfo;
 
 inline LevelMeshPlane LM_PackPlane(const secplane_t &plane)
 {
@@ -89,6 +90,7 @@ struct LevelMeshStateStream
 	TArray<uint32_t> ChangedBefore;			// sectors changed by the previous frame's updates
 	TArray<uint32_t> Touched;				// reported by LevelMesh_SectorChanged since the last update
 	TArray<uint8_t> TouchedFlag;
+	TArray<uint32_t> AnimatedGlow;			// sectors whose wall glow follows a texture animation
 	uint64_t Frame = 0;						// LevelMesh_BeginFrame serial of the last update
 	uint32_t Stamp = 0;
 	unsigned SweepCursor = 0;
@@ -182,7 +184,7 @@ void LevelMesh_ReleaseResources(FLevelLocals *Level);
 void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out);
 
 // Resets the dirty state stream to the records just uploaded.
-void LevelMesh_ResetState(LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors);
+void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors);
 
 // Frame boundary for the state stream (once per rendered frame, before any
 // viewpoint).
@@ -194,6 +196,9 @@ void LevelMesh_BeginFrame();
 // window and before the scene is built, so the uploaded records are the
 // values drawn this frame.
 void LevelMesh_UpdateState(FLevelLocals *Level);
+
+// The per-view inputs of the shading resolve (hw_levelmeshshade.cpp).
+void LevelMesh_FillShading(HWDrawInfo *di, LevelMeshShading &out);
 
 // TArray -> LevelMeshSpan
 template<class T> LevelMeshSpan<T> LM_Span(const TArray<T> &a)

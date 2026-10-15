@@ -63,7 +63,9 @@ constexpr size_t MIN_RING_SIZE = 256 * 1024;
 
 const char *BufferName(int b)
 {
-	static const char *names[] = { "vertices", "indices", "surfaces", "clusters", "cluster sectors", "cluster surfaces", "sector state", "side state", "plane xform", "texture table" };
+	static const char *names[] = { "vertices", "indices", "surfaces", "clusters", "cluster sectors", "cluster surfaces", "sector state", "side state", "plane xform", "texture table",
+		"resolved", "shading" };
+	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "buffer names out of sync");
 	return names[b];
 }
 
@@ -166,7 +168,7 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LM_SET %d\n#define LM_TEXTURE_SET %d\n", lmSet, textureSet);
 	d << "#define LM_MATERIAL_LOCATION 15\n";	// past the generated varyings
 	static const char *names[] = { "VERTICES", "INDICES", "SURFACES", "CLUSTERS", "CLUSTERSECTORS", "CLUSTERSURFACES",
-		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE" };
+		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "binding names out of sync");
 	for (int b = 0; b < LMBIND_NUMBUFFERS; b++) d.AppendFormat("#define LMBIND_%s %d\n", names[b], b);
 	d.AppendFormat("#define LMBIND_SAMPLERS %d\n#define NUMSAMPLERS %d\n", (int)LMBIND_SAMPLERS, (int)NUMSAMPLERS);
@@ -179,6 +181,17 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	static_assert(CLAMP_X == 1 && CLAMP_Y == 2 && CLAMP_XY == 3, "levelmesh.vp builds the sampler index as clamp bits");
 	d.AppendFormat("#define LM_SAMPLER_CLAMPY %uu\n", (unsigned)CLAMP_Y);
 	d.AppendFormat("#define LMVF_FULLBRIGHT %d\n", (int)LMVF_FULLBRIGHT);
+	d.AppendFormat("#define LMSK_FLOOR %uu\n#define LMSK_CEILING %uu\n", (unsigned)LMSK_FLOOR, (unsigned)LMSK_CEILING);
+	d.AppendFormat("#define LMSF_DEFERRED %uu\n#define LMSF_TEXFULLBRIGHT %uu\n#define LMSF_NOSECTORFOG %uu\n",
+		(unsigned)LMSF_DEFERRED, (unsigned)LMSF_TEXFULLBRIGHT, (unsigned)LMSF_NOSECTORFOG);
+	d.AppendFormat("#define LMSD_ABSLIGHTING %uu\n#define LMSD_ABSLIGHTING_TIER %uu\n#define LMSD_NOFAKECONTRAST %uu\n",
+		(unsigned)LMSD_ABSLIGHTING, (unsigned)LMSD_ABSLIGHTING_TIER, (unsigned)LMSD_NOFAKECONTRAST);
+	d.AppendFormat("#define LMSD_SMOOTHLIGHTING %uu\n#define LMSD_LIGHT_FOG %uu\n", (unsigned)LMSD_SMOOTHLIGHTING, (unsigned)LMSD_LIGHT_FOG);
+	d.AppendFormat("#define LMSH_FULLBRIGHT %uu\n#define LMSH_FADETABLE %uu\n#define LMSH_FORCEFAKECONTRAST %uu\n#define LMSH_SMOOTHLIGHTING %uu\n",
+		(unsigned)LMSH_FULLBRIGHT, (unsigned)LMSH_FADETABLE, (unsigned)LMSH_FORCEFAKECONTRAST, (unsigned)LMSH_SMOOTHLIGHTING);
+	d.AppendFormat("#define LMSH_NOLIGHTFADE %uu\n#define LMSH_BRIGHTFOG %uu\n#define LMSH_INSKYBOX %uu\n#define LMSH_OUTSIDEFOG %uu\n",
+		(unsigned)LMSH_NOLIGHTFADE, (unsigned)LMSH_BRIGHTFOG, (unsigned)LMSH_INSKYBOX, (unsigned)LMSH_OUTSIDEFOG);
+	d << "#define LM_SHADE_LOCATION 10\n";	// 10..14: the resolved shading (levelmesh.vp)
 	d.AppendFormat("#define LMCULL_NONE %uu\n#define LMDRAW_COMPACT %uu\n", (unsigned)LMCULL_NONE, (unsigned)LMDRAW_COMPACT);
 	return d;
 }
@@ -281,6 +294,8 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		{ data->sides.data, data->sides.size * sizeof(LevelMeshSideState), data->sides.size, 0 },
 		{ data->planeXforms.data, data->planeXforms.size * sizeof(LevelMeshPlaneXform), data->planeXforms.size, 0 },
 		{ nullptr, data->translationTableSize * sizeof(LevelMeshTextureEntry), data->translationTableSize, 0 },
+		{ nullptr, data->surfaces.size * sizeof(LevelMeshResolved), data->surfaces.size, 0 },
+		{ nullptr, sizeof(LevelMeshShading), 1, 0 },
 	};
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();

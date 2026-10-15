@@ -1,0 +1,455 @@
+/*
+** resolve.comp
+**
+** Levelmesh shading resolve: the classic per-surface light chain
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+** One workgroup per cluster, after each cull phase: a cluster the phase
+** draws (drawn[] = 1, written by cull.comp) resolves every surface it holds
+** into lmResolved, the values the classic draw would set before drawing
+** that surface: SetColor's light color, desaturation and soft light level,
+** SetFog's fog, and the glow HWWall keeps. The vertex stage forwards them as
+** flat varyings.
+**
+** The C++ stays authoritative; every function below names its source.
+** Inputs the port must not recompute (cvars, level fields, the rescale and
+** dark-light rounding, the fog table) come from the shading block
+** (LevelMesh_FillShading, hw_levelmeshshade.cpp).
+*/
+
+layout(local_size_x = 64) in;
+
+#define LM_RESOLVE_WRITER
+#include "shaders/levelmesh/lm_data.glsl"
+
+layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer writeonly LMResolvedBuffer { LMResolved lmResolved[]; };
+layout(set = LM_SET, binding = LMBIND_CLUSTERSURFACES, std430) buffer readonly LMClusterSurfaceBuffer { uint lmClusterSurfaces[]; };
+layout(set = LM_SET, binding = LMBIND_SHADING, std430) buffer readonly LMShadingBuffer
+{
+	int lightMode;
+	uint flags;
+	int fakeContrast;
+	int fogMode;
+	int distanceCullType;
+	int extraLight;
+	int cullFogDensity;
+	uint cullColor;
+	int levelFogDensity;
+	int outsideFogDensity;
+	uint outsideFog;
+	float maxLightDist;
+	float fogDensityScale;
+	uint shReserved[3];
+	int rescale[256];
+	int darkLight[256];
+	float distFog[512];
+	float softLightTable[256];
+} sh;
+
+layout(set = LM_CULL_SET, binding = 5, std430) buffer readonly DrawnBuffer { uint drawn[]; };
+
+layout(push_constant) uniform ResolveConstants
+{
+	uint numClusters;
+	uint padding[3];
+};
+
+// ELightMode (doomtype.h; static_assert in hw_levelmeshshade.cpp)
+#define LM_LINEARSTANDARD 0
+#define LM_DOOM 2
+#define LM_DOOMDARK 3
+#define LM_DOOMLEGACY 4
+#define LM_BUILD 5
+#define LM_ZDOOMSOFTWARE 8
+#define LM_DOOMSOFTWARE 16
+
+// FColormap as the light chain sees it
+struct Colormap
+{
+	uint lightColor;	// PalEntry: a << 24 | r << 16 | g << 8 | b
+	uint fadeColor;
+	int desaturation;
+	int blendFactor;
+	int fogDensity;
+};
+
+// The render state the classic draw would leave for the surface
+struct Shade
+{
+	ivec3 color;
+	int desaturation;
+	float softLight;		// mLightParms[3]
+	bool fogEnabled;
+	uint fogColor;
+	float fogDensity;		// SetFog's density argument
+	float lightFactor;		// mLightParms[1]
+	float lightDist;		// mLightParms[0]
+};
+
+// hw_drawinfo.h
+bool isSoftwareLighting(int lm) { return lm == LM_ZDOOMSOFTWARE || lm == LM_DOOMSOFTWARE || lm == LM_BUILD; }
+bool isDoomSoftwareLighting(int lm) { return lm == LM_ZDOOMSOFTWARE || lm == LM_DOOMSOFTWARE; }
+bool isDarkLightMode(int lm) { return lm == LM_DOOM || lm == LM_DOOMDARK; }
+
+// hw_lighting.h
+int hw_ClampLight(int lightlevel) { return clamp(lightlevel, 0, 255); }
+int RescaleLightLevel(int lightlevel) { return sh.rescale[hw_ClampLight(lightlevel)]; }
+
+// hw_lighting.cpp: CalcLightLevel (weapon = false)
+int CalcLightLevel(int lm, int lightlevel, int rellight, int blendfactor)
+{
+	int light;
+	if (lightlevel <= 0) return 0;
+	bool darklightmode = isDarkLightMode(lm) || (isSoftwareLighting(lm) && blendfactor > 0);
+	if (darklightmode && lightlevel < 192)
+	{
+		if (lightlevel > 100)
+		{
+			light = sh.darkLight[lightlevel];
+			if (light + rellight < 20)
+			{
+				light = 20 + (light + rellight - 20) / 5;
+			}
+			else
+			{
+				light += rellight;
+			}
+		}
+		else
+		{
+			light = (lightlevel + rellight) / 5;
+		}
+	}
+	else
+	{
+		light = lightlevel + rellight;
+	}
+	return clamp(light, 1, 255);
+}
+
+// hw_lighting.cpp: CalcLightColor
+ivec3 CalcLightColor(int lm, int light, uint pe, int blendfactor)
+{
+	ivec3 c = ivec3(int((pe >> 16) & 0xffu), int((pe >> 8) & 0xffu), int(pe & 0xffu));
+	if (blendfactor == 0)
+	{
+		if (isSoftwareLighting(lm)) return c;
+		return c * light / 255;
+	}
+	int mixlight = light * (255 - blendfactor);
+	return (ivec3(mixlight) + c * blendfactor) / 255;
+}
+
+// hw_lighting.cpp: GetFogDensity
+float GetFogDensity(int lm, int lightlevel, uint fogcolor, int sectorfogdensity, int blendfactor)
+{
+	float density;
+	if (isSoftwareLighting(lm) && blendfactor > 0) lm = LM_DOOM;
+	if (lm == LM_DOOMLEGACY)
+	{
+		density = sh.levelFogDensity != 0 ? float(sh.levelFogDensity) : 18.0;
+	}
+	else if (sectorfogdensity != 0)
+	{
+		density = float(sectorfogdensity);
+	}
+	else if ((fogcolor & 0xffffffu) == 0u)
+	{
+		if ((!isDoomSoftwareLighting(lm) || blendfactor > 0) && (sh.flags & LMSH_NOLIGHTFADE) == 0u)
+		{
+			density = sh.distFog[(lm != LM_LINEARSTANDARD ? 256 : 0) + hw_ClampLight(lightlevel)];
+		}
+		else
+		{
+			density = 0.0;
+		}
+	}
+	else if ((sh.flags & LMSH_OUTSIDEFOG) != 0u && (fogcolor & 0xffffffu) == (sh.outsideFog & 0xffffffu))
+	{
+		density = float(sh.outsideFogDensity);
+	}
+	else if (sh.levelFogDensity != 0)
+	{
+		density = float(sh.levelFogDensity);
+	}
+	else if (lightlevel < 248)
+	{
+		density = float(clamp(255 - lightlevel, 30, 255));
+	}
+	else
+	{
+		density = 0.0;
+	}
+	return density;
+}
+
+// hw_setcolor.cpp: SetColor
+void SetColor(inout Shade s, int lm, int sectorlightlevel, int rellight, bool fullbright, Colormap cm)
+{
+	if (fullbright)
+	{
+		s.color = ivec3(255);
+		s.desaturation = 0;
+		if (isSoftwareLighting(lm)) s.softLight = sh.softLightTable[255];
+		else s.softLight = -1.0;
+	}
+	else
+	{
+		int hwlightlevel = CalcLightLevel(lm, sectorlightlevel, rellight, cm.blendFactor);
+		s.color = CalcLightColor(lm, hwlightlevel, cm.lightColor, cm.blendFactor);
+		s.desaturation = cm.desaturation;
+		if (isSoftwareLighting(lm) && cm.blendFactor == 0) s.softLight = sh.softLightTable[hw_ClampLight(sectorlightlevel + rellight)];
+		else s.softLight = -1.0;
+	}
+}
+
+// hw_setcolor.cpp: SetShaderLight
+void SetShaderLight(inout Shade s, float level, float olight)
+{
+	precise float MAXDIST = sh.maxLightDist;
+	const float THRESHOLD = 96.0;
+	const float FACTOR = 0.75;
+	if (level > 0.0)
+	{
+		precise float lightdist, lightfactor;
+		if (olight < THRESHOLD)
+		{
+			lightdist = (MAXDIST / 2.0) + (olight * MAXDIST / THRESHOLD / 2.0);
+			olight = THRESHOLD;
+		}
+		else lightdist = MAXDIST;
+		lightfactor = 1.0 + ((olight / level) - 1.0) * FACTOR;
+		if (lightfactor == 1.0) lightdist = 0.0;
+		s.lightFactor = lightfactor;
+		s.lightDist = lightdist;
+	}
+	else
+	{
+		s.lightFactor = 1.0;
+		s.lightDist = 0.0;
+	}
+}
+
+// hw_setcolor.cpp: SetFog (isadditive = false: the levelmesh draws no
+// translucent surfaces). hasCmap = false is the nullptr colormap.
+void SetFog(inout Shade s, int lm, int lightlevel, int rellight, bool fullbright, bool hasCmap, Colormap cm)
+{
+	uint fogcolor;
+	precise float fogdensity;
+
+	if (sh.distanceCullType > 1)
+	{
+		fogdensity = float(sh.cullFogDensity);
+		if (hasCmap && cm.fadeColor != 0u) fogcolor = cm.fadeColor & 0xffffffu;
+		else fogcolor = sh.cullColor;
+	}
+	else if ((sh.flags & LMSH_FADETABLE) != 0u)
+	{
+		fogdensity = 70.0;
+		fogcolor = 0x808080u;
+	}
+	else if (hasCmap && !fullbright)
+	{
+		fogcolor = cm.fadeColor;
+		fogdensity = GetFogDensity(lm, lightlevel, fogcolor, cm.fogDensity, cm.blendFactor);
+		fogcolor &= 0xffffffu;
+	}
+	else
+	{
+		fogcolor = 0u;
+		fogdensity = 0.0;
+	}
+
+	if ((sh.flags & LMSH_INSKYBOX) != 0u) fogdensity += fogdensity / 2.0;
+
+	if ((fogdensity == 0.0 || sh.fogMode == 0) && sh.distanceCullType < 2)
+	{
+		s.fogEnabled = false;
+		s.fogColor = 0u;
+		s.fogDensity = 0.0;
+		// The classic keeps the previous draw's light parameters here; only
+		// the Build light mode reads them without fog.
+	}
+	else
+	{
+		int bf = hasCmap ? cm.blendFactor : 0;
+		if ((lm == LM_DOOM || (isSoftwareLighting(lm) && hasCmap && cm.blendFactor > 0)) && fogcolor == 0u)
+		{
+			float light = float(CalcLightLevel(lm, lightlevel, rellight, bf));
+			SetShaderLight(s, light, float(lightlevel));
+		}
+		else if (lm == LM_BUILD)
+		{
+			s.lightFactor = 0.2 * fogdensity;
+			s.lightDist = 1.0 / 31.0;
+		}
+		else
+		{
+			s.lightFactor = 1.0;
+			s.lightDist = 0.0;
+		}
+		s.fogEnabled = true;
+		s.fogColor = fogcolor;
+		s.fogDensity = fogdensity;
+
+		// Korshun: fullbright fog like in software renderer.
+		if (isSoftwareLighting(lm) && hasCmap && cm.blendFactor == 0 && (sh.flags & LMSH_BRIGHTFOG) != 0u && fogdensity != 0.0 && fogcolor != 0u)
+		{
+			s.softLight = sh.softLightTable[255];
+		}
+	}
+}
+
+// hw_walls.cpp: CalcRelLight
+int CalcRelLight(int lightlevel, int orglightlevel, int rel)
+{
+	if (orglightlevel >= 253) return 0;
+	else if (lightlevel - rel > 256) return 256 - lightlevel + rel;
+	else return rel;
+}
+
+int LowShort(int v) { return bitfieldExtract(v, 0, 16); }
+int HighShort(int v) { return v >> 16; }
+
+// p_sectors.cpp: side_t::GetLightLevel(foggy, baselight, tier, false, &rel)
+int SideLightLevel(LMSurface surf, bool foggy, int baselight, out int rel)
+{
+	int light = LowShort(surf.sideLight);
+	int tierLight = HighShort(surf.sideLight);
+	uint f = surf.sideFlags;
+	if ((f & LMSD_ABSLIGHTING_TIER) != 0u)
+	{
+		baselight = tierLight;
+	}
+	else if ((f & LMSD_ABSLIGHTING) != 0u)
+	{
+		baselight = light + tierLight;
+	}
+	rel = 0;
+	if (!foggy || (sh.flags & LMSH_FORCEFAKECONTRAST) != 0u)
+	{
+		if ((f & LMSD_NOFAKECONTRAST) == 0u && sh.fakeContrast != 0)
+		{
+			bool smoothRel = (sh.flags & LMSH_SMOOTHLIGHTING) != 0u || (f & LMSD_SMOOTHLIGHTING) != 0u || sh.fakeContrast == 2;
+			rel = smoothRel ? LowShort(surf.fakeContrast) : HighShort(surf.fakeContrast);
+		}
+	}
+	if ((f & (LMSD_ABSLIGHTING | LMSD_ABSLIGHTING_TIER)) == 0u && (!foggy || (f & LMSD_LIGHT_FOG) != 0u))
+	{
+		baselight += light + tierLight;
+	}
+	return baselight;
+}
+
+Colormap SectorColormap(LMSectorState sec)
+{
+	Colormap cm;
+	cm.lightColor = sec.lightColor;
+	cm.fadeColor = sec.fadeColor;
+	cm.desaturation = int(sec.colormap & 0xffu);
+	cm.blendFactor = int((sec.colormap >> 8) & 0xffu);
+	cm.fogDensity = int(sec.colormap >> 16);
+	return cm;
+}
+
+// FColormap::Clear
+Colormap ClearedColormap()
+{
+	Colormap cm;
+	cm.lightColor = 0xffffffffu;
+	cm.fadeColor = 0u;
+	cm.desaturation = 0;
+	cm.blendFactor = 0;
+	cm.fogDensity = 0;
+	return cm;
+}
+
+LMResolved Resolve(LMSurface surf)
+{
+	int lm = sh.lightMode;
+	bool fullbright = (sh.flags & LMSH_FULLBRIGHT) != 0u;
+	LMSectorState sec = lmSectors[surf.lightSector];
+	Colormap cm = SectorColormap(sec);
+	Shade s;
+	s.lightFactor = 1.0;
+	s.lightDist = 0.0;
+	bool glow = false;
+	uint kind = surf.flags & LMSF_KINDMASK;
+
+	if (kind == LMSK_WALL)
+	{
+		// HWWall::Process
+		// (Sideless walls, HWWall::ProcessLowerMiniseg, are not baked.)
+		int orglightlevel = hw_ClampLight(sec.lightLevel);
+		bool foggy = (cm.fadeColor & 0xffffffu) != 0u || (sh.flags & LMSH_FADETABLE) != 0u;	// fog disables fake contrast
+		int fakeRel;
+		int lightlevel = RescaleLightLevel(SideLightLevel(surf, foggy, orglightlevel, fakeRel));
+		int rellight = CalcRelLight(lightlevel, orglightlevel, fakeRel);
+		// HWF_GLOW: GetWallGlow returned true (LevelMesh_FillSectorState
+		// zeroes both heights otherwise).
+		glow = sec.glowTop[3] > 0.0 || sec.glowBottom[3] > 0.0;
+
+		// HWWall::PutWall
+		if (fullbright) cm = ClearedColormap();
+		if (fullbright || ((cm.lightColor & 0xffffffu) == 0xffffffu && lightlevel == 255)) glow = false;
+
+		// HWWall::RenderTexturedWall (no light list: banded walls are deferred)
+		int rel = rellight + sh.extraLight;
+		if ((surf.flags & LMSF_NOSECTORFOG) != 0u) SetFog(s, lm, 255, 0, fullbright, false, cm);
+		else SetFog(s, lm, lightlevel, rel, fullbright, true, cm);
+		SetColor(s, lm, lightlevel, rel, fullbright, cm);
+	}
+	else
+	{
+		// HWFlat::ProcessSector / Process / PutFlat
+		int lightlevel = RescaleLightLevel(sec.planeLight[kind == LMSK_CEILING ? 1 : 0]);
+		if ((surf.flags & LMSF_TEXFULLBRIGHT) != 0u)
+		{
+			cm.lightColor = 0xffffffffu;	// FColormap::MakeWhite
+			lightlevel = 255;
+		}
+		if (fullbright) cm = ClearedColormap();
+
+		// HWFlat::DrawFlat
+		int rel = sh.extraLight;
+		SetColor(s, lm, lightlevel, rel, fullbright, cm);
+		SetFog(s, lm, lightlevel, rel, fullbright, true, cm);
+	}
+
+	// FRenderState / VkRenderState::FillPushConstants
+	LMResolved r;
+	r.color = uint(s.color.r & 0xff) | (uint(s.color.g & 0xff) << 8) | (uint(s.color.b & 0xff) << 16) | (uint(s.desaturation & 0xff) << 24);
+	r.fogColor = s.fogColor & 0xffffffu;
+	r.fogMode = !s.fogEnabled ? 0 : ((s.fogColor & 0xffffffu) == 0u ? sh.fogMode : -sh.fogMode);
+	r.softLight = s.softLight;
+	r.fogDensity = s.fogDensity * sh.fogDensityScale;
+	r.lightFactor = s.lightFactor;
+	r.lightDist = s.lightDist;
+	r.glow = glow ? 1u : 0u;
+	r.reserved[0] = 0u;
+	r.reserved[1] = 0u;
+	r.reserved[2] = 0u;
+	r.reserved[3] = 0u;
+	return r;
+}
+
+void main()
+{
+	uint ci = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
+	if (ci >= numClusters || drawn[ci] == 0u) return;	// uniform per workgroup
+	LMCluster c = lmClusters[ci];
+	for (uint i = gl_LocalInvocationIndex; i < c.numSurfaces; i += 64u)
+	{
+		uint si = lmClusterSurfaces[c.firstSurface + i];
+		LMSurface surf = lmSurfaces[si];
+		if ((surf.flags & LMSF_DEFERRED) != 0u) continue;
+		lmResolved[si] = Resolve(surf);
+	}
+}

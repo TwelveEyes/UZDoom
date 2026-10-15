@@ -19,12 +19,35 @@
 ** not have reads the null texture in slot 0, like the classic dummy layers.
 **
 ** vLMMaterial = (base slot, layer count, sampler index, texture-mode flags)
+**
+** The surface's resolved shading (levelmesh.vp, resolve.comp) replaces the
+** render state's light, fog, desaturation and glow: those names become the
+** flat varyings below.
 */
 
 layout(set = LM_SET, binding = LMBIND_SAMPLERS) uniform sampler lmSamplers[NUMSAMPLERS];
 layout(set = LM_TEXTURE_SET, binding = 0) uniform texture2D lmBindless[];
 
 layout(location = LM_MATERIAL_LOCATION) flat in uvec4 vLMMaterial;
+layout(location = LM_SHADE_LOCATION) flat in vec4 vLMLight;
+layout(location = LM_SHADE_LOCATION + 1) flat in vec4 vLMFog;
+layout(location = LM_SHADE_LOCATION + 2) flat in vec4 vLMGlowTop;
+layout(location = LM_SHADE_LOCATION + 3) flat in vec4 vLMGlowBottom;
+layout(location = LM_SHADE_LOCATION + 4) flat in int vLMFogMode;
+
+#define uLightLevel vLMLight.x
+#define uFogDensity vLMLight.y
+#define uLightFactor vLMLight.z
+#define uLightDist vLMLight.w
+#define uFogEnabled vLMFogMode
+#undef uFogColor
+#define uFogColor vec4(vLMFog.rgb, 0.0)
+#undef uDesaturationFactor
+#define uDesaturationFactor vLMFog.w
+#undef uGlowTopColor
+#define uGlowTopColor vLMGlowTop
+#undef uGlowBottomColor
+#define uGlowBottomColor vLMGlowBottom
 
 uint LM_LayerSlot(uint layer)
 {

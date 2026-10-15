@@ -75,8 +75,21 @@ struct LMSectorState
 	uint lightColor;
 	uint fadeColor;
 	uint colormap;
-	uint glowColor[2];
-	float glowHeight[2];
+	float glowTop[4];
+	float glowBottom[4];
+};
+
+struct LMResolved
+{
+	uint color;
+	uint fogColor;
+	int fogMode;
+	float softLight;
+	float fogDensity;
+	float lightFactor;
+	float lightDist;
+	uint glow;
+	uint reserved[4];
 };
 
 struct LMPlaneXform
@@ -101,6 +114,9 @@ layout(set = LM_SET, binding = LMBIND_CLUSTERS, std430) buffer readonly LMCluste
 layout(set = LM_SET, binding = LMBIND_SECTORSTATE, std430) buffer readonly LMSectorBuffer { LMSectorState lmSectors[]; };
 layout(set = LM_SET, binding = LMBIND_PLANEXFORM, std430) buffer readonly LMPlaneXformBuffer { LMPlaneXform lmPlaneXforms[]; };
 layout(set = LM_SET, binding = LMBIND_TEXTURETABLE, std430) buffer readonly LMTextureBuffer { LMTextureEntry lmTextures[]; };
+#ifndef LM_RESOLVE_WRITER
+layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolvedBuffer { LMResolved lmResolved[]; };
+#endif
 
 // LM_PlaneZ: same operation order as the C++ (no contraction into FMA).
 float LM_PlaneZ(LMPlane p, float x, float y)

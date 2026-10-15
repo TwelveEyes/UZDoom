@@ -65,6 +65,14 @@ private:
 		uint32_t finalizePhase;
 	};
 
+	// Keep in sync with the push constant block of resolve.comp.
+	struct ResolveConstants
+	{
+		uint32_t numClusters;
+		uint32_t padding[3];
+	};
+	static_assert(sizeof(ResolveConstants) == 4 * 4, "resolve.comp declares 4 words of push constants");
+
 	struct HiZConstants
 	{
 		int32_t srcOffset[2];
@@ -80,6 +88,8 @@ private:
 	void UpdateCullSet();
 	VulkanPipeline *GetDrawPipeline(bool masked);
 	void Cull(VulkanCommandBuffer *cmd, CullConstants &pc, uint32_t phase);
+	void Resolve(VulkanCommandBuffer *cmd);
+	void UploadShading(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshShading &shading);
 	void DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, int phaseSlot);
 	void BuildHiZ(VulkanCommandBuffer *cmd);
 	void Timestamp(VulkanCommandBuffer *cmd, int point);
@@ -89,10 +99,10 @@ private:
 	bool mCreated = false, mFailed = false;
 
 	// Compute
-	std::unique_ptr<VulkanShader> mCullShader, mHiZShaders[3];
+	std::unique_ptr<VulkanShader> mCullShader, mResolveShader, mHiZShaders[3];
 	std::unique_ptr<VulkanDescriptorSetLayout> mCullSetLayout, mHiZSetLayout;
-	std::unique_ptr<VulkanPipelineLayout> mCullLayout, mHiZLayout;
-	std::unique_ptr<VulkanPipeline> mCullPipeline, mHiZPipelines[3];	// from depth, from MSAA depth, from level
+	std::unique_ptr<VulkanPipelineLayout> mCullLayout, mResolveLayout, mHiZLayout;
+	std::unique_ptr<VulkanPipeline> mCullPipeline, mResolvePipeline, mHiZPipelines[3];	// from depth, from MSAA depth, from level
 	std::unique_ptr<VulkanDescriptorPool> mPool;
 	std::unique_ptr<VulkanSampler> mPointSampler;
 
@@ -111,7 +121,10 @@ private:
 	unsigned mNumClusters = 0;
 	uint32_t mBucketBase[2] = {};
 	std::unique_ptr<VulkanBuffer> mVisibility, mCounters, mDrawArgs, mCompact;
+	std::unique_ptr<VulkanBuffer> mDrawn;	// per cluster: drawn by the last cull phase (resolve.comp input)
 	std::unique_ptr<VulkanDescriptorSet> mCullSet;
+	std::unique_ptr<LevelMeshShading> mShading;	// last uploaded shading block (null = none for this level)
+	VulkanBuffer *mShadingBuffer = nullptr;		// the LMBIND_SHADING buffer it went into
 
 	// Hi-Z
 	VulkanImageView *mDepthView = nullptr;	// scene depth the sets were written for
@@ -124,7 +137,7 @@ private:
 	std::vector<std::unique_ptr<VulkanDescriptorSet>> mHiZSets;
 
 	// Timings + counter readback: a ring of query / readback slots, one per Draw.
-	enum { NumSlots = 8, NumPoints = 6, NumCounters = 16 };
+	enum { NumSlots = 8, NumPoints = 8, NumCounters = 16 };
 	std::unique_ptr<VulkanQueryPool> mQueries;
 	std::unique_ptr<VulkanBuffer> mReadback;
 	uint32_t *mReadbackData = nullptr;

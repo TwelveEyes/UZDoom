@@ -46,6 +46,7 @@ layout(set = LM_CULL_SET, binding = 1, std430) buffer CounterBuffer { uint count
 layout(set = LM_CULL_SET, binding = 2, std430) buffer DrawArgsBuffer { DrawIndexedIndirect drawArgs[]; };
 layout(set = LM_CULL_SET, binding = 3, std430) buffer writeonly CompactBuffer { uint compactIndices[]; };
 layout(set = LM_CULL_SET, binding = 4) uniform sampler2D hiz;
+layout(set = LM_CULL_SET, binding = 5, std430) buffer writeonly DrawnBuffer { uint drawn[]; };	// resolve.comp input
 
 layout(push_constant) uniform CullConstants
 {
@@ -213,6 +214,7 @@ void main()
 
 		uint pslot = phase == LMPHASE_SECOND ? 1u : 0u;
 		sDraw = draw ? 1u : 0u;
+		drawn[ci] = draw ? 1u : 0u;
 		if (draw)
 		{
 			atomicAdd(counters[LMC_CLUSTERS + pslot], 1u);

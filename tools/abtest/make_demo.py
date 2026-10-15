@@ -107,6 +107,7 @@ DEM_STOP = 7
 DEM_GENERICCHEAT = 10
 DEM_WARPCHEAT = 35       # i16be x, y, z (d_net.cpp Net_DoCommand)
 DEM_RUNSPECIAL = 62      # i16be special, u8 argc, i32be args (d_net.cpp Net_DoCommand)
+BT_ATTACK = 1 << 0       # d_event.h
 BT_USE = 1 << 1          # d_event.h
 ONFLOORZ_I16 = -32768    # c_cmds.cpp warp: ONFLOORZ/65536 -> lands on floorz
 
@@ -504,6 +505,7 @@ def build_script(steps, start_angle, T):
       face:DEG@T          turn to the absolute map angle DEG (degrees, 0 = east,
                           90 = north); tracked from --start-angle
       use@T               press use for one tic
+      attack@T            press fire for one tic (weapon flash: player extralight)
       special:N,A1,..@T   DEM_RUNSPECIAL: line special N with args (activator =
                           the player), e.g. 62,5,32,105 = Plat_DownWaitUpStay
     Returns (cmds, warps, specials); specials maps tic -> [(num, args)].
@@ -538,6 +540,10 @@ def build_script(steps, start_angle, T):
             if tic == 0:
                 raise ValueError("use on tic 0 is dropped by the engine")
             cmds[tic][0] |= BT_USE
+        elif kind == "attack":
+            if tic == 0:
+                raise ValueError("attack on tic 0 is dropped by the engine")
+            cmds[tic][0] |= BT_ATTACK
         elif kind == "special":
             vals = [int(v) for v in args.split(",")]
             specials.setdefault(tic, []).append((vals[0], vals[1:6]))

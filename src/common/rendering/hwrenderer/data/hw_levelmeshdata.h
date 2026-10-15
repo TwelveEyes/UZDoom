@@ -82,11 +82,24 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_HEIGHTSEC = 1 << 8,	// front or back sector has a Boom heightsec (view-dependent in classic, baked unfaked)
 	// 1 << 9 reserved: dither eligibility (ticket 18; WALLF_DITHERTRANS_* is per-frame state)
 	LMSF_SKEW = 1 << 10,		// sloped / skewed texture alignment
-	LMSF_LIGHTLIST = 1 << 11,	// banded: drawn per light layer of lightSector's 3D lightlist (classic split planes)
+	LMSF_LIGHTLIST = 1 << 11,	// lit by lightSector's 3D lightlist: banded (classic split planes) or one 3D light (Put3DWall, P_GetPlaneLight)
 	LMSF_SKY = 1 << 12,			// unused for mesh surfaces (sky goes to side lists); reserved
 	LMSF_DEFERRED = 1 << 13,	// not drawn by the levelmesh yet: the classic path owns it (LMB_DEFERRED)
 	LMSF_TEXCLAMPY = 1 << 14,	// TEXF_ClampY texture mode (classic SetTextureClamp: clamped two-sided mid texture)
+	LMSF_TEXFULLBRIGHT = 1 << 15,	// flats: FGameTexture::isFullbright (HWFlat::Process: white colormap, light 255)
+	LMSF_NOSECTORFOG = 1 << 16,	// walls: fog of light 255 without the sector colormap (RENDERWALL_M2SNF)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
+};
+
+// LevelMeshSurface::sideFlags: the side_t::GetLightLevel inputs of the
+// surface's tier (WALLF_* translated by the bake).
+enum ELevelMeshSideLightFlags : uint32_t
+{
+	LMSD_ABSLIGHTING = 1,		// WALLF_ABSLIGHTING
+	LMSD_ABSLIGHTING_TIER = 1 << 1,	// WALLF_ABSLIGHTING_TIER << tier
+	LMSD_NOFAKECONTRAST = 1 << 2,	// WALLF_NOFAKECONTRAST
+	LMSD_SMOOTHLIGHTING = 1 << 3,	// WALLF_SMOOTHLIGHTING
+	LMSD_LIGHT_FOG = 1 << 4,	// WALLF_LIGHT_FOG
 };
 
 enum ELevelMeshSurfaceKind : uint32_t
@@ -107,11 +120,11 @@ struct LevelMeshSurface
 	uint32_t sideRef;		// side * 3 + tier (side_t::top/mid/bottom), 0xffffffff for flats
 	uint32_t lightSector;	// sector providing the base light
 	int32_t lightList;		// 3D light layer index, -1 = none / not recorded (ticket 12)
-	int32_t lightLevel;		// classic lightlevel at bake (RescaleLightLevel applied)
-	int32_t relLight;		// classic rellight at bake
+	int32_t lightLevel;		// classic lightlevel at bake (RescaleLightLevel applied; reference only, the resolve recomputes it)
+	int32_t relLight;		// classic rellight at bake (reference only)
 	int32_t sideLight;		// side Light (low 16) | TierLights[tier] (high 16)
-	int32_t fakeContrast;	// smooth rel (low 16) | classic rel (high 16)
-	uint32_t sideFlags;		// side_t::Flags (light / dither bits)
+	int32_t fakeContrast;	// smooth rel (low 16) | classic rel (high 16): side_t::GetFakeContrastRel
+	uint32_t sideFlags;		// LMSD_*
 	int32_t lightmapPage;	// -1 = none
 	float normal[3];		// walls: horizontal, pointing into the side's sector; flats: plane normal (floor up, ceiling down)
 	uint32_t firstVertex, numVertices;
@@ -158,10 +171,10 @@ struct LevelMeshCluster
 };
 static_assert(sizeof(LevelMeshCluster) == 16 * 4, "LevelMeshCluster must stay std430-compatible");
 
-// Per-sector state. std430-compatible: 20 x 32 bit. Every field is
+// Per-sector state. std430-compatible: 24 x 32 bit. Every field is
 // streamed dirty-only (LevelMesh_UpdateState compares the whole packed
-// record, LevelMesh_FillSectorState packs it), so ticket 10 can add light
-// ingredients by growing the record.
+// record, LevelMesh_FillSectorState packs it), so a new light ingredient
+// only needs a field here and a line in the packer.
 struct LevelMeshSectorState
 {
 	LevelMeshPlane planes[2];	// floor, ceiling (LM_PackPlane)
@@ -171,10 +184,13 @@ struct LevelMeshSectorState
 	uint32_t lightColor;		// Colormap.LightColor (PalEntry)
 	uint32_t fadeColor;			// Colormap.FadeColor (PalEntry)
 	uint32_t colormap;			// Colormap.Desaturation | BlendFactor << 8 | FogDensity << 16
-	uint32_t glowColor[2];		// planes[].GlowColor (PalEntry)
-	float glowHeight[2];		// planes[].GlowHeight
+	// sector_t::GetWallGlow: rgb + height (alpha) of the ceiling (top) and
+	// floor (bottom) glow, sector glow or the current frame's texture glow;
+	// both heights 0 when it returns false (no HWF_GLOW).
+	float glowTop[4];
+	float glowBottom[4];
 };
-static_assert(sizeof(LevelMeshSectorState) == 20 * 4, "LevelMeshSectorState must stay std430-compatible");
+static_assert(sizeof(LevelMeshSectorState) == 24 * 4, "LevelMeshSectorState must stay std430-compatible");
 
 // Per side x tier (index side * 3 + tier). std430-compatible: 8 x 32 bit.
 struct LevelMeshSideState
@@ -207,6 +223,64 @@ struct LevelMeshTextureEntry
 	float displayWidth, displayHeight;	// FGameTexture display size (flat texture matrix)
 };
 
+// Per-view shading inputs of the resolve (resolve.comp). The C++ light
+// chain (hw_lighting.cpp, hw_setcolor.cpp, hw_walls.cpp, hw_flats.cpp)
+// stays authoritative: the game side fills this block from it
+// (LevelMesh_FillShading) and the shader ports the per-surface part line
+// by line. Every cvar, level field and CPU float rounding the port must not
+// redo on the GPU is a precomputed value or a table here. A storage buffer
+// (LMBIND_SHADING), not a uniform block: the tables are 5 KB. std430.
+enum ELevelMeshShadingFlags : uint32_t
+{
+	LMSH_FULLBRIGHT = 1,			// HWDrawInfo::isFullbrightScene
+	LMSH_FADETABLE = 1 << 1,		// LEVEL_HASFADETABLE
+	LMSH_FORCEFAKECONTRAST = 1 << 2,	// LEVEL3_FORCEFAKECONTRAST
+	LMSH_SMOOTHLIGHTING = 1 << 3,	// LEVEL2_SMOOTHLIGHTING
+	LMSH_NOLIGHTFADE = 1 << 4,		// LEVEL3_NOLIGHTFADE
+	LMSH_BRIGHTFOG = 1 << 5,		// FLevelLocals::brightfog
+	LMSH_INSKYBOX = 1 << 6,			// portalState.inskybox
+	LMSH_OUTSIDEFOG = 1 << 7,		// outsidefogdensity != 0 && APART(info->outsidefog) != 0xff
+};
+
+struct LevelMeshShading
+{
+	int32_t lightMode;			// ELightMode of the view (HWDrawInfo::lightmode)
+	uint32_t flags;				// LMSH_*
+	int32_t fakeContrast;		// r_fakecontrast
+	int32_t fogMode;			// gl_fogmode
+	int32_t distanceCullType;	// r_distance_cull_type
+	int32_t extraLight;			// getExtraLight()
+	int32_t cullFogDensity;		// SetFog: clamp(19200 / culldist, 1, 255)
+	uint32_t cullColor;			// FLevelLocals::cullcolor
+	int32_t levelFogDensity;	// FLevelLocals::fogdensity
+	int32_t outsideFogDensity;	// FLevelLocals::outsidefogdensity
+	uint32_t outsideFog;		// level_info_t::outsidefog
+	float maxLightDist;			// SetShaderLight: MAXDIST
+	float fogDensityScale;		// FRenderState::SetFog: -LOG2E / 64000
+	uint32_t reserved[3];
+	int32_t rescale[256];		// RescaleLightLevel(0..255)
+	int32_t darkLight[256];		// CalcLightLevel: RoundHalfEven(192.f - (192 - level) * 1.87f)
+	float distFog[2][256];		// hw_lighting.cpp distfogtable
+	float softLight[256];		// FRenderState::SetSoftLightLevel: level / 255.f (a GPU division may round differently)
+};
+static_assert(sizeof(LevelMeshShading) == (16 + 5 * 256) * 4, "LevelMeshShading must stay std430-compatible");
+
+// The resolved shading of one surface for the current view (written by
+// resolve.comp, read by the vertex stage). std430-compatible: 12 x 32 bit.
+struct LevelMeshResolved
+{
+	uint32_t color;			// SetColor: light color r | g << 8 | b << 16 | desaturation << 24
+	uint32_t fogColor;		// SetFog color (rgb)
+	int32_t fogMode;		// uFogEnabled (VkRenderState::FillPushConstants)
+	float softLight;		// uLightLevel (mLightParms[3])
+	float fogDensity;		// uFogDensity (mLightParms[2])
+	float lightFactor;		// uLightFactor (mLightParms[1])
+	float lightDist;		// uLightDist (mLightParms[0])
+	uint32_t glow;			// bit 0: HWF_GLOW kept (the glow colors apply)
+	uint32_t reserved[4];
+};
+static_assert(sizeof(LevelMeshResolved) == 12 * 4, "LevelMeshResolved must stay std430-compatible");
+
 // One levelmesh view, as the game side hands it to DFrameBuffer::DrawLevelMesh.
 enum ELevelMeshCullMode : int
 {
@@ -223,7 +297,7 @@ enum ELevelMeshDrawMode : int
 
 enum ELevelMeshViewFlags : uint32_t
 {
-	LMVF_FULLBRIGHT = 1,	// the render state carries the light; no per-surface interim light
+	LMVF_FULLBRIGHT = 1,	// debug: draw every surface with the render state's (fullbright) light instead of the resolve
 };
 
 struct LevelMeshView
@@ -233,6 +307,7 @@ struct LevelMeshView
 	int drawMode = LMDRAW_COMPACT;
 	uint32_t flags = 0;		// LMVF_*
 	float maskThreshold = 0.5f;	// alpha threshold of the masked bucket (gl_mask_threshold)
+	const LevelMeshShading *shading = nullptr;	// resolve inputs (valid during the call)
 };
 
 template<class T> struct LevelMeshSpan

@@ -543,6 +543,11 @@ def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir
         return False, "llvmpipe in stdout (software GL — run unsandboxed)", elapsed
     if backend == "vulkan" and "Initialization of Vulkan failed" in stdout:
         return False, "vulkan init failed (fell back to GL)", elapsed
+    # A levelmesh that fails to build its shaders or scatter falls back to the
+    # classic path, which would make a classic-vs-levelmesh pair trivially pass.
+    for line in stdout.splitlines():
+        if line.startswith("Levelmesh: ") and "failed" in line:
+            return False, f"levelmesh fallback: {line[:160]}", elapsed
     if proc.returncode != 0:
         extra = " (ABCAPTURE incomplete)" if "ABCAPTURE incomplete" in stdout else ""
         return False, f"exit {proc.returncode}{extra}", elapsed
