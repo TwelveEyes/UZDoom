@@ -38,24 +38,6 @@ CVAR(Bool, lm_keepgeometry, false, 0)
 namespace
 {
 
-template<class T> LevelMeshSpan<T> Span(const TArray<T> &a)
-{
-	return { a.Data(), a.Size() };
-}
-
-void FillSectorState(sector_t &sec, LevelMeshSectorState &out)
-{
-	out = {};
-	for (int p = 0; p < 2; p++)
-	{
-		out.planes[p] = LM_PackPlane(sec.GetSecPlane(p));
-		out.texZ[p] = (float)sec.GetPlaneTexZ(p);
-	}
-	out.lightLevel = sec.lightlevel;
-	out.planeLight[0] = sec.GetFloorLight();
-	out.planeLight[1] = sec.GetCeilingLight();
-}
-
 void FillSideState(side_t &side, int tier, LevelMeshSideState &out)
 {
 	out = {};
@@ -92,7 +74,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	for (unsigned i = 0; i < Level->sectors.Size(); i++)
 	{
 		auto &sec = Level->sectors[i];
-		FillSectorState(sec, sectors[i]);
+		LevelMesh_FillSectorState(sec, sectors[i]);
 		for (int p = 0; p < 2; p++)
 		{
 			FillPlaneXform(sec, p, xforms[i * 2 + p]);
@@ -114,18 +96,19 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 
 	LevelMeshUploadData data;
 	data.id = bake->Id;
-	data.vertices = Span(bake->Vertices);
-	data.indices = Span(bake->Indices);
-	data.surfaces = Span(bake->Surfaces);
-	data.clusters = Span(bake->Clusters);
-	data.clusterSectors = Span(bake->ClusterSectors);
-	data.clusterSurfaces = Span(bake->ClusterSurfaces);
-	data.sectors = Span(sectors);
-	data.sides = Span(sides);
-	data.planeXforms = Span(xforms);
-	data.textureIds = Span(textureIds);
+	data.vertices = LM_Span(bake->Vertices);
+	data.indices = LM_Span(bake->Indices);
+	data.surfaces = LM_Span(bake->Surfaces);
+	data.clusters = LM_Span(bake->Clusters);
+	data.clusterSectors = LM_Span(bake->ClusterSectors);
+	data.clusterSurfaces = LM_Span(bake->ClusterSurfaces);
+	data.sectors = LM_Span(sectors);
+	data.sides = LM_Span(sides);
+	data.planeXforms = LM_Span(xforms);
+	data.textureIds = LM_Span(textureIds);
 	data.translationTableSize = ntex;
 	screen->SetLevelMeshData(&data);
+	LevelMesh_ResetState(bake, sectors);
 
 	if (!lm_keepgeometry)
 	{

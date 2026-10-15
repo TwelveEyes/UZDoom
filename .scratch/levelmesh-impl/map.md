@@ -117,7 +117,7 @@ carries:
 - Clusters are **spatial only**. Portal topology is a separate concern (ticket 15).
 
 **State buffers** (device-local SSBOs, updated **dirty-only** through a per-frame staging ring plus
-copy commands; there is no full-frame streaming):
+copy commands or one compute scatter per update (ticket 09); there is no full-frame streaming):
 
 - sector state: planes, light ingredients, colormap, glow, flags;
 - side state: per side × tier texture id, offsets, scales;
@@ -277,7 +277,7 @@ are included.
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–08 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–09 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -369,3 +369,23 @@ ticket file, and decisions that change this map are written back here, under Dec
     dirty reference build, accepted by the user.
   - New tooling: `abtest.py --set-a/--set-b`, `r_perflog v3`.
   - Amended tickets: 09, 10, 11, 14, 15.
+- 2026-10-14: ticket 09 resolved → `hw_levelmeshstate.cpp`, `VkLevelMesh::UpdateState`,
+  `shaders/levelmesh/scatter.comp`.
+  - Dirty sector records are found by memcmp against a CPU mirror. The candidates are the
+    last two frames' changes, plane interpolations, sector-effect and light thinkers,
+    change hooks in the sector light / colormap / glow setters, and a 512-sector round-robin
+    sweep.
+  - A full compare costs 1.2 ms on myhouse MAP01, so it is a diagnostic only
+    (`lm_statefull`). The candidates cost ≤ 0.04 ms p50 on every vantage, and static scenes
+    upload 0 bytes.
+  - Clusters anchored to moved planes get exact z-ranges from per-cluster anchor-plane offset
+    ranges. One compute scatter writes the records and z-ranges.
+  - The bake gained `LevelMeshSurface::edgeTop` (28-word surfaces): crossed wall tiers collapse
+    the way the classic stops emitting them. Clamp-Y is decided per fragment, because the
+    classic flag depends on the current heights.
+  - The movers A/B (`ab_manifest_movers.json`, `make_demo.py --path script`) passes on DOOM2
+    MAP01 / MAP07. Hi-Z vs no-cull is identical on the movers demos, and the `lm_clusterz 0`
+    negative control fails.
+  - Pirates MAP43 tick 120 is a sky rule (ticket 14).
+  - Perflog v4.
+  - Amended tickets: 10, 11, 12, 13, 14, 18.

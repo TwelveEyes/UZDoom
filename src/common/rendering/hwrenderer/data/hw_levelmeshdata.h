@@ -96,7 +96,7 @@ enum ELevelMeshSurfaceKind : uint32_t
 	LMSK_CEILING,
 };
 
-// std430-compatible: 24 x 32 bit.
+// std430-compatible: 28 x 32 bit.
 struct LevelMeshSurface
 {
 	uint32_t flags;			// LMSF_* | kind
@@ -116,8 +116,16 @@ struct LevelMeshSurface
 	float normal[3];		// walls: horizontal, pointing into the side's sector; flats: plane normal (floor up, ceiling down)
 	uint32_t firstVertex, numVertices;
 	uint32_t firstIndex, numIndices;	// into the cluster-ordered index buffer
+	// Walls: the plane bounding the tier from above in the classic (upper:
+	// front ceiling, lower: back floor, one-sided: ceiling); LM_NOPLANE =
+	// no bound. The vertex stage keeps every non-top vertex at or below it,
+	// so a tier whose planes crossed (a door opened past the front ceiling,
+	// a lift lowered past the front floor) collapses instead of turning
+	// inside out, like the classic, which stops emitting it.
+	uint32_t edgeTop;
+	uint32_t reserved[3];
 };
-static_assert(sizeof(LevelMeshSurface) == 24 * 4, "LevelMeshSurface must stay std430-compatible");
+static_assert(sizeof(LevelMeshSurface) == 28 * 4, "LevelMeshSurface must stay std430-compatible");
 
 // Material buckets. Inside a cluster the index range is ordered by bucket.
 // Opaque and masked follow the classic draw lists (HWDrawInfo::AddWall /
@@ -139,7 +147,7 @@ enum ELevelMeshBucket : uint32_t
 // std430-compatible: 16 x 32 bit.
 struct LevelMeshCluster
 {
-	float bmin[3];			// xy AABB; z from the load heights (ticket 09 refreshes it)
+	float bmin[3];			// xy AABB; z from the load heights, refreshed when an anchor plane moves (LevelMesh_UpdateState)
 	uint32_t firstIndex;
 	float bmax[3];
 	uint32_t numIndices;
@@ -150,18 +158,23 @@ struct LevelMeshCluster
 };
 static_assert(sizeof(LevelMeshCluster) == 16 * 4, "LevelMeshCluster must stay std430-compatible");
 
-// Per-sector state. std430-compatible: 16 x 32 bit. Tickets 09 / 10 own the
-// dirty stream and the light ingredients.
+// Per-sector state. std430-compatible: 20 x 32 bit. Every field is
+// streamed dirty-only (LevelMesh_UpdateState compares the whole packed
+// record, LevelMesh_FillSectorState packs it), so ticket 10 can add light
+// ingredients by growing the record.
 struct LevelMeshSectorState
 {
 	LevelMeshPlane planes[2];	// floor, ceiling (LM_PackPlane)
 	float texZ[2];				// GetPlaneTexZ: wall texture anchoring
 	int32_t lightLevel;			// sector_t::lightlevel
 	int32_t planeLight[2];		// GetFloorLight / GetCeilingLight
-	uint32_t flags;
-	uint32_t reserved[2];
+	uint32_t lightColor;		// Colormap.LightColor (PalEntry)
+	uint32_t fadeColor;			// Colormap.FadeColor (PalEntry)
+	uint32_t colormap;			// Colormap.Desaturation | BlendFactor << 8 | FogDensity << 16
+	uint32_t glowColor[2];		// planes[].GlowColor (PalEntry)
+	float glowHeight[2];		// planes[].GlowHeight
 };
-static_assert(sizeof(LevelMeshSectorState) == 16 * 4, "LevelMeshSectorState must stay std430-compatible");
+static_assert(sizeof(LevelMeshSectorState) == 20 * 4, "LevelMeshSectorState must stay std430-compatible");
 
 // Per side x tier (index side * 3 + tier). std430-compatible: 8 x 32 bit.
 struct LevelMeshSideState
@@ -226,6 +239,26 @@ template<class T> struct LevelMeshSpan
 {
 	const T *data = nullptr;
 	unsigned size = 0;
+};
+
+// A refreshed cluster z-range (the xy box never changes).
+struct LevelMeshClusterZ
+{
+	uint32_t cluster;
+	float zmin, zmax;
+	uint32_t reserved;
+};
+static_assert(sizeof(LevelMeshClusterZ) == 4 * 4, "LevelMeshClusterZ must stay std430-compatible");
+
+// One frame's dirty state, as LevelMesh_UpdateState hands it to
+// DFrameBuffer::UpdateLevelMeshState. Every index appears at most once.
+// The arrays only need to stay valid during the call.
+struct LevelMeshStateUpdate
+{
+	uint64_t id = 0;		// the bake the records belong to
+	LevelMeshSpan<uint32_t> sectorIndices;
+	LevelMeshSpan<LevelMeshSectorState> sectors;	// parallel to sectorIndices
+	LevelMeshSpan<LevelMeshClusterZ> clusters;
 };
 
 // Everything the backend uploads at level setup. The arrays only need to

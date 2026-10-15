@@ -76,6 +76,11 @@ public:
 	// texture resolves, bindless descriptor writes, translation table upload.
 	void BeginFrame();
 	void MaterialInvalidated(VkMaterial *mat);
+
+	// Dirty state stream: copies the records into the staging ring and
+	// records one scatter dispatch into the transfer commands, ahead of
+	// every draw of the frame. Returns the staging bytes used.
+	size_t UpdateState(const LevelMeshStateUpdate &update);
 	void SamplersChanged() { mSamplersDirty = true; }
 
 	// Staging ring (HW_MAX_PIPELINE_BUFFERS slots, host-visible, usable as a
@@ -113,6 +118,7 @@ private:
 	void WriteSlot(uint32_t slot, VkImageView view, VkImageLayout layout);
 	void FlushSlotWrites();
 	void UploadTable();
+	bool CreateScatter();
 
 	VulkanRenderDevice *fb = nullptr;
 
@@ -167,12 +173,29 @@ private:
 	uint32_t mTableDirtyMin = ~0u, mTableDirtyMax = 0;
 	unsigned mResolveCalls = 0;
 
+	// State scatter. Keep in sync with the push constant block of scatter.comp.
+	struct ScatterConstants
+	{
+		uint32_t sectorIndices, sectorRecords, numSectors;	// word offsets into the staging buffer
+		uint32_t clusterEntries, numClusters;
+		uint32_t padding[3];
+	};
+	static_assert(sizeof(ScatterConstants) == 8 * 4, "scatter.comp declares 8 words of push constants");
+	bool mScatterCreated = false, mScatterFailed = false;
+	std::unique_ptr<VulkanShader> mScatterShader;
+	std::unique_ptr<VulkanDescriptorSetLayout> mScatterSetLayout;
+	std::unique_ptr<VulkanPipelineLayout> mScatterLayout;
+	std::unique_ptr<VulkanPipeline> mScatterPipeline;
+	std::unique_ptr<VulkanDescriptorPool> mScatterPool;
+
 	// Staging ring
 	struct RingSlot
 	{
 		std::unique_ptr<VulkanBuffer> buffer;
 		uint8_t *data = nullptr;
 		size_t used = 0;
+		std::unique_ptr<VulkanDescriptorSet> scatterSet;	// the buffer as the scatter source
+		VulkanBuffer *scatterSetBuffer = nullptr;
 	};
 	RingSlot mRing[HW_MAX_PIPELINE_BUFFERS];
 	int mRingIndex = 0;

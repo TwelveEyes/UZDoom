@@ -108,6 +108,7 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
 
 	screen->SetLevelMesh(camera->Level->levelMesh);
 	LevelMesh_UpdateResources(camera->Level);
+	LevelMesh_UpdateState(camera->Level);
 
 	// Update the attenuation flag of all light defaults for each viewpoint.
 	// This function will only do something if the setting differs.
@@ -316,6 +317,7 @@ sector_t* RenderView(player_t* player)
 
 		// reset statistics counters
 		ResetProfilingData();
+		LevelMesh_BeginFrame();
 
 		// Get this before everything else
 		if (cl_capfps || r_NoInterpolate) r_viewpoint.TicFrac = 1.;

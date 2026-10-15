@@ -40,7 +40,21 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
 - **Levelmesh debug cvars** (not saved): `lm_draw 0` skips the levelmesh draw (the classic
   lists keep everything); `lm_cullmode` 0 none / 1 frustum / 2 two-phase Hi-Z (default);
   `lm_drawmode` 0 compacted indices (default) / 1 one indirect command per cluster;
-  `lm_backfacecull 0` disables back-face culling.
+  `lm_backfacecull 0` disables back-face culling. Dirty state stream (ticket 09):
+  `lm_stateupdate 0` freezes the GPU state at the load values, `lm_statefull 1` compares
+  every sector every frame instead of the candidates, `lm_statesweep N` sets the backstop
+  sweep (sectors per frame, default 512), `lm_clusterz 0` stops the cluster z refresh.
+  `lm_cluster_budget` (default 256) is read at level setup; 16 gives tight cluster boxes.
+- **Moving sectors (ticket 09):** `ab_manifest_movers.json` replays `demos/movers/`
+  (DOOM2 MAP01 / MAP07 / MAP30, made with `make_demo.py --path script`: warps, turns, use
+  presses and `DEM_RUNSPECIAL` line specials that open doors, run lifts and crushers),
+  captured every 5 tics. Use it with `--manifest tools/abtest/ab_manifest_movers.json`:
+  - classic vs levelmesh: `run --mode demo --fullbright`. MAP30 fails throughout on its
+    animated walls and flats (ticket 11); MAP01 / MAP07 pass.
+  - culling holes: levelmesh vs levelmesh, no cull against Hi-Z,
+    `--set-a 'gl_uselevelmesh 1' --set-a 'lm_cullmode 0' --set-b 'lm_cullmode 2'`, also
+    with `lm_cluster_budget 16` on both paths. Adding `--set-b 'lm_clusterz 0'` is the
+    negative control: MAP01 then fails while its door opens.
 - **Never pass `+set vk_debug 1` without a scratch `-config`:** `vk_debug` is archived, so it
   persists into the user's ini and silently puts the validation layer into every later perf
   run. The A/B driver and `lm_bake_survey.py` already use fresh configs; `run_matrix.sh` does
@@ -62,7 +76,9 @@ changes listed here.
   `total`, as the frame time. `v3` (ticket 08) adds the levelmesh columns `lm`, `lmcm`, `lmdm`,
   `lmcl1/2`, `lmtri1/2`, `lmfc`, `lmocc` and the GPU times `lmc1`, `lmd1`, `lmhz`, `lmc2`, `lmd2`,
   `lmgpu` (see the log header). They lag by the frames in flight and appear only once a
-  levelmesh draw has completed.
+  levelmesh draw has completed. `v4` (ticket 09) adds the dirty state stream of the frame
+  (not lagged): `lmsc` sector records compared, `lmss` sector records uploaded, `lmsk`
+  cluster z-ranges uploaded, `lmsb` staging bytes, `lmsms` CPU ms.
 - **Demos:** `make_demo.py --path tour` (default) warps the camera to 26 stops in the map's main
   playable area, with a 360° pan per stop; god + noclip. Output is in `demos/v2/`. `--path
   vantage --at x,y --turn N` holds a single view. The v1 spiral (`--path spiral`, `demos/*.lmp`)

@@ -42,3 +42,6 @@ visibility:
 - [ ] Save / load round trip preserves exposure and dither state.
 
 ## Comments
+- 2026-10-14 (from 09): the DOOM2 MAP01 tour demo's classic-vs-levelmesh fails include
+  out-of-bounds views (ticks 2010, 2100, ...): the classic draws sky-hack ghosts behind walls
+  seen from outside the map. Fullbright, no state uploads in that demo.

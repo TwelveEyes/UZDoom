@@ -48,6 +48,8 @@ int vertexcount, flatvertices, flatprimitives;
 
 int rendered_lines,rendered_flats,rendered_sprites,render_vertexsplit,render_texsplit,rendered_decals, rendered_portals, rendered_commandbuffers;
 int rendered_levelmesh;
+LevelMeshStateStats lmStateStats;
+glcycle_t LevelMeshStateTime;
 int iter_dlightf, iter_dlight, draw_dlight, draw_dlightf;
 
 void ResetProfilingData()
@@ -73,6 +75,8 @@ void ResetProfilingData()
 	flatvertices=flatprimitives=vertexcount=0;
 	render_texsplit=render_vertexsplit=rendered_lines=rendered_flats=rendered_sprites=rendered_decals=rendered_portals = 0;
 	rendered_levelmesh = 0;
+	lmStateStats = {};
+	LevelMeshStateTime.Reset();
 }
 
 //-----------------------------------------------------------------------------
@@ -248,7 +252,7 @@ static uint64_t PerfLogNowNS()
 
 static void PerfLogHeader(FILE *f)
 {
-	fprintf(f, "# r_perflog v3\n");
+	fprintf(f, "# r_perflog v4\n");
 	fprintf(f, "# F <frame> tic=<gametic> total=<D_Display ms> r=<RenderView window ms> "
 		"bsp=<traversal ms, incl clip> clip=<wall clip ms> wr=<wall render ms> ws=<wall setup ms> "
 		"fr=<flat render ms> fs=<flat setup ms> sr=<sprite render ms> ss=<sprite setup ms> "
@@ -258,7 +262,8 @@ static void PerfLogHeader(FILE *f)
 		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count> "
 		"wall=<wall-clock ms since the previous logged frame: the whole main-loop iteration, "
 		"incl. sim tics and input; 0 on the first frame> "
-		"[lm=<levelmesh draws this frame> and, once a levelmesh draw completed on the GPU (lagged by "
+		"[lm=<levelmesh draws this frame> lmsc=<sector records compared> lmss=<sector records uploaded> "
+		"lmsk=<cluster z-ranges uploaded> lmsb=<state bytes uploaded> lmsms=<state update CPU ms> and, once a levelmesh draw completed on the GPU (lagged by "
 		"the frames in flight): lmcm=<cull mode: 0 none, 1 frustum, 2 Hi-Z> lmdm=<draw mode: 0 compact, "
 		"1 per cluster> lmcl1/lmcl2=<clusters drawn, phase 1 / Hi-Z phase 2> lmtri1/lmtri2=<triangles> "
 		"lmfc=<clusters frustum-culled> lmocc=<clusters Hi-Z-occluded> lmc1/lmd1=<phase 1 cull / draw GPU ms> "
@@ -356,7 +361,8 @@ void PerfLogUpdate()
 	bool lmStats = screen->GetLevelMeshStats(lm);
 	if (rendered_levelmesh > 0 || lmStats)
 	{
-		fprintf(PerfLogFile, " lm=%d", rendered_levelmesh);
+		fprintf(PerfLogFile, " lm=%d lmsc=%u lmss=%u lmsk=%u lmsb=%zu lmsms=%.3f", rendered_levelmesh, lmStateStats.candidates,
+			lmStateStats.sectors, lmStateStats.clusters, lmStateStats.bytes, LevelMeshStateTime.TimeMS());
 		if (lmStats)
 		{
 			fprintf(PerfLogFile, " lmcm=%d lmdm=%d lmcl1=%u lmcl2=%u lmtri1=%u lmtri2=%u lmfc=%u lmocc=%u "

@@ -61,6 +61,10 @@ void main()
 
 	LMTextureEntry tex = lmTextures[surf.textureId];
 	uint kind = surf.flags & LMSF_KINDMASK;
+	// A wall tier whose planes crossed collapses (LevelMeshSurface::edgeTop;
+	// LevelMeshBake::VertexZ is the CPU reference).
+	if (kind == LMSK_WALL && surf.edgeTop != LM_NOPLANE && (v.anchor >> LMV_ROLESHIFT) != LMV_TOP)
+		z = min(z, LM_PlaneZ(lmSectors[surf.edgeTop >> 1].planes[surf.edgeTop & 1u], v.x, v.y));
 	vec2 tc;
 	if (kind == LMSK_WALL) tc = vec2(v.u, LM_WallV(v, surf, z));
 	else tc = LM_FlatTexCoord(v, surf, tex);

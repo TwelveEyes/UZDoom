@@ -26,3 +26,6 @@
 - [ ] Moving doors and rotators show no pop-in or culling holes in the demo A/B.
 
 ## Comments
+- 2026-10-14 (from 09): cluster xy boxes are still static. The 09 refresh only rewrites
+  `bmin.z / bmax.z`, and `scatter.comp` only writes those two words per cluster. A polyobject
+  that moves needs an xy refresh, or clusters of its own.

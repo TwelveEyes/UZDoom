@@ -55,6 +55,7 @@ public:
 	void UpdateInterpolation();
 	void Restore();
 	void Interpolate(double smoothratio);
+	sector_t *MovedSector() const override { return sector; }
 
 	virtual void Serialize(FSerializer &arc);
 	size_t PropagateMark();

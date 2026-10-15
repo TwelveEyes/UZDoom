@@ -57,6 +57,7 @@ struct ClusterBuilder
 	TArray<uint32_t> OldFirstIndex;
 	TArray<uint32_t> NewIndices;
 	TArray<uint32_t> SecStamp;
+	TArray<uint32_t> PlaneStamp, PlaneSlot;		// per plane ref: cluster stamp, index into ClusterPlanes
 	uint32_t Stamp = 0;
 	TArray<uint32_t> ClusterTris;
 	TArray<uint8_t> Visited;					// per leaf, set by the walk
@@ -140,12 +141,36 @@ struct ClusterBuilder
 		cur.numIndices = NewIndices.Size() - cur.firstIndex;
 		cur.numSectors = Bake->ClusterSectors.Size() - cur.firstSector;
 		cur.numSurfaces = Bake->ClusterSurfaces.Size() - cur.firstSurface;
+		Bake->ClusterPlaneStart.Push(Bake->ClusterPlanes.Size());
 		for (uint32_t b = 0; b < LMB_COUNT; b++)
 			if (cur.bucketIndices[b]) cur.bucketMask |= 1u << b;
 		uint32_t drawn = cur.bucketMask & ((1u << LMB_DRAWN) - 1);
 		if ((drawn & (drawn - 1)) != 0) Bake->ClusterStats.mixedBucketClusters++;
 		Bake->Clusters.Push(cur);
 		ClusterTris.Push(curTris);
+	}
+
+	// Records that the open cluster has vertices at LM_PlaneZ(ref) + offset.
+	void AddPlane(uint32_t ref, float offset)
+	{
+		uint32_t sec = ref >> 1;
+		if (SecStamp[sec] != Stamp)
+		{
+			SecStamp[sec] = Stamp;
+			Bake->ClusterSectors.Push(sec);
+		}
+		if (PlaneStamp[ref] != Stamp)
+		{
+			PlaneStamp[ref] = Stamp;
+			PlaneSlot[ref] = Bake->ClusterPlanes.Size();
+			Bake->ClusterPlanes.Push({ ref, offset, offset });
+		}
+		else
+		{
+			auto &cp = Bake->ClusterPlanes[PlaneSlot[ref]];
+			cp.minOffset = std::min(cp.minOffset, offset);
+			cp.maxOffset = std::max(cp.maxOffset, offset);
+		}
 	}
 
 	void AddTriangles(uint32_t surface, uint32_t src, uint32_t count, uint32_t bucket)
@@ -161,13 +186,11 @@ struct ClusterBuilder
 			cur.bmin[0] = std::min(cur.bmin[0], v.x); cur.bmax[0] = std::max(cur.bmax[0], v.x);
 			cur.bmin[1] = std::min(cur.bmin[1], v.y); cur.bmax[1] = std::max(cur.bmax[1], v.y);
 			cur.bmin[2] = std::min(cur.bmin[2], z); cur.bmax[2] = std::max(cur.bmax[2], z);
-			uint32_t sec = (v.anchor & LMV_REFMASK) >> 1;
-			if (SecStamp[sec] != Stamp)
-			{
-				SecStamp[sec] = Stamp;
-				Bake->ClusterSectors.Push(sec);
-			}
+			AddPlane(v.anchor & LMV_REFMASK, v.zOffset);
 		}
+		// A wall's edge bound can become its vertices' z (LevelMeshSurface::edgeTop).
+		uint32_t edge = Bake->Surfaces[surface].edgeTop;
+		if (edge != LM_NOPLANE) AddPlane(edge, 0.f);
 		cur.bucketIndices[bucket] += count * 3;
 		if (lastSurface != surface)
 		{
@@ -292,6 +315,10 @@ struct ClusterBuilder
 		NewIndices.Grow(Bake->Indices.Size());
 		SecStamp.Resize(Level->sectors.Size());
 		for (auto &v : SecStamp) v = 0;
+		PlaneStamp.Resize(Level->sectors.Size() * 2);
+		for (auto &v : PlaneStamp) v = 0;
+		PlaneSlot.Resize(Level->sectors.Size() * 2);
+		Bake->ClusterPlaneStart.Push(0);
 		Visited.Resize(nleaf);
 		memset(Visited.Data(), 0, nleaf);
 
@@ -376,6 +403,8 @@ void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budge
 	bake->Clusters.Clear();
 	bake->ClusterSectors.Clear();
 	bake->ClusterSurfaces.Clear();
+	bake->ClusterPlanes.Clear();
+	bake->ClusterPlaneStart.Clear();
 	bake->ClusterStats = {};
 	bake->ClusterStats.budget = std::clamp(budget, 16, 65536);
 	if (bake->Surfaces.Size() > 0 && Level->subsectors.Size() > 0)
@@ -390,6 +419,8 @@ void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budge
 	bake->Clusters.ShrinkToFit();
 	bake->ClusterSectors.ShrinkToFit();
 	bake->ClusterSurfaces.ShrinkToFit();
+	bake->ClusterPlanes.ShrinkToFit();
+	bake->ClusterPlaneStart.ShrinkToFit();
 	bake->ClusterStats.ms = I_msTimeF() - t0;
 }
 

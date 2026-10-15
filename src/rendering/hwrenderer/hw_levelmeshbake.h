@@ -66,9 +66,32 @@ struct LevelMeshBakeStats
 	unsigned vScaleInconsistent = 0;			// left/right dv/dz disagree
 	unsigned planeRefOverflow = 0;				// surfaces with more than 4 distinct anchor planes
 	unsigned ffloorVRefHeuristic = 0;			// 3D-floor sides whose vRef was taken from the top-left anchor
+	unsigned edgeUnbounded = 0;					// walls left without edgeTop (a non-top vertex above it at load)
 	unsigned deferredSurfaces = 0;				// LMSF_DEFERRED: drawn by the classic path (ticket 08)
 	unsigned deferredByTier = 0;				// of those, deferred because another piece of the side tier is
 	double wallMs = 0, flatMs = 0, totalMs = 0;
+};
+
+// The vertices of a cluster anchored to one plane: their z is
+// LM_PlaneZ(plane, x, y) + [minOffset, maxOffset].
+struct LevelMeshClusterPlane
+{
+	uint32_t ref;			// plane ref
+	float minOffset, maxOffset;
+};
+
+// The dirty state stream's bookkeeping (hw_levelmeshstate.cpp).
+struct LevelMeshStateStream
+{
+	TArray<LevelMeshSectorState> Sectors;	// the records as last handed to the backend
+	TArray<uint32_t> SectorStamp, ClusterStamp;	// last update that compared / refreshed them
+	TArray<uint32_t> Changed;				// sectors changed by this frame's updates
+	TArray<uint32_t> ChangedBefore;			// sectors changed by the previous frame's updates
+	TArray<uint32_t> Touched;				// reported by LevelMesh_SectorChanged since the last update
+	TArray<uint8_t> TouchedFlag;
+	uint64_t Frame = 0;						// LevelMesh_BeginFrame serial of the last update
+	uint32_t Stamp = 0;
+	unsigned SweepCursor = 0;
 };
 
 struct LevelMeshClusterStats
@@ -100,10 +123,14 @@ public:
 	// share its first / last surface with the neighbouring cluster when a
 	// leaf over budget was chunked.
 	TArray<LevelMeshCluster> Clusters;
-	TArray<uint32_t> ClusterSectors;	// cluster -> sectors referenced by its vertex anchors
+	TArray<uint32_t> ClusterSectors;	// cluster -> sectors of its vertex anchors and wall edge bounds
 	TArray<uint32_t> ClusterSurfaces;	// cluster -> surfaces
 	TArray<uint32_t> SectorClusterStart;	// sector -> clusters (CSR, numsectors + 1 entries)
 	TArray<uint32_t> SectorClusters;
+	TArray<uint32_t> ClusterPlaneStart;	// cluster -> anchor planes (CSR, numclusters + 1 entries)
+	TArray<LevelMeshClusterPlane> ClusterPlanes;
+
+	LevelMeshStateStream Stream;
 
 	// Classic draw-list entries the levelmesh replaces (1 = owned): per side
 	// tier (side * 3 + side_t::top/mid/bottom) and per sector plane
@@ -150,3 +177,26 @@ void LevelMesh_UpdateResources(FLevelLocals *Level);
 
 // Releases the device resources of the level's levelmesh (level teardown).
 void LevelMesh_ReleaseResources(FLevelLocals *Level);
+
+// Packs a sector's GPU state record.
+void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out);
+
+// Resets the dirty state stream to the records just uploaded.
+void LevelMesh_ResetState(LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors);
+
+// Frame boundary for the state stream (once per rendered frame, before any
+// viewpoint).
+void LevelMesh_BeginFrame();
+
+// Streams the sector records that changed since the last call (planes, texZ,
+// light, colormap, glow) and the z-ranges of the clusters anchored to moved
+// planes. Called for every rendered viewpoint, in the D_Render interpolation
+// window and before the scene is built, so the uploaded records are the
+// values drawn this frame.
+void LevelMesh_UpdateState(FLevelLocals *Level);
+
+// TArray -> LevelMeshSpan
+template<class T> LevelMeshSpan<T> LM_Span(const TArray<T> &a)
+{
+	return { a.Data(), a.Size() };
+}

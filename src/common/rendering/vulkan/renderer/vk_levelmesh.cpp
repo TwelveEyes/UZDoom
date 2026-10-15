@@ -28,6 +28,7 @@
 // HEADER FILES ------------------------------------------------------------
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 
 #include "vk_levelmesh.h"
@@ -118,8 +119,11 @@ VkLevelMesh::~VkLevelMesh()
 	ReleaseLevel();
 	auto deleteList = fb->GetCommands()->DrawDeleteList.get();
 	deleteList->Add(std::move(mTextureSet));
+	for (auto &slot : mRing)
+		deleteList->Add(std::move(slot.scatterSet));
 	deleteList->Add(std::move(mSetPool));
 	deleteList->Add(std::move(mTexturePool));
+	deleteList->Add(std::move(mScatterPool));
 	for (auto &slot : mRing)
 	{
 		if (slot.buffer) slot.buffer->Unmap();
@@ -168,9 +172,12 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LMBIND_SAMPLERS %d\n#define NUMSAMPLERS %d\n", (int)LMBIND_SAMPLERS, (int)NUMSAMPLERS);
 	d.AppendFormat("#define LMB_COUNT %d\n#define LMB_DRAWN %uu\n", (int)LMB_COUNT, (unsigned)LMB_DRAWN);
 	d.AppendFormat("#define LM_NOPLANE 0x%xu\n#define LMV_REFMASK 0x%xu\n", LM_NOPLANE, (unsigned)LMV_REFMASK);
+	d.AppendFormat("#define LMV_ROLESHIFT %uu\n#define LMV_TOP %uu\n", (unsigned)LMV_ROLESHIFT, (unsigned)LMV_TOP);
 	d.AppendFormat("#define LMSF_KINDMASK %uu\n#define LMSK_WALL %uu\n", (unsigned)LMSF_KINDMASK, (unsigned)LMSK_WALL);
 	d.AppendFormat("#define LMSF_CLAMPX %uu\n#define LMSF_CLAMPY %uu\n#define LMSF_TEXCLAMPY %uu\n", (unsigned)LMSF_CLAMPX, (unsigned)LMSF_CLAMPY, (unsigned)LMSF_TEXCLAMPY);
 	d.AppendFormat("#define LM_TEXF_CLAMPY 0x%xu\n", (unsigned)TEXF_ClampY);
+	static_assert(CLAMP_X == 1 && CLAMP_Y == 2 && CLAMP_XY == 3, "levelmesh.vp builds the sampler index as clamp bits");
+	d.AppendFormat("#define LM_SAMPLER_CLAMPY %uu\n", (unsigned)CLAMP_Y);
 	d.AppendFormat("#define LMVF_FULLBRIGHT %d\n", (int)LMVF_FULLBRIGHT);
 	d.AppendFormat("#define LMCULL_NONE %uu\n#define LMDRAW_COMPACT %uu\n", (unsigned)LMCULL_NONE, (unsigned)LMDRAW_COMPACT);
 	return d;
@@ -511,6 +518,129 @@ void VkLevelMesh::UploadTable()
 	QueueCopy(alloc, mBuffers[LMBIND_TEXTURETABLE].get(), first * sizeof(LevelMeshTextureEntry), size);
 	mTableDirtyMin = ~0u;
 	mTableDirtyMax = 0;
+}
+
+//==========================================================================
+//
+// Dirty state scatter
+//
+// The staging allocation holds the sector indices, the sector records and
+// the cluster z entries; one compute dispatch writes them into the
+// device-local sector state and cluster buffers (ticket 05: one VkBufferCopy
+// region per record costs 0.16-0.30 ms of GPU time on fan-out-heavy frames).
+// It is recorded into the transfer commands, which are submitted ahead of
+// the draw commands, so every draw of the frame sees the new state. The
+// frames are serialized (VulkanRenderDevice::Update waits for every fence),
+// so no earlier frame still reads the buffers.
+//
+//==========================================================================
+
+bool VkLevelMesh::CreateScatter()
+{
+	if (mScatterCreated) return !mScatterFailed;
+	mScatterCreated = true;
+	auto dev = fb->device.get();
+
+	FString defines = ShaderDefines(0, -1);
+	defines.AppendFormat("#define LM_SECTOR_WORDS %uu\n#define LM_CLUSTER_WORDS %uu\n",
+		(unsigned)(sizeof(LevelMeshSectorState) / 4), (unsigned)(sizeof(LevelMeshCluster) / 4));
+	defines.AppendFormat("#define LM_CLUSTER_ZMIN %uu\n#define LM_CLUSTER_ZMAX %uu\n",
+		(unsigned)(offsetof(LevelMeshCluster, bmin) / 4 + 2), (unsigned)(offsetof(LevelMeshCluster, bmax) / 4 + 2));
+	defines.AppendFormat("#define LM_CLUSTERZ_WORDS %uu\n", (unsigned)(sizeof(LevelMeshClusterZ) / 4));
+	static_assert(offsetof(LevelMeshClusterZ, cluster) == 0 && offsetof(LevelMeshClusterZ, zmin) == 4 && offsetof(LevelMeshClusterZ, zmax) == 8, "scatter.comp reads LevelMeshClusterZ by word");
+	try
+	{
+		mScatterShader = fb->GetShaderManager()->LoadComputeShader("levelmesh_scatter", "shaders/levelmesh/scatter.comp", defines.GetChars());
+	}
+	catch (const CVulkanError &e)
+	{
+		Printf("Levelmesh: state scatter shader failed: %s\n", e.what());
+		mScatterFailed = true;
+		return false;
+	}
+	mScatterSetLayout = DescriptorSetLayoutBuilder()
+		.AddBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.DebugName("VkLevelMesh.ScatterSetLayout")
+		.Create(dev);
+	mScatterLayout = PipelineLayoutBuilder()
+		.AddSetLayout(mSetLayout.get())
+		.AddSetLayout(mScatterSetLayout.get())
+		.AddPushConstantRange(VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ScatterConstants))
+		.DebugName("VkLevelMesh.ScatterLayout")
+		.Create(dev);
+	mScatterPipeline = ComputePipelineBuilder()
+		.Layout(mScatterLayout.get())
+		.ComputeShader(mScatterShader.get())
+		.DebugName("VkLevelMesh.ScatterPipeline")
+		.Create(dev);
+	// One set per ring slot; a grown slot buffer replaces its set.
+	mScatterPool = DescriptorPoolBuilder()
+		.MaxSets(HW_MAX_PIPELINE_BUFFERS * 4)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, HW_MAX_PIPELINE_BUFFERS * 4)
+		.DebugName("VkLevelMesh.ScatterPool")
+		.Create(dev);
+	return true;
+}
+
+size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
+{
+	if (!mResident || update.id != mId || !mSet) return 0;
+	unsigned nsec = std::min(update.sectorIndices.size, update.sectors.size);
+	unsigned ncl = update.clusters.size;
+	if (nsec == 0 && ncl == 0) return 0;
+	for (unsigned i = 0; i < nsec; i++)
+		if (update.sectorIndices.data[i] >= mCounts[LMBIND_SECTORSTATE]) return 0;
+	for (unsigned i = 0; i < ncl; i++)
+		if (update.clusters.data[i].cluster >= mCounts[LMBIND_CLUSTERS]) return 0;
+	if (!CreateScatter()) return 0;
+
+	size_t indexBytes = (nsec * sizeof(uint32_t) + 15) & ~(size_t)15;
+	size_t recordBytes = nsec * sizeof(LevelMeshSectorState);
+	size_t clusterBytes = ncl * sizeof(LevelMeshClusterZ);
+	size_t size = indexBytes + recordBytes + clusterBytes;
+	auto alloc = AllocUpload(size);
+	uint8_t *dst = (uint8_t *)alloc.data;
+	if (nsec)
+	{
+		memcpy(dst, update.sectorIndices.data, nsec * sizeof(uint32_t));
+		memcpy(dst + indexBytes, update.sectors.data, recordBytes);
+	}
+	if (ncl) memcpy(dst + indexBytes + recordBytes, update.clusters.data, clusterBytes);
+
+	auto &slot = mRing[mRingIndex];
+	if (!slot.scatterSet || slot.scatterSetBuffer != alloc.buffer)
+	{
+		fb->GetCommands()->DrawDeleteList->Add(std::move(slot.scatterSet));
+		slot.scatterSet = mScatterPool->allocate(mScatterSetLayout.get());
+		slot.scatterSet->SetDebugName("VkLevelMesh.ScatterSet");
+		WriteDescriptors()
+			.AddBuffer(slot.scatterSet.get(), 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, alloc.buffer)
+			.Execute(fb->device.get());
+		slot.scatterSetBuffer = alloc.buffer;
+	}
+
+	ScatterConstants pc = {};
+	pc.sectorIndices = (uint32_t)(alloc.offset / 4);
+	pc.sectorRecords = (uint32_t)((alloc.offset + indexBytes) / 4);
+	pc.numSectors = nsec;
+	pc.clusterEntries = (uint32_t)((alloc.offset + indexBytes + recordBytes) / 4);
+	pc.numClusters = ncl;
+
+	auto cmd = fb->GetCommands()->GetTransferCommands();
+	// Earlier writes (level upload, earlier scatters) before this one.
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	cmd->bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, mScatterPipeline.get());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mScatterLayout.get(), 0, mSet.get());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mScatterLayout.get(), 1, slot.scatterSet.get());
+	cmd->pushConstants(mScatterLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ScatterConstants), &pc);
+	size_t items = (size_t)nsec * (sizeof(LevelMeshSectorState) / 4) + ncl;
+	cmd->dispatch((uint32_t)std::min<size_t>((items + 63) / 64, 65535), 1, 1);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	return size;
 }
 
 //==========================================================================

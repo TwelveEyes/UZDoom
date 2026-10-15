@@ -31,7 +31,18 @@ uint LM_LayerSlot(uint layer)
 	return layer < vLMMaterial.y ? vLMMaterial.x + layer : 0u;
 }
 
-#define LM_LAYER(i) sampler2D(lmBindless[nonuniformEXT(LM_LayerSlot(i))], lmSamplers[nonuniformEXT(vLMMaterial.z)])
+// Sampler: the baked clamp mode, except that a clamped-Y wall whose plane
+// moved past the texture span samples with wrap there. The classic clamps Y
+// only while the wall's v range lies within [0, 1] (HWWall::
+// CheckTexturePosition, evaluated from the current heights), so a wall that
+// was clamped at load wraps once a door, lift or crusher stretches it. (The
+// reverse, a wall that shrinks into [0, 1] and would now clamp, keeps
+// wrapping: identical with nearest filtering, a sub-texel edge difference
+// with linear filtering.) A macro: vTexCoord is declared after this include.
+// The sampler index is the classic clamp mode, built as clamp bits.
+#define LM_SAMPLER (((vLMMaterial.z & LM_SAMPLER_CLAMPY) != 0u && (vTexCoord.y < 0.0 || vTexCoord.y > 1.0)) ? (vLMMaterial.z & ~LM_SAMPLER_CLAMPY) : vLMMaterial.z)
+
+#define LM_LAYER(i) sampler2D(lmBindless[nonuniformEXT(LM_LayerSlot(i))], lmSamplers[nonuniformEXT(LM_SAMPLER)])
 
 #define tex LM_LAYER(0u)
 #define texture2 LM_LAYER(1u)

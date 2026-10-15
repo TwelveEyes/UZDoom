@@ -106,6 +106,8 @@ DEM_USERCMD = 1
 DEM_STOP = 7
 DEM_GENERICCHEAT = 10
 DEM_WARPCHEAT = 35       # i16be x, y, z (d_net.cpp Net_DoCommand)
+DEM_RUNSPECIAL = 62      # i16be special, u8 argc, i32be args (d_net.cpp Net_DoCommand)
+BT_USE = 1 << 1          # d_event.h
 ONFLOORZ_I16 = -32768    # c_cmds.cpp warp: ONFLOORZ/65536 -> lands on floorz
 
 UCMDF_BUTTONS = 0x01
@@ -495,6 +497,55 @@ def build_vantage(at, turn_fp, T):
     return cmds, {0: at}
 
 
+def build_script(steps, start_angle, T):
+    """Per-tic commands for a scripted test demo (moving-sector A/B, ticket
+    09): each step is 'KIND:ARGS@TIC'.
+      warp:X,Y@T          warp to (X, Y) on the floor
+      face:DEG@T          turn to the absolute map angle DEG (degrees, 0 = east,
+                          90 = north); tracked from --start-angle
+      use@T               press use for one tic
+      special:N,A1,..@T   DEM_RUNSPECIAL: line special N with args (activator =
+                          the player), e.g. 62,5,32,105 = Plat_DownWaitUpStay
+    Returns (cmds, warps, specials); specials maps tic -> [(num, args)].
+    Input is zeroed on the first tic of a level (player.zs CheckFrozen), so
+    turns and use presses must not be on tic 0."""
+    cmds = [[0, 0, 0, 0, 0, 0] for _ in range(T)]
+    warps, specials = {}, {}
+    angle = float(start_angle)
+    parsed = []
+    for st in steps:
+        body, _, tic = st.rpartition("@")
+        if not body:
+            raise ValueError(f"step {st!r}: missing @TIC")
+        kind, _, args = body.partition(":")
+        parsed.append((int(tic), kind, args))
+    parsed.sort(key=lambda p: p[0])
+    for tic, kind, args in parsed:
+        if not 0 <= tic < T:
+            raise ValueError(f"step tic {tic} outside 0..{T - 1}")
+        if kind == "warp":
+            x, y = (float(v) for v in args.split(","))
+            warps[tic] = (x, y)
+        elif kind == "face":
+            target = float(args)
+            delta = ((target - angle + 180.0) % 360.0) - 180.0
+            turn = int(round(delta * ANGLE_FPP / 360.0))
+            if tic == 0:
+                raise ValueError("face on tic 0 is dropped by the engine")
+            cmds[tic][2] += turn
+            angle += turn * 360.0 / ANGLE_FPP
+        elif kind == "use":
+            if tic == 0:
+                raise ValueError("use on tic 0 is dropped by the engine")
+            cmds[tic][0] |= BT_USE
+        elif kind == "special":
+            vals = [int(v) for v in args.split(",")]
+            specials.setdefault(tic, []).append((vals[0], vals[1:6]))
+        else:
+            raise ValueError(f"unknown step kind {kind!r}")
+    return [tuple(c) for c in cmds], warps, specials
+
+
 # --- path building ------------------------------------------------------------
 
 def _clamp(v: int, lo: int, hi: int) -> int:
@@ -606,7 +657,7 @@ def pack_cmd(c, basis) -> bytes:
     return bytes([flags]) + bytes(out)
 
 
-def build(mapname: str, cmds, seed: int, cheats: list, warps=None) -> bytes:
+def build(mapname: str, cmds, seed: int, cheats: list, warps=None, specials=None) -> bytes:
     # ZDHD
     zdh = (struct.pack(">HH", DEMOGAMEVERSION, MINVER)
            + mapname.encode("ascii") + b"\x00"
@@ -624,6 +675,9 @@ def build(mapname: str, cmds, seed: int, cheats: list, warps=None) -> bytes:
             x, y = warps[t]
             body += bytes([DEM_WARPCHEAT]) + struct.pack(
                 ">hhh", int(round(x)), int(round(y)), ONFLOORZ_I16)
+        for num, sargs in (specials or {}).get(t, []):
+            body += bytes([DEM_RUNSPECIAL]) + struct.pack(">hB", num, len(sargs))
+            body += b"".join(struct.pack(">i", v) for v in sargs)
         body += bytes([DEM_USERCMD]) + pack_cmd(cmd, basis)
         basis = cmd
     body += bytes([DEM_STOP])
@@ -667,7 +721,11 @@ def main() -> int:
     p.add_argument("--turn", type=int, default=0,
                    help="vantage: view turn from the start angle, angle units "
                         "(65536 = full circle)")
-    p.add_argument("--path", choices=("tour", "spiral", "vantage"), default="tour",
+    p.add_argument("--step", action="append", default=[],
+                   help="script: 'KIND:ARGS@TIC' (repeatable; see build_script)")
+    p.add_argument("--start-angle", type=float, default=None,
+                   help="script: the map's player start angle in degrees (face steps are absolute)")
+    p.add_argument("--path", choices=("tour", "spiral", "vantage", "script"), default="tour",
                    help="tour (default): warp to stops inside the main playable "
                         "area, one full view pan per stop; spiral: the retired "
                         "v1 path (cameras left the map; see perf baseline v2)")
@@ -675,11 +733,28 @@ def main() -> int:
                    help="tour: tics per stop (one full pan; default 100)")
     a = p.parse_args()
 
-    if a.tics < 500 and a.path != "vantage":
+    if a.tics < 500 and a.path not in ("vantage", "script"):
         p.error("--tics must be >= 500 (window 350..2450 needs 2600 for the "
                 "production set; smaller values are for probing only)")
     if a.cheat is None:
         a.cheat = ["noclip2"] if a.path == "spiral" else ["god", "noclip"]
+
+    if a.path == "script":
+        if a.start_angle is None:
+            p.error("--path script needs --start-angle")
+        try:
+            cmds, warps, specials = build_script(a.step, a.start_angle, a.tics)
+        except ValueError as e:
+            p.error(str(e))
+        data = build(a.map, cmds, a.seed, a.cheat, warps, specials)
+        try:
+            with open(a.out, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            print(f"error: cannot write {a.out}: {e}", file=sys.stderr)
+            return 1
+        print(f"wrote {a.out} ({len(data)} bytes): map={a.map} tics={a.tics} path=script steps={len(a.step)}")
+        return 0
 
     if a.path == "vantage":
         try:

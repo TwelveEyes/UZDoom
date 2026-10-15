@@ -27,6 +27,8 @@
 #include "dobject.h"
 
 struct FLevelLocals;
+struct sector_t;
+
 //==========================================================================
 //
 //
@@ -57,6 +59,8 @@ public:
 	virtual void UpdateInterpolation() = 0;
 	virtual void Restore() = 0;
 	virtual void Interpolate(double smoothratio) = 0;
+	// The sector whose plane this interpolation moves (sector plane interpolations only).
+	virtual sector_t *MovedSector() const { return nullptr; }
 
 	virtual void Serialize(FSerializer &arc);
 };
@@ -82,6 +86,14 @@ public:
 	void DoInterpolations(double smoothratio);
 	void RestoreInterpolations();
 	void ClearInterpolations();
+	// Calls 'func' with the sector of every sector plane interpolation.
+	template<class Func> void ForEachMovedSector(Func func)
+	{
+		for (DInterpolation *probe = Head; probe != nullptr; probe = probe->Next)
+		{
+			if (sector_t *sec = probe->MovedSector()) func(sec);
+		}
+	}
 };
 
 

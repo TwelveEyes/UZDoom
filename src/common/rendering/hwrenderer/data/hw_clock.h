@@ -56,6 +56,18 @@ struct LevelMeshPerfStats
 };
 extern int rendered_levelmesh;	// levelmesh draws this frame
 
+// Levelmesh dirty-state stream of this frame (LevelMesh_UpdateState), summed
+// over its calls (one per rendered viewpoint).
+struct LevelMeshStateStats
+{
+	unsigned candidates = 0;	// sector records compared
+	unsigned sectors = 0;		// sector records uploaded
+	unsigned clusters = 0;		// cluster z-ranges uploaded
+	size_t bytes = 0;			// staging bytes uploaded
+};
+extern LevelMeshStateStats lmStateStats;
+extern glcycle_t LevelMeshStateTime;
+
 void ResetProfilingData();
 void CheckBench();
 void  checkBenchActive();

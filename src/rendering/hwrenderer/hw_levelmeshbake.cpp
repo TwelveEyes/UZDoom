@@ -32,6 +32,7 @@
 
 // HEADER FILES ------------------------------------------------------------
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
@@ -122,6 +123,12 @@ struct CandidateList
 // the closest representable sum within one ulp is accepted as inexact.
 enum ESolve { SOLVE_EXACT, SOLVE_ULP, SOLVE_FAIL };
 
+// LM_PlaneZ of a plane ref, from the level's current planes.
+float PlaneRefZ(FLevelLocals *Level, uint32_t ref, float x, float y)
+{
+	return LM_PlaneZ(LM_PackPlane(Level->sectors[ref >> 1].GetSecPlane(ref & 1)), x, y);
+}
+
 ESolve SolveOffset(float base, float target, float &off)
 {
 	off = target - base;
@@ -169,6 +176,7 @@ struct Baker
 	{
 		for (auto &r : surf.planeRefs) r = LM_NOPLANE;
 		surf.vRef = LM_NOPLANE;
+		surf.edgeTop = LM_NOPLANE;
 		surf.firstVertex = Out->Vertices.Size();
 		surf.firstIndex = Out->Indices.Size();
 		return Out->Surfaces.Size();
@@ -245,6 +253,7 @@ struct Baker
 	void ProcessSides();
 	void BakeWall(HWWall &w);
 	uint32_t WallVRef(HWWall &w, sector_t *rf, sector_t *rb);
+	uint32_t WallEdgeTop(HWWall &w, sector_t *rf, sector_t *rb, uint32_t firstv, int n);
 	void ProcessFlats();
 	void BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor, bool portal);
 	void ComputeOwnership();
@@ -341,6 +350,49 @@ static bool HasWallColorEffects(side_t *side, int tier, sector_t *frontsector)
 	if (uint32_t(side->GetSpecialColor(tier, side_t::wallbottom, frontsector)) != 0xffffffffu) return true;
 	if ((uint32_t(side->GetAdditiveColor(tier, frontsector)) & 0xffffff) != 0) return true;
 	return side->textures[tier].TextureFx.AddColor.a != 0;
+}
+
+//==========================================================================
+//
+// The plane that bounds a wall tier from above (LevelMeshSurface::edgeTop).
+// HWWall::Process emits an upper tier only below the front ceiling, a lower
+// tier only below the back floor, a one-sided wall only below the ceiling.
+// The bound is dropped when a non-top vertex already lies above it at load
+// (a top clipped by another plane, an offset anchor): clamping would move it.
+//
+//==========================================================================
+
+uint32_t Baker::WallEdgeTop(HWWall &w, sector_t *rf, sector_t *rb, uint32_t firstv, int n)
+{
+	sector_t *sec = nullptr;
+	int plane = sector_t::ceiling;
+	switch (w.type)
+	{
+	case RENDERWALL_TOP:
+	case RENDERWALL_M1S:
+		sec = rf;
+		break;
+	case RENDERWALL_BOTTOM:
+		sec = rb;
+		plane = sector_t::floor;
+		break;
+	default:
+		return LM_NOPLANE;
+	}
+	if (sec == nullptr) return LM_NOPLANE;
+	LevelMeshPlane edge = LM_PackPlane(sec->GetSecPlane(plane));
+	for (int i = 0; i < n; i++)
+	{
+		const LevelMeshVertex &v = Out->Vertices[firstv + i];
+		if ((v.anchor >> LMV_ROLESHIFT) == LMV_TOP) continue;
+		float z = PlaneRefZ(Level, v.anchor & LMV_REFMASK, v.x, v.y) + v.zOffset;
+		if (z > LM_PlaneZ(edge, v.x, v.y))
+		{
+			Out->Stats.edgeUnbounded++;
+			return LM_NOPLANE;
+		}
+	}
+	return LM_PlaneRef(sec->Index(), plane);
 }
 
 //==========================================================================
@@ -544,6 +596,7 @@ void Baker::BakeWall(HWWall &w)
 	if (w.glseg.x1 != w.glseg.x2 && (w.ztop[0] - w.zbottom[0]) != (w.ztop[1] - w.zbottom[1])) surf.flags |= LMSF_SKEW;
 	surf.vRef = vref;
 	surf.vScale = vscale;
+	surf.edgeTop = WallEdgeTop(w, rf, rb, firstv, n);
 	surf.textureId = w.texture->GetID().GetIndex();
 	surf.sideRef = uint32_t(side->Index()) * 3 + tier;
 	surf.lightSector = rf->Index();
@@ -806,8 +859,11 @@ void Baker::ComputeOwnership()
 
 float LevelMeshBake::VertexZ(FLevelLocals *Level, const LevelMeshVertex &v) const
 {
-	uint32_t ref = v.anchor & LMV_REFMASK;
-	return LM_PlaneZ(LM_PackPlane(Level->sectors[ref >> 1].GetSecPlane(ref & 1)), v.x, v.y) + v.zOffset;
+	float z = PlaneRefZ(Level, v.anchor & LMV_REFMASK, v.x, v.y) + v.zOffset;
+	uint32_t edge = Surfaces[v.surface].edgeTop;
+	if (edge != LM_NOPLANE && (v.anchor >> LMV_ROLESHIFT) != LMV_TOP)
+		z = std::min(z, PlaneRefZ(Level, edge, v.x, v.y));
+	return z;
 }
 
 float LevelMeshBake::VertexV(FLevelLocals *Level, const LevelMeshVertex &v, float z) const
@@ -827,9 +883,9 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 		mapname, s.sidesProcessed, s.polySidesSkipped, s.translucentWalls, s.portalWalls, s.fogWalls, s.upperMissing, s.lowerMissing,
 		s.translucentFlats, s.portalFlats, s.untexturedFlats, s.heightsecSurfaces);
 	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier)\n", mapname, s.deferredSurfaces, s.deferredByTier);
-	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u\n",
+	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u; unbounded wall tops %u\n",
 		mapname, s.zMismatch, s.vMismatch, s.zInexact, s.vInexact, s.offsetAnchored[LMV_BOTTOM], s.offsetAnchored[LMV_TOP], s.offsetAnchored[LMV_SIDE], s.offsetAnchored[LMV_FLAT],
-		s.vScaleInconsistent, s.planeRefOverflow, s.ffloorVRefHeuristic);
+		s.vScaleInconsistent, s.planeRefOverflow, s.ffloorVRefHeuristic, s.edgeUnbounded);
 }
 
 bool LevelMeshBake::ExportObj(FLevelLocals *Level, const char *filename) const

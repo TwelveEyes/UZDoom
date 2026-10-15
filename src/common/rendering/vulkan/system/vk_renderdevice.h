@@ -94,6 +94,7 @@ public:
 	void SetLevelMesh(hwrenderer::LevelMesh* mesh) override;
 	bool SupportsLevelMesh(bool report) override;
 	void SetLevelMeshData(const LevelMeshUploadData *data) override;
+	size_t UpdateLevelMeshState(const LevelMeshStateUpdate &update) override;
 	bool LevelMeshResident(uint64_t id) override;
 	void PrintLevelMeshStats() override;
 	bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) override;

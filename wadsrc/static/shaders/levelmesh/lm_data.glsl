@@ -45,6 +45,8 @@ struct LMSurface
 	float normal[3];
 	uint firstVertex, numVertices;
 	uint firstIndex, numIndices;
+	uint edgeTop;
+	uint reserved[3];
 };
 
 struct LMCluster
@@ -70,8 +72,11 @@ struct LMSectorState
 	float texZ[2];
 	int lightLevel;
 	int planeLight[2];
-	uint flags;
-	uint reserved[2];
+	uint lightColor;
+	uint fadeColor;
+	uint colormap;
+	uint glowColor[2];
+	float glowHeight[2];
 };
 
 struct LMPlaneXform

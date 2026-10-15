@@ -52,3 +52,20 @@ Remove the interim lighting from ticket 08. The fullbright override stays as a d
     deferral, belongs here or in 11.
   - Use the `WALLF_EXTCOLOR` hint carefully: the map loader sets it on every side
     (`sector_t::CheckExColorFlag`).
+- 2026-10-14 (from 09): the sector record streams dirty-only.
+  - `LevelMesh_FillSectorState` (`hw_levelmeshstate.cpp`) is the single packer. The stream
+    memcmps whole records, so new light ingredients only need to be packed there; growing
+    `LevelMeshSectorState` needs no other change (`scatter.comp` copies `LM_SECTOR_WORDS`
+    words per record).
+  - Already packed (20 words): planes, texZ, `lightlevel`, floor / ceiling light, the
+    colormap (`lightColor`, `fadeColor`, and `colormap` = desaturation | blend factor << 8 |
+    fog density << 16), and per-plane `glowColor` / `glowHeight`. No sector flags yet.
+  - Light thinkers (`STAT_LIGHT`) are candidates every frame, so MAP23's lights reach the GPU
+    on the next frame.
+  - The light / colormap / glow setters (`SetLightLevel`, `ChangeLightLevel`, `SetGlowColor`,
+    `SetGlowHeight`, `::SetColor`, `::SetFade`) call `LevelMesh_SectorChanged`, so ACS and
+    the light specials arrive next frame. Direct field writes that bypass them only arrive
+    through the round-robin sweep (`lm_statesweep`, default 512 sectors per frame). If a new
+    ingredient has its own setter, hook it the same way.
+  - `LevelMeshSurface` is 28 words now: `edgeTop` plus `reserved[3]` are free for per-surface
+    shading data.

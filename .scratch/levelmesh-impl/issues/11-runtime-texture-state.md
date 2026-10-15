@@ -63,3 +63,18 @@
     program (`VkShaderManager::GetLevelMesh`).
   - The masked bucket now follows the classic list rule (two-sided mids, masked 3D-floor sides,
     3D-floor and portal planes), not `isMasked()`.
+- 2026-10-14 (from 09):
+  - **Clamp-Y is height-dependent in the classic** (`HWWall::CheckTexturePosition`).
+    `lm_frag.glsl` (`LM_SAMPLER`) now drops the baked Y clamp per fragment when v leaves
+    [0, 1]. Side offsets and scales feed the same rule, so streaming side state may need it
+    too (CLAMPX for skybox sectors and `M2SNF`).
+  - **Reuse the state stream for side state and plane xforms:**
+    - `VkLevelMesh::UpdateState` plus `scatter.comp`: one staging allocation, one dispatch,
+      recorded in the transfer commands.
+    - `LevelMesh_UpdateState`: candidates, a CPU mirror, and a memcmp.
+    - `DWallScrollInterpolation` / `DSectorScrollInterpolation` are in the interpolator list,
+      like the plane interpolations `FInterpolator::ForEachMovedSector` already walks.
+  - **Animated textures that block moving-sector A/B** until this ticket:
+    - DOOM2 MAP30: the face wall, slime floors and green walls (`ab_manifest_movers.json`,
+      MAP30 fails from tick 5).
+    - DOOM2 MAP01: `FWATER` in the tour demo.

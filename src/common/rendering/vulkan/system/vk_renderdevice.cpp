@@ -556,6 +556,11 @@ void VulkanRenderDevice::SetLevelMeshData(const LevelMeshUploadData *data)
 		mLevelMesh->SetData(data);
 }
 
+size_t VulkanRenderDevice::UpdateLevelMeshState(const LevelMeshStateUpdate &update)
+{
+	return mLevelMesh ? mLevelMesh->UpdateState(update) : 0;
+}
+
 bool VulkanRenderDevice::LevelMeshResident(uint64_t id)
 {
 	return mLevelMesh && mLevelMesh->IsResident(id);

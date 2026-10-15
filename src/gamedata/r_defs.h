@@ -51,6 +51,11 @@ struct sector_t;
 class AActor;
 struct FSection;
 struct FLevelLocals;
+
+// Levelmesh dirty state stream: a sector's GPU-visible state changed
+// (hw_levelmeshstate.cpp; a no-op unless the level has a levelmesh).
+void LevelMesh_SectorChanged(sector_t *sec);
+
 struct LightmapSurface;
 struct LightProbe;
 struct FDynamicLight;
@@ -952,11 +957,13 @@ public:
 	void SetGlowHeight(int pos, float height)
 	{
 		planes[pos].GlowHeight = height;
+		LevelMesh_SectorChanged(this);
 	}
 
 	void SetGlowColor(int pos, PalEntry color)
 	{
 		planes[pos].GlowColor = color;
+		LevelMesh_SectorChanged(this);
 	}
 
 	FTextureID GetTexture(int pos) const
@@ -1003,11 +1010,13 @@ public:
 	void ChangeLightLevel(int newval)
 	{
 		lightlevel = ClampLight(lightlevel + newval);
+		LevelMesh_SectorChanged(this);
 	}
 
 	void SetLightLevel(int newval)
 	{
 		lightlevel = ClampLight(newval);
+		LevelMesh_SectorChanged(this);
 	}
 
 	int GetLightLevel() const

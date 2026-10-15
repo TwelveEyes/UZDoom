@@ -44,3 +44,9 @@
     once per light layer with split planes.
   - 3D-floor flats are baked double-sided on the target sector's triangulation. Translucent ones
     are in `TranslucentFlats`.
+- 2026-10-14 (from 09): a moving 3D floor's control sector already streams its planes (the
+  anchor planes are the model sector's), and its clusters get their z refreshed.
+  - `RENDERWALL_FFBLOCK` sides have no `edgeTop` (`LevelMeshSurface`): a 3D-floor side clipped
+    by a plane that later crosses it is not collapsed.
+  - The classic clipping there is a min / max over the rover and the sector planes. Model it
+    when 3D floors move into the mesh.

@@ -44,7 +44,7 @@ def parse(lines):
                          ("v_mismatch", r"v mismatches (\d+)"), ("z_ulp", r"within 1 ulp: z (\d+)"), ("v_ulp", r"within 1 ulp: z \d+, v (\d+)"), ("off_bottom", r"offset-anchored bottom (\d+)"),
                          ("off_top", r" top (\d+) side"), ("off_side", r" side (\d+) flat"), ("off_flat", r" flat (\d+);"),
                          ("vscale_inconsistent", r"vScale inconsistent (\d+)"), ("planeref_overflow", r"planeRef overflow (\d+)"),
-                         ("ff_vref_heuristic", r"3D vRef heuristic (\d+)")):
+                         ("ff_vref_heuristic", r"3D vRef heuristic (\d+)"), ("edge_unbounded", r"unbounded wall tops (\d+)")):
             if "LevelMeshBake" in l:
                 m = re.search(pat, l)
                 if m and key not in d:

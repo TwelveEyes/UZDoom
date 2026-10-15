@@ -38,6 +38,7 @@
 
 struct FPortalSceneState;
 struct LevelMeshUploadData;
+struct LevelMeshStateUpdate;
 struct LevelMeshView;
 struct LevelMeshPerfStats;
 class FSkyVertexBuffer;
@@ -183,6 +184,8 @@ public:
 	// missing features once per device when report is set.
 	virtual bool SupportsLevelMesh(bool report) { return false; }
 	virtual void SetLevelMeshData(const LevelMeshUploadData *data) { }	// nullptr releases
+	// Streams dirty state records into the resident levelmesh; returns the bytes uploaded.
+	virtual size_t UpdateLevelMeshState(const LevelMeshStateUpdate &update) { return 0; }
 	virtual bool LevelMeshResident(uint64_t id) { return false; }
 	virtual void PrintLevelMeshStats() { }
 	// Draws the levelmesh for the current view into the scene (opaque and
