@@ -101,6 +101,21 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   (ticket 12-C) 44 fail: the 20 new ones are 1-row edge specks (4-8 px) where a 3D plane cuts
   a wall (DC2). Compare later runs with `ab_sheet.py failsets`; `lm_3dfloors` (1 sides, 2
   planes, level setup) bisects them.
+- **Polyobjects (ticket 13):** `ab_manifest_polytest.json` replays `demos/polytest/` over
+  `wads/polytest.wad`. `make_polytest.py` writes both (copy the wad into the build's `wads/`
+  too). 12 rooms, one polyobject each (two in the mirror room):
+  - a static box with a wall scroller (`Scroll_Wall` on a polyobject side);
+  - movement: a slide, a rotation, a swing door, a mirrored pair, and a door sliding into the
+    void behind a wall;
+  - a box moving into a sector with other planes and light (the classic splits it per
+    subsector);
+  - a two-sided masked (`MIDGRATE`) box;
+  - a static box under moving planes, under a light / colour change, and one sliding in an
+    `ExtraFloor_LightOnly` room;
+  - `Line_SetTextureOffset` on a polyobject side.
+
+  Before ticket 13 (polyobjects on the classic path on both sides), 155 of 216 ticks fail, all
+  on edge specks: at most 449 px, max delta 53 (run `20261016T193509Z-ab`).
 - **Shader timer in captures:** `P_SetupLevel` stamps `ShaderStartTime` on the real clock, and
   `CheckTimer` restarts the material shader timer until the synthetic `FrameTime` passes it,
   so before 2026-10-15 the warp / shader timer base depended on load time (a slower levelmesh
