@@ -56,6 +56,13 @@
 ** by them and the classic path draws the sector's side tiers and planes,
 ** until the layout is back at the bake.
 **
+** 3D-floor groups (LevelMeshBake::SideFFGroup / SectorFFGroup) are a fifth
+** stream, uploaded as side records after the side tiers. A group's record
+** is LMTS_DEFERRED while a plane, plane texture or side tier it watches
+** differs from the bake (LevelMesh_FillFFGroup); the classic path then draws
+** the group. Candidates: the groups watching a moved sector, a changed
+** plane texture or a changed side tier, and a sweep.
+**
 ** Diagnostics: lm_statefull compares every record every frame, lm_clusterz 0
 ** stops the cluster z refresh, lm_stateupdate 0 freezes the GPU state at the
 ** load values.
@@ -116,6 +123,10 @@ TArray<uint32_t> DirtyXforms;
 TArray<LevelMeshPlaneXform> DirtyXformRecords, PreviousXformRecords;
 TArray<uint32_t> DirtyLights;
 TArray<LevelMeshLight3D> DirtyLightRecords, PreviousLightRecords;
+TArray<uint32_t> DirtyGroups;
+TArray<LevelMeshSideState> DirtyGroupRecords, PreviousGroupRecords;
+TArray<uint32_t> UploadSides;		// DirtySides, then the groups as side records
+TArray<LevelMeshSideState> UploadSideRecords;
 TArray<uint32_t> MovedSectors;		// dirty sectors whose planes moved
 TArray<uint32_t> LayoutChanged;		// sectors whose LayoutMoved flips with this update
 
@@ -271,6 +282,61 @@ void LevelMesh_FillLight3D(FLevelLocals *Level, const LevelMeshLight3DSource &sr
 	if (src.casterFadeWalls && cm.FadeColor != 0) out.flags |= LML3_COPYFOG;
 }
 
+//==========================================================================
+//
+// LevelMesh_FillFFGroup
+//
+//==========================================================================
+
+void LevelMesh_FillFFGroup(FLevelLocals *Level, const LevelMeshBake *bake, unsigned group,
+	const TArray<LevelMeshSectorState> &sectors, LevelMeshSideState &out)
+{
+	out = {};
+	out.flags = LMTS_DEFERRED;
+	if (group >= bake->FFGroupBaked.Size() || !bake->FFGroupBaked[group]) return;
+	for (uint32_t k = bake->FFWatchStart[group]; k < bake->FFWatchStart[group + 1]; k++)
+	{
+		const LevelMeshFFWatch &w = bake->FFWatches[k];
+		switch (w.kind)
+		{
+		case LMFW_PLANE:
+			if ((w.ref >> 1) >= sectors.Size() || memcmp(&sectors[w.ref >> 1].planes[w.ref & 1], &w.plane, sizeof(w.plane)) != 0) return;
+			break;
+		case LMFW_PLANETEX:
+		{
+			if ((w.ref >> 1) >= Level->sectors.Size()) return;
+			sector_t &sec = Level->sectors[w.ref >> 1];
+			if (sec.GetTexture(w.ref & 1).GetIndex() != w.textureId || LevelMesh_HasPlaneColorEffects(&sec, w.ref & 1)) return;
+			break;
+		}
+		case LMFW_TIER:
+		{
+			if (w.ref / 3 >= Level->sides.Size()) return;
+			side_t &side = Level->sides[w.ref / 3];
+			int tier = w.ref % 3;
+			if (side.GetTexture(tier).GetIndex() != w.textureId || (float)side.GetTextureXOffset(tier) != w.xOffset ||
+				(float)side.GetTextureYOffset(tier) != w.yOffset || (float)side.GetTextureXScale(tier) != w.xScale ||
+				(float)side.GetTextureYScale(tier) != w.yScale)
+				return;
+			if (w.colors && LevelMesh_HasWallColorEffects(&side, tier, side.sector)) return;
+			break;
+		}
+		default:
+			return;
+		}
+	}
+	out.flags = 0;
+}
+
+static void SetFFGroupOwned(LevelMeshBake *bake, uint32_t g)
+{
+	if (g >= bake->FFGroupOwned.Size()) return;
+	uint8_t owned = bake->FFGroupBaked[g] && !(bake->Stream.FFGroups.Records[g].flags & LMTS_DEFERRED);
+	if (lm_statelog && owned != bake->FFGroupOwned[g])
+		Printf("Levelmesh state: 3D-floor group %u -> %s\n", g, owned ? "levelmesh" : "classic");
+	bake->FFGroupOwned[g] = owned;
+}
+
 // Whether a sector's 3D-floor layout (the planes the bake split and lit its
 // surfaces by) differs from the bake, in the records last streamed.
 static bool LayoutMoved(const LevelMeshBake *bake, unsigned s)
@@ -332,7 +398,13 @@ void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray
 	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms, const TArray<LevelMeshLight3D> &lights3D)
 {
 	auto &st = bake->Stream;
-	st.Sides.Reset(sides);
+	// The side records: side tiers, then the 3D-floor groups.
+	unsigned ntiers = std::min(sides.Size(), Level->sides.Size() * 3);
+	TArray<LevelMeshSideState> tiers(ntiers, true), groups(sides.Size() - ntiers, true);
+	for (unsigned i = 0; i < ntiers; i++) tiers[i] = sides[i];
+	for (unsigned i = ntiers; i < sides.Size(); i++) groups[i - ntiers] = sides[i];
+	st.Sides.Reset(tiers);
+	st.FFGroups.Reset(groups);
 	st.Xforms.Reset(xforms);
 	st.Lights3D.Reset(lights3D);
 	st.LayoutMoved.Resize(sectors.Size());
@@ -568,7 +640,9 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	if (st.Sectors.Size() != nsec || st.SectorStamp.Size() != nsec || st.ClusterStamp.Size() != ncl || st.LayoutMoved.Size() != nsec ||
 		bake->LayoutStart.Size() != nsec + 1 || bake->LightDependStart.Size() != nsec + 1 || st.Lights3D.Records.Size() != bake->Lights3D.Size() ||
 		bake->ClusterPlaneStart.Size() != (ncl ? ncl + 1 : 0) || bake->SectorClusterStart.Size() != nsec + 1 ||
-		st.Sides.Records.Size() != Level->sides.Size() * 3 || st.Xforms.Records.Size() != nsec * 2) return;
+		st.Sides.Records.Size() != Level->sides.Size() * 3 || st.Xforms.Records.Size() != nsec * 2 ||
+		st.FFGroups.Records.Size() != bake->FFGroupBaked.Size() || bake->FFSectorDependStart.Size() != nsec + 1 ||
+		bake->FFSideDependStart.Size() != Level->sides.Size() + 1) return;
 
 	LevelMeshStateTime.Clock();
 	if (st.Frame != StreamFrame)
@@ -584,6 +658,8 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		st.Xforms.Changed.Clear();
 		std::swap(st.Lights3D.ChangedBefore, st.Lights3D.Changed);
 		st.Lights3D.Changed.Clear();
+		std::swap(st.FFGroups.ChangedBefore, st.FFGroups.Changed);
+		st.FFGroups.Changed.Clear();
 	}
 	if (++st.Stamp == 0)
 	{
@@ -592,6 +668,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		for (auto &s : st.Sides.Stamp) s = 0;
 		for (auto &s : st.Xforms.Stamp) s = 0;
 		for (auto &s : st.Lights3D.Stamp) s = 0;
+		for (auto &s : st.FFGroups.Stamp) s = 0;
 		st.Stamp = 1;
 	}
 	const uint32_t stamp = st.Stamp;
@@ -610,6 +687,9 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	DirtyLights.Clear();
 	DirtyLightRecords.Clear();
 	PreviousLightRecords.Clear();
+	DirtyGroups.Clear();
+	DirtyGroupRecords.Clear();
+	PreviousGroupRecords.Clear();
 	MovedSectors.Clear();
 	LayoutChanged.Clear();
 	unsigned candidates = 0;
@@ -708,6 +788,23 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		},
 		DirtyLights, DirtyLightRecords, PreviousLightRecords);
 
+	// 3D-floor groups watching a moved sector, a changed plane texture or a
+	// changed side tier (the records compared above).
+	auto touchSector = [&](uint32_t s)
+	{
+		for (uint32_t k = bake->FFSectorDependStart[s]; k < bake->FFSectorDependStart[s + 1]; k++) st.FFGroups.Touch(bake->FFSectorDepend[k]);
+	};
+	for (uint32_t s : MovedSectors) touchSector(s);
+	for (uint32_t ref : DirtyXforms) touchSector(ref >> 1);
+	for (uint32_t ref : DirtySides)
+	{
+		uint32_t side = ref / 3;
+		for (uint32_t k = bake->FFSideDependStart[side]; k < bake->FFSideDependStart[side + 1]; k++) st.FFGroups.Touch(bake->FFSideDepend[k]);
+	}
+	candidates += StreamRecords(st.FFGroups, stamp, lm_statefull, recordSweep,
+		[&](unsigned i, LevelMeshSideState &out) { LevelMesh_FillFFGroup(Level, bake, i, st.Sectors, out); },
+		DirtyGroups, DirtyGroupRecords, PreviousGroupRecords);
+
 	for (uint32_t c : DirtyClusters)
 	{
 		auto &cl = bake->Clusters[c];
@@ -719,15 +816,24 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	}
 
 	size_t bytes = 0;
-	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size() || DirtyLights.Size())
+	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size() || DirtyLights.Size() || DirtyGroups.Size())
 	{
+		// The group records follow the side tiers in the side buffer.
+		UploadSides = DirtySides;
+		UploadSideRecords = DirtySideRecords;
+		uint32_t groupBase = Level->sides.Size() * 3;
+		for (unsigned i = 0; i < DirtyGroups.Size(); i++)
+		{
+			UploadSides.Push(groupBase + DirtyGroups[i]);
+			UploadSideRecords.Push(DirtyGroupRecords[i]);
+		}
 		LevelMeshStateUpdate update;
 		update.id = bake->Id;
 		update.sectorIndices = LM_Span(DirtySectors);
 		update.sectors = LM_Span(DirtyRecords);
 		update.clusters = LM_Span(ClusterUpdates);
-		update.sideIndices = LM_Span(DirtySides);
-		update.sides = LM_Span(DirtySideRecords);
+		update.sideIndices = LM_Span(UploadSides);
+		update.sides = LM_Span(UploadSideRecords);
 		update.xformIndices = LM_Span(DirtyXforms);
 		update.xforms = LM_Span(DirtyXformRecords);
 		update.light3DIndices = LM_Span(DirtyLights);
@@ -741,6 +847,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 			for (unsigned i = 0; i < DirtySides.Size(); i++) st.Sides.Records[DirtySides[i]] = PreviousSideRecords[i];
 			for (unsigned i = 0; i < DirtyXforms.Size(); i++) st.Xforms.Records[DirtyXforms[i]] = PreviousXformRecords[i];
 			for (unsigned i = 0; i < DirtyLights.Size(); i++) st.Lights3D.Records[DirtyLights[i]] = PreviousLightRecords[i];
+			for (unsigned i = 0; i < DirtyGroups.Size(); i++) st.FFGroups.Records[DirtyGroups[i]] = PreviousGroupRecords[i];
 			for (uint32_t t : LayoutChanged)
 			{
 				st.LayoutMoved[t] = !st.LayoutMoved[t];
@@ -749,6 +856,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 			DirtySides.Clear();
 			DirtyXforms.Clear();
 			DirtyLights.Clear();
+			DirtyGroups.Clear();
 			LayoutChanged.Clear();
 			for (auto &z : PreviousClusterZ)
 			{
@@ -762,6 +870,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	// layouts (uploaded records only).
 	for (uint32_t ref : DirtySides) SetTierOwned(Level, bake, ref);
 	for (uint32_t ref : DirtyXforms) SetPlaneOwned(bake, ref);
+	for (uint32_t g : DirtyGroups) SetFFGroupOwned(bake, g);
 	for (uint32_t t : LayoutChanged)
 	{
 		if (lm_statelog) Printf("Levelmesh state: sector %u 3D-floor layout %s\n", t, st.LayoutMoved[t] ? "moved: classic" : "at the bake: levelmesh");
@@ -777,11 +886,12 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	st.Sides.Changed.Append(DirtySides);
 	st.Xforms.Changed.Append(DirtyXforms);
 	st.Lights3D.Changed.Append(DirtyLights);
+	st.FFGroups.Changed.Append(DirtyGroups);
 	LevelMeshStateTime.Unclock();
 
 	lmStateStats.candidates += candidates;
 	lmStateStats.sectors += bytes ? DirtySectors.Size() : 0;
-	lmStateStats.sides += DirtySides.Size();
+	lmStateStats.sides += DirtySides.Size() + DirtyGroups.Size();
 	lmStateStats.xforms += DirtyXforms.Size();
 	lmStateStats.clusters += ClusterUpdates.Size();
 	lmStateStats.bytes += bytes;

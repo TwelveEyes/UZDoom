@@ -77,7 +77,7 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_MASKED = 1 << 3,		// masked material bucket (alpha test)
 	LMSF_CLAMPX = 1 << 4,
 	LMSF_CLAMPY = 1 << 5,
-	LMSF_TWOSIDED = 1 << 6,		// no back-face culling (3D-floor flats); otherwise the front is the classic winding
+	LMSF_TWOSIDED = 1 << 6,		// unused (the levelmesh culls back faces; 3D-floor planes are baked once per drawn side)
 	LMSF_GLOW = 1 << 7,		// HWF_GLOW at bake
 	LMSF_HEIGHTSEC = 1 << 8,	// front or back sector has a Boom heightsec (view-dependent in classic, baked unfaked)
 	// 1 << 9 reserved: dither eligibility (ticket 18; WALLF_DITHERTRANS_* is per-frame state)
@@ -121,7 +121,7 @@ struct LevelMeshSurface
 	uint32_t vRef;			// texture-top plane ref (walls), LM_NOPLANE for flats
 	float vScale;			// dv/dz (walls)
 	int32_t textureId;		// untranslated FTextureID
-	uint32_t sideRef;		// side * 3 + tier (side_t::top/mid/bottom), 0xffffffff for flats
+	uint32_t sideRef;		// side * 3 + tier (side_t::top/mid/bottom), 0xffffffff for flats; 3D-floor surfaces: numsides * 3 + group
 	uint32_t lightSector;	// sector providing the base light
 	int32_t lightList;		// LevelMeshLight3D index of the 3D light the classic lights it with, -1 = none (no 3D floors)
 	int32_t lightLevel;		// classic lightlevel at bake (RescaleLightLevel applied; reference only, the resolve recomputes it)

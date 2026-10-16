@@ -79,6 +79,13 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 			}
 		}
 	}
+	// 3D-floor groups: side records after the side tiers (LevelMeshSurface::sideRef).
+	for (unsigned g = 0; g < bake->FFGroupBaked.Size(); g++)
+	{
+		LevelMeshSideState rec;
+		LevelMesh_FillFFGroup(Level, bake, g, sectors, rec);
+		sides.Push(rec);
+	}
 	TArray<LevelMeshLight3D> lights3D(bake->Lights3D.Size(), true);
 	for (unsigned i = 0; i < lights3D.Size(); i++) LevelMesh_FillLight3D(Level, bake->Lights3D[i], false, lights3D[i]);
 	for (auto &surf : bake->Surfaces) use(surf.textureId);

@@ -96,8 +96,11 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   stacked layers with `FF_DOUBLESHADOW`, a moving 3D floor, masked sides, light / color changes
   on a control sector, translucent and fog 3D floors (classic, ticket 16), `ExtraFloor_LightOnly`,
   `FF_UPPERTEXTURE` and an opaque swimmable floor the camera is inside. With every 3D surface
-  on the classic path, 24 of 101 ticks fail only on DC2 texel speckle along the far
-  `CEIL3_5` grid lines (max delta 6); compare later runs with `ab_sheet.py failsets`.
+  on the classic path, 24 of 107 ticks fail only on DC2 texel speckle along the far
+  `CEIL3_5` grid lines (max delta 6). With opaque 3D sides and planes on the levelmesh
+  (ticket 12-C) 44 fail: the 20 new ones are 1-row edge specks (4-8 px) where a 3D plane cuts
+  a wall (DC2). Compare later runs with `ab_sheet.py failsets`; `lm_3dfloors` (1 sides, 2
+  planes, level setup) bisects them.
 - **Shader timer in captures:** `P_SetupLevel` stamps `ShaderStartTime` on the real clock, and
   `CheckTimer` restarts the material shader timer until the synthetic `FrameTime` passes it,
   so before 2026-10-15 the warp / shader timer base depended on load time (a slower levelmesh

@@ -835,10 +835,10 @@ void HWDrawList::Draw(HWDrawInfo *di, FRenderState &state, bool translucent)
 
 //==========================================================================
 //
-// Drops the entries the levelmesh drew (whole side tiers and sector planes
-// the bake owns). Only the plain tier types are claimed: other wall types
-// (3D-floor blocks, fog boundaries, mirrors, ...) always stay classic, even
-// where Baker::BakeWall files them under a tier.
+// Drops the entries the levelmesh drew (whole side tiers, sector planes and
+// 3D-floor groups the bake owns). Only the plain tier types and opaque
+// 3D-floor sides / planes are claimed: other wall types (fog boundaries,
+// mirrors, ...) and everything in the translucent lists stay classic.
 //
 //==========================================================================
 void HWDrawList::RemoveLevelMeshOwned(const LevelMeshBake *bake)
@@ -866,15 +866,27 @@ void HWDrawList::RemoveLevelMeshOwned(const LevelMeshBake *bake)
 				unsigned ref = w->seg->sidedef->Index() * 3 + tier;
 				owned = ref < bake->SideTierOwned.Size() && bake->SideTierOwned[ref];
 			}
+			else if (w->type == RENDERWALL_FFBLOCK && w->seg && w->seg->sidedef)
+			{
+				unsigned s = w->seg->sidedef->Index();
+				uint32_t g = s < bake->SideFFGroup.Size() ? bake->SideFFGroup[s] : ~0u;
+				owned = g < bake->FFGroupOwned.Size() && bake->FFGroupOwned[g];
+			}
 		}
 		else if (item.rendertype == DrawType_FLAT)
 		{
-			// Sector planes only: not 3D-floor planes, not hack fills.
+			// Sector and 3D-floor planes, not hack fills.
 			const HWFlat *f = flats[item.index];
 			if (f->hacktype == 0 && (f->renderflags == SSRF_RENDERFLOOR || f->renderflags == SSRF_RENDERCEILING) && f->sector)
 			{
 				unsigned ref = f->sector->sectornum * 2 + (f->ceiling ? 1 : 0);
 				owned = ref < bake->SectorPlaneOwned.Size() && bake->SectorPlaneOwned[ref];
+			}
+			else if (f->hacktype == 0 && f->renderflags == SSRF_RENDER3DPLANES && f->sector)
+			{
+				unsigned s = f->sector->sectornum;
+				uint32_t g = s < bake->SectorFFGroup.Size() ? bake->SectorFFGroup[s] : ~0u;
+				owned = g < bake->FFGroupOwned.Size() && bake->FFGroupOwned[g];
 			}
 		}
 		if (!owned) drawitems[out++] = item;

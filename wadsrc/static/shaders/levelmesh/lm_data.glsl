@@ -150,7 +150,8 @@ layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolv
 // The surface's current texture (untranslated id) and whether the classic
 // path draws it instead: walls follow their side tier, sector planes their
 // plane (LMSF_STATETEXTURE, LMTS_DEFERRED); surfaces lit by a 3D light
-// follow its sector's 3D-floor layout (LML3_DEFERRED).
+// follow its sector's 3D-floor layout (LML3_DEFERRED); 3D-floor surfaces
+// follow their group's record (sideRef past the side tiers).
 int LM_SurfaceTexture(LMSurface surf)
 {
 	if ((surf.flags & LMSF_STATETEXTURE) == 0u) return surf.textureId;
@@ -161,6 +162,7 @@ int LM_SurfaceTexture(LMSurface surf)
 bool LM_StateDeferred(LMSurface surf)
 {
 	if (surf.lightList >= 0 && (lmLights3D[surf.lightList].flags & LML3_DEFERRED) != 0u) return true;
+	if ((surf.flags & LMSF_3DFLOOR) != 0u) return (lmSides[surf.sideRef].flags & LMTS_DEFERRED) != 0u;
 	if ((surf.flags & LMSF_STATETEXTURE) == 0u) return false;
 	if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) return (lmSides[surf.sideRef].flags & LMTS_DEFERRED) != 0u;
 	return (lmPlaneXforms[surf.planeRefs[0]].flags & LMTS_DEFERRED) != 0u;

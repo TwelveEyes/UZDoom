@@ -188,6 +188,7 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 		(unsigned)LMSF_LIGHT3DLEVEL, (unsigned)LML3_COPYFOG, (unsigned)LML3_DEFERRED);
 	d.AppendFormat("#define LMTE_TEXFMASK 0x%xu\n#define LMTE_FULLBRIGHT 0x%xu\n", (unsigned)LMTE_TEXFMASK, (unsigned)LMTE_FULLBRIGHT);
 	d.AppendFormat("#define LMSF_STATETEXTURE %uu\n#define LMTS_DEFERRED %uu\n", (unsigned)LMSF_STATETEXTURE, (unsigned)LMTS_DEFERRED);
+	d.AppendFormat("#define LMSF_3DFLOOR %uu\n", (unsigned)LMSF_3DFLOOR);
 	d.AppendFormat("#define LMSF_PROGRAMMASK 0x%xu\n#define LMSF_PROGRAMSHIFT %uu\n#define LMP_DEFAULT %uu\n",
 		(unsigned)LMSF_PROGRAMMASK, (unsigned)LMSF_PROGRAMSHIFT, (unsigned)LMP_DEFAULT);
 	d.AppendFormat("#define LMSD_ABSLIGHTING %uu\n#define LMSD_ABSLIGHTING_TIER %uu\n#define LMSD_NOFAKECONTRAST %uu\n",

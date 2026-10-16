@@ -91,3 +91,33 @@
   - A/B (full lighting): 3dfloortest unchanged fail set (speckle only); Pirates MAP58 26 -> 23
     fails (differing px 8.9M -> 1.3M); MAP43 8 -> 9 (tick 900: a 2x2 speck on a flat now drawn
     by the levelmesh, DC2); DOOM2 MAP01 3, movers unchanged (MAP30 19).
+- 2026-10-16: progress, part C (3D-floor sides and planes on the levelmesh).
+  - **3D-floor groups:** a side's 3D-floor sides, and a sector's opaque 3D-floor planes, are
+    drawn by the levelmesh or the classic path together (like a side tier). Their surfaces
+    have `sideRef = numsides * 3 + group`; the group's record is streamed as a side record
+    after the side tiers (`LevelMesh_FillFFGroup`, `LevelMeshStateStream::FFGroups`) and is
+    `LMTS_DEFERRED` while one of its watches (`LevelMeshFFWatch`) differs from the bake:
+    the front / back sectors' planes and their 3D floors' model planes, the model plane
+    textures (planes), the side's tiers and the 3D floors' master side mid tiers (sides:
+    texture, offsets, scales; colors). Candidates: groups watching a moved sector, a changed
+    plane texture or side tier, and a sweep. `HWDrawList::RemoveLevelMeshOwned` drops
+    `RENDERWALL_FFBLOCK` walls and `SSRF_RENDER3DPLANES` flats of owned groups.
+    So a moving 3D floor is drawn classic while away from its bake position (as the 3D
+    lights already were); `edgeTop` for FFBLOCK sides and the vRef heuristic only matter at
+    the bake position.
+  - **Planes:** baked once per side `HWFlat::ProcessSector` draws them from (its range picks
+    at the sector's center, `FF_INVERTPLANES` / `FF_BOTHPLANES`), one-sided with the floor /
+    ceiling winding: the levelmesh culls back faces, and `LMSF_TWOSIDED` drew planes from
+    sides the classic does not (inside a 3D floor). Lit by `P_GetPlaneLight` at the plane
+    (from below for the bottom), always its level, keeping the sector's fade color
+    (`resolve.comp`). Deferred at bake: sectors whose picks differ in a fullbright scene (fog
+    3D floors skipped), `FF_FIX` / `FF_FADEWALLS` (colormap carried between 3D planes).
+  - **Sides:** light from the upper tier's side light (`HWWall::Process`), texture id the
+    untranslated side upper / lower or master mid that matches (animation follows).
+  - FFBLOCK sides no longer share `sideRef` with their side's mid tier, which had deferred
+    every mid texture of a side with 3D-floor sides.
+  - Pirates MAP43: 660 -> 0 deferred surfaces, MAP58 -> 0 (391 / 1298 groups, none deferred at
+    bake). A/B: MAP43 9 -> 8 fails, MAP58 23 (same set), DOOM2 MAP01 3, movers unchanged.
+    3dfloortest 24 -> 44: the 20 new fails are 1-row edge specks where a 3D plane cuts a
+    wall (4-8 px, delta 3-17, DC2); `lm_3dfloors 1` (sides only) adds none. Room 5's moving
+    3D floor switches its groups to classic and back (`lm_statelog`).

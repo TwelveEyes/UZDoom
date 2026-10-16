@@ -75,6 +75,9 @@ struct LevelMeshBakeStats
 	unsigned light3DSurfaces = 0;				// surfaces lit by one (lightList >= 0)
 	unsigned bandedWalls = 0;					// walls drawn with the classic split planes (LMSF_LIGHTLIST)
 	unsigned edgeClamped = 0;					// tiers with an edgeClamp (HWWall::Process tier clamp)
+	unsigned ffGroups = 0, ffGroupsDeferred = 0;	// 3D-floor groups, of those deferred at bake
+	unsigned ffWatches = 0;
+	unsigned ffFlatsNotPicked = 0;				// opaque 3D-floor planes the classic never draws (ProcessSector's range checks)
 	double wallMs = 0, flatMs = 0, totalMs = 0;
 };
 
@@ -161,6 +164,28 @@ struct LevelMeshLayoutPlane
 	LevelMeshPlane plane;
 };
 
+// What a 3D-floor group's baked surfaces assume (LevelMeshBake::FFWatches):
+// a plane at its bake value (the classic clips and picks 3D-floor sides and
+// planes by it), a plane texture, or a side tier's texture / offsets /
+// scales (the u / v of a 3D-floor side come from its side's and the 3D
+// floor's master side's offsets).
+enum ELevelMeshFFWatchKind : uint32_t
+{
+	LMFW_PLANE,			// ref = plane ref
+	LMFW_PLANETEX,		// ref = plane ref; also its plane colors
+	LMFW_TIER,			// ref = side * 3 + tier; with 'colors' also the side colors of that tier
+};
+
+struct LevelMeshFFWatch
+{
+	uint32_t kind;
+	uint32_t ref;
+	LevelMeshPlane plane;
+	int32_t textureId;
+	float xOffset, yOffset, xScale, yScale;
+	bool colors;
+};
+
 // The dirty state stream's bookkeeping (hw_levelmeshstate.cpp).
 struct LevelMeshStateStream
 {
@@ -177,6 +202,7 @@ struct LevelMeshStateStream
 	LevelMeshRecordStream<LevelMeshSideState> Sides;		// side * 3 + tier
 	LevelMeshRecordStream<LevelMeshPlaneXform> Xforms;		// plane ref
 	LevelMeshRecordStream<LevelMeshLight3D> Lights3D;		// LevelMeshBake::Lights3D
+	LevelMeshRecordStream<LevelMeshSideState> FFGroups;		// 3D-floor groups (GPU side record numsides * 3 + group)
 	TArray<uint8_t> LayoutMoved;			// per sector: its 3D-floor layout differs from the bake (LML3_DEFERRED)
 	TArray<uint32_t> LayoutRecheck;			// sectors whose layout must be compared again (an update that was not uploaded)
 };
@@ -246,6 +272,22 @@ public:
 	TArray<uint32_t> LayoutDependStart, LayoutDepend;
 	TArray<uint32_t> LightDependStart, LightDepend;
 
+	// 3D-floor groups: the 3D-floor sides of one side, and the opaque
+	// 3D-floor planes of one sector, are drawn by the levelmesh or by the
+	// classic path together (like a side tier). A group's surfaces have
+	// sideRef = numsides * 3 + group: its streamed record
+	// (LevelMesh_FillFFGroup) is LMTS_DEFERRED while one of its watches
+	// differs from the bake (a moving 3D floor, a texture change), which
+	// hides them and gives the classic draw lists back the group.
+	TArray<uint32_t> SideFFGroup;		// per side: group, ~0u = none
+	TArray<uint32_t> SectorFFGroup;		// per sector: group, ~0u = none
+	TArray<uint8_t> FFGroupBaked;		// per group: all its surfaces are drawable at bake
+	TArray<uint8_t> FFGroupOwned;		// per group: the levelmesh draws it now
+	TArray<uint32_t> FFWatchStart;		// group -> watches (CSR)
+	TArray<LevelMeshFFWatch> FFWatches;
+	TArray<uint32_t> FFSectorDependStart, FFSectorDepend;	// sector -> groups watching its planes
+	TArray<uint32_t> FFSideDependStart, FFSideDepend;		// side -> groups watching its tiers
+
 	uint64_t Id = 0;				// unique per bake (backend residency)
 	bool GeometryReleased = false;	// Vertices / Indices freed after the upload
 
@@ -292,6 +334,11 @@ void LevelMesh_ReleaseResources(FLevelLocals *Level);
 void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out);
 void LevelMesh_FillSideState(const LevelMeshBake *bake, side_t &side, int tier, LevelMeshSideState &out);
 void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos, LevelMeshPlaneXform &out);
+// A 3D-floor group's record (LevelMeshBake::SideFFGroup): LMTS_DEFERRED
+// while a watch differs. 'sectors': the sector records the planes are
+// compared with (as uploaded).
+void LevelMesh_FillFFGroup(FLevelLocals *Level, const LevelMeshBake *bake, unsigned group,
+	const TArray<LevelMeshSectorState> &sectors, LevelMeshSideState &out);
 // 'layoutMoved': the light's sector's 3D-floor layout differs from the bake.
 void LevelMesh_FillLight3D(FLevelLocals *Level, const LevelMeshLight3DSource &src, bool layoutMoved, LevelMeshLight3D &out);
 

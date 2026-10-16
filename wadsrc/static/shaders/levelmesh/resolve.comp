@@ -437,7 +437,10 @@ LMResolved Resolve(LMSurface surf)
 		{
 			LMLight3D light = lmLights3D[surf.lightList];
 			if ((surf.flags & LMSF_LIGHT3DLEVEL) != 0u) lightlevel = RescaleLightLevel(light.lightLevel);
+			uint fade = cm.fadeColor;
 			CopyFrom3DLight(cm, light);
+			// HWFlat::ProcessSector keeps the sector's fade color on 3D-floor planes.
+			if ((surf.flags & LMSF_3DFLOOR) != 0u) cm.fadeColor = fade;
 		}
 		// The current animation frame (LevelMeshTextureEntry follows it).
 		if ((lmTextures[LM_SurfaceTexture(surf)].layers & LMTE_FULLBRIGHT) != 0u)

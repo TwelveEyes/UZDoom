@@ -76,6 +76,9 @@ CVAR(Int, lm_programs, 7, CVAR_NOSAVE)
 // Debug: draw surfaces lit by a 3D light through the levelmesh (read at
 // level setup); 0 leaves them on the classic path.
 CVAR(Bool, lm_light3d, true, CVAR_NOSAVE)
+// Debug: 3D-floor groups the levelmesh draws (read at level setup): 1 sides,
+// 2 opaque planes; the others stay on the classic path.
+CVAR(Int, lm_3dfloors, 3, CVAR_NOSAVE)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -291,13 +294,118 @@ struct Baker
 		assert(res != SOLVE_FAIL);
 	}
 
+	// 3D-floor groups (LevelMeshBake::SideFFGroup / SectorFFGroup) and what
+	// their baked surfaces assume (LevelMeshFFWatch).
+	TArray<TArray<LevelMeshFFWatch>> groupWatches;
+	TArray<uint8_t> groupForceDeferred;
+
+	uint32_t NewFFGroup()
+	{
+		groupWatches.Reserve(1);
+		groupForceDeferred.Push(0);
+		return groupWatches.Size() - 1;
+	}
+
+	static void WatchPlane(TArray<LevelMeshFFWatch> &list, sector_t *sec, int pos, uint32_t kind = LMFW_PLANE)
+	{
+		if (sec == nullptr) return;
+		uint32_t ref = LM_PlaneRef(sec->Index(), pos);
+		for (auto &w : list)
+			if (w.kind == kind && w.ref == ref) return;
+		LevelMeshFFWatch w = {};
+		w.kind = kind;
+		w.ref = ref;
+		w.plane = LM_PackPlane(sec->GetSecPlane(pos));
+		w.textureId = sec->GetTexture(pos).GetIndex();
+		list.Push(w);
+	}
+
+	// A sector's planes and its 3D floors' model planes (P_Recalculate3DFloors
+	// orders and clips the 3D floors by them; the classic picks and clips the
+	// 3D-floor sides and planes by them).
+	static void WatchLayout(TArray<LevelMeshFFWatch> &list, sector_t *sec)
+	{
+		if (sec == nullptr) return;
+		WatchPlane(list, sec, sector_t::floor);
+		WatchPlane(list, sec, sector_t::ceiling);
+		for (auto rover : sec->e->XFloor.ffloors)
+		{
+			WatchPlane(list, rover->top.model, rover->top.isceiling);
+			WatchPlane(list, rover->bottom.model, rover->bottom.isceiling);
+		}
+	}
+
+	static void WatchTier(TArray<LevelMeshFFWatch> &list, side_t *side, int tier, bool colors)
+	{
+		if (side == nullptr) return;
+		uint32_t ref = side->Index() * 3 + tier;
+		for (auto &w : list)
+		{
+			if (w.kind == LMFW_TIER && w.ref == ref)
+			{
+				w.colors |= colors;
+				return;
+			}
+		}
+		LevelMeshFFWatch w = {};
+		w.kind = LMFW_TIER;
+		w.ref = ref;
+		w.textureId = side->GetTexture(tier).GetIndex();
+		w.xOffset = (float)side->GetTextureXOffset(tier);
+		w.yOffset = (float)side->GetTextureYOffset(tier);
+		w.xScale = (float)side->GetTextureXScale(tier);
+		w.yScale = (float)side->GetTextureYScale(tier);
+		w.colors = colors;
+		list.Push(w);
+	}
+
+	// The group of a side's 3D-floor sides (HWWall::DoFFloorBlocks: the
+	// front and back sectors' planes and 3D floors; BuildFFBlock: the side's
+	// tiers and the 3D floors' master sides).
+	uint32_t SideGroup(side_t *side, sector_t *rf, sector_t *rb)
+	{
+		uint32_t &g = Out->SideFFGroup[side->Index()];
+		if (g != ~0u) return g;
+		g = NewFFGroup();
+		if (!(lm_3dfloors & 1)) groupForceDeferred[g] = 1;
+		auto &list = groupWatches[g];
+		WatchLayout(list, rf);
+		WatchLayout(list, rb);
+		WatchTier(list, side, side_t::top, false);
+		WatchTier(list, side, side_t::mid, true);	// HWWall::RenderTexturedWall colors (renderwalltotier: mid)
+		WatchTier(list, side, side_t::bottom, false);
+		for (sector_t *s : { rf, rb })
+		{
+			if (s == nullptr) continue;
+			for (auto rover : s->e->XFloor.ffloors)
+				if (rover->master && rover->master->sidedef[0]) WatchTier(list, rover->master->sidedef[0], side_t::mid, false);
+		}
+		return g;
+	}
+
+	uint32_t SectorGroup(sector_t *sec)
+	{
+		uint32_t &g = Out->SectorFFGroup[sec->Index()];
+		if (g != ~0u) return g;
+		g = NewFFGroup();
+		if (!(lm_3dfloors & 2)) groupForceDeferred[g] = 1;
+		WatchLayout(groupWatches[g], sec);
+		return g;
+	}
+
+	uint32_t GroupSideRef(uint32_t g) const
+	{
+		return Level->sides.Size() * 3 + g;
+	}
+
 	void ProcessSides();
 	void BakeWall(HWWall &w);
 	uint32_t WallVRef(HWWall &w, sector_t *rf, sector_t *rb);
 	uint32_t WallEdgeTop(HWWall &w, sector_t *rf, sector_t *rb, uint32_t firstv, int n);
 	void ProcessFlats();
-	void BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor, bool portal);
+	void BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, int lmplane, F3DFloor *rover, bool portal);
 	void ComputeOwnership();
+	void BuildFFTables();
 	void BuildLight3DTables();
 };
 
@@ -318,6 +426,10 @@ void Baker::ProcessSides()
 	for (auto &p : Out->PlaneProgram) p = -2;
 	Out->PlanePortal.Resize(Level->sectors.Size() * 2);
 	for (auto &p : Out->PlanePortal) p = 0;
+	Out->SideFFGroup.Resize(Level->sides.Size());
+	for (auto &g : Out->SideFFGroup) g = ~0u;
+	Out->SectorFFGroup.Resize(Level->sectors.Size());
+	for (auto &g : Out->SectorFFGroup) g = ~0u;
 
 	for (auto &side : Level->sides)
 	{
@@ -709,6 +821,8 @@ void Baker::BakeWall(HWWall &w)
 	if (overflow) st.planeRefOverflow++;
 
 	int tier = w.type == RENDERWALL_TOP ? side_t::top : w.type == RENDERWALL_BOTTOM ? side_t::bottom : side_t::mid;
+	// HWWall::Process lights 3D-floor sides with the upper tier's side light.
+	int lightTier = is3d ? side_t::top : tier;
 	surf.flags = LMSK_WALL | (uint32_t(w.type) << LMSF_WALLTYPESHIFT);
 	if (is3d) surf.flags |= LMSF_3DFLOOR;
 	// The classic list rule (HWDrawInfo::AddWall): only two-sided mid textures
@@ -738,12 +852,35 @@ void Baker::BakeWall(HWWall &w)
 	// w.texture is the frame current at bake.
 	FTextureID sideTex = side->GetTexture(tier);
 	if (!is3d && TexMan.GetGameTexture(sideTex, true) == w.texture) surf.textureId = sideTex.GetIndex();
+	else if (is3d)
+	{
+		// HWWall::BuildFFBlock takes the side's upper / lower texture or the
+		// 3D floor's master side's mid texture: the untranslated one of those.
+		surf.textureId = w.texture->GetID().GetIndex();
+		TArray<FTextureID> ids;
+		ids.Push(side->GetTexture(side_t::top));
+		ids.Push(side->GetTexture(side_t::bottom));
+		for (sector_t *s : { rf, rb })
+		{
+			if (s == nullptr) continue;
+			for (auto rover : s->e->XFloor.ffloors)
+				if (rover->master && rover->master->sidedef[0]) ids.Push(rover->master->sidedef[0]->GetTexture(side_t::mid));
+		}
+		for (auto id : ids)
+		{
+			if (id.isValid() && TexMan.GetGameTexture(id, true) == w.texture)
+			{
+				surf.textureId = id.GetIndex();
+				break;
+			}
+		}
+	}
 	else
 	{
 		surf.textureId = w.texture->GetID().GetIndex();
-		if (!is3d) st.wallTextureNotSide++;
+		st.wallTextureNotSide++;
 	}
-	surf.sideRef = uint32_t(side->Index()) * 3 + tier;
+	surf.sideRef = is3d ? GroupSideRef(SideGroup(side, rf, rb)) : uint32_t(side->Index()) * 3 + tier;
 	if (!is3d)
 	{
 		// The texture offsets the baked u / v contain, and the FTexCoordInfo
@@ -810,15 +947,15 @@ void Baker::BakeWall(HWWall &w)
 	}
 	surf.lightLevel = w.lightlevel;
 	surf.relLight = w.rellight;
-	surf.sideLight = (uint16_t)side->Light | (int32_t(side->TierLights[tier]) << 16);
+	surf.sideLight = (uint16_t)side->Light | (int32_t(side->TierLights[lightTier]) << 16);
 	surf.fakeContrast = (uint16_t)side->GetFakeContrastRel(true) | (int32_t(side->GetFakeContrastRel(false)) << 16);
-	surf.sideFlags = SideLightFlags(side, tier);
+	surf.sideFlags = SideLightFlags(side, lightTier);
 	if (w.type == RENDERWALL_M2SNF) surf.flags |= LMSF_NOSECTORFOG;
 	surf.lightmapPage = w.lindex >= 0 ? int(w.lindex) : -1;
-	// Not drawn by the levelmesh yet: 3D floors and light bands (ticket 12),
-	// heightsecs (view-dependent fake, ticket 16), sky-hack mid textures (the
-	// classic draws them with a depth bias, GLDL_MASKEDWALLSOFS).
-	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
+	// Not drawn by the levelmesh yet: light bands (ticket 12), heightsecs
+	// (view-dependent fake, ticket 16), sky-hack mid textures (the classic
+	// draws them with a depth bias, GLDL_MASKEDWALLSOFS).
+	if (surf.flags & (LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
 	if (surf.lightList >= 0 && !lm_light3d) surf.flags |= LMSF_DEFERRED;
 	if ((w.flags & HWWall::HWF_SKYHACK) && w.type == RENDERWALL_M2S) surf.flags |= LMSF_DEFERRED;
 	// HWWall::RenderTexturedWall: clamped two-sided mids also clamp in the shader.
@@ -850,18 +987,22 @@ void Baker::BakeWall(HWWall &w)
 //
 //==========================================================================
 
-void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor, bool portal)
+// h: the side the plane is drawn from (floor: from above, ceiling: from
+// below); model / mplane: the plane; lmindex / lmplane: its lightmap
+// (sub->lightmap[lmplane][lmindex]); rover: the 3D floor of a 3D-floor plane.
+void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, int lmplane, F3DFloor *rover, bool portal)
 {
 	auto &st = Out->Stats;
+	bool ffloor = rover != nullptr;
 	const secplane_t &splane = model->GetSecPlane(mplane);
 	uint32_t ref = LM_PlaneRef(model->Index(), mplane);
 	LevelMeshPlane plane = LM_PackPlane(splane);
 	float diff = (!ffloor && sec->transdoor && h == sector_t::floor) ? -1.f : 0.f;
 
 	LightmapSurface *lm = nullptr;
-	if (sec->HasLightmaps && sub->lightmap[h] && lmindex >= 0)
+	if (sec->HasLightmaps && sub->lightmap[lmplane] && lmindex >= 0)
 	{
-		lm = &sub->lightmap[h][lmindex];
+		lm = &sub->lightmap[lmplane][lmindex];
 		if (lm->Type == ST_NULL) lm = nullptr;
 	}
 
@@ -903,8 +1044,10 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 	}
 	// The classic draws floors and ceilings from one triangulation without
 	// culling. The levelmesh culls back faces, so a ceiling (seen from below)
-	// gets the opposite winding of a floor.
-	bool flip = !ffloor && h == sector_t::ceiling;
+	// gets the opposite winding of a floor. A 3D-floor plane is drawn from
+	// the side(s) HWFlat::ProcessSector picks it for (its view test is the
+	// back-face cull).
+	bool flip = h == sector_t::ceiling;
 	for (unsigned i = 0; i + 2 < gen.indices.Size(); i += 3)
 	{
 		Out->Indices.Push(firstv + gen.indices[i]);
@@ -914,7 +1057,7 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 
 	surf.planeRefs[0] = ref;
 	surf.flags = (h == sector_t::ceiling ? LMSK_CEILING : LMSK_FLOOR);
-	if (ffloor) surf.flags |= LMSF_3DFLOOR | LMSF_TWOSIDED;
+	if (ffloor) surf.flags |= LMSF_3DFLOOR;
 	if (sec->GetHeightSec())
 	{
 		surf.flags |= LMSF_HEIGHTSEC;
@@ -924,7 +1067,17 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 	// HWFlat::ProcessSector: in a sector with 3D floors the plane takes the
 	// colormap and (unless it is the sector's own) the light level of its
 	// 3D light (P_GetPlaneLight).
-	if (!ffloor && sec->e->XFloor.ffloors.Size() > 0 && sec->e->XFloor.lightlist.Size() > 0)
+	if (ffloor)
+	{
+		// HWFlat::SetFrom3DFloor: the light layer at the plane, from below
+		// for a 3D floor's bottom; always its light level.
+		bool top = lmplane == sector_t::floor;	// lightmaps: [floor] for the top, [ceiling] for the bottom
+		lightlist_t *light = P_GetPlaneLight(sec, top ? rover->top.plane : rover->bottom.plane, !top);
+		surf.lightList = int32_t(Light3DIndex(sec, *light));
+		surf.flags |= LMSF_LIGHT3DLEVEL;
+		st.light3DSurfaces++;
+	}
+	else if (sec->e->XFloor.ffloors.Size() > 0 && sec->e->XFloor.lightlist.Size() > 0)
 	{
 		lightlist_t *light = P_GetPlaneLight(sec, &sec->GetSecPlane(h), h == sector_t::ceiling);
 		// The classic floor also takes the 3D light's level for an absolute
@@ -934,7 +1087,7 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 		if (!absolute && light->p_lightlevel != &sec->lightlevel) surf.flags |= LMSF_LIGHT3DLEVEL;
 		st.light3DSurfaces++;
 	}
-	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
+	if (surf.flags & (LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
 	if (surf.lightList >= 0 && !lm_light3d) surf.flags |= LMSF_DEFERRED;
 	FTextureID texid = model->GetTexture(mplane);
 	auto tex = TexMan.GetGameTexture(texid, true);
@@ -955,6 +1108,12 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 		Out->PlanePortal[ref] = portal;
 	}
 	surf.sideRef = 0xffffffffu;
+	if (ffloor)
+	{
+		uint32_t g = SectorGroup(sec);
+		WatchPlane(groupWatches[g], model, mplane, LMFW_PLANETEX);
+		surf.sideRef = GroupSideRef(g);
+	}
 	surf.lightSector = sec->Index();
 	surf.lightLevel = RescaleLightLevel(h == sector_t::floor ? sec->GetFloorLight() : sec->GetCeilingLight());
 	surf.lightmapPage = lm ? int(lm->LightmapNum) : -1;
@@ -968,10 +1127,119 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 	else st.flatSurfaces++;
 }
 
+// The 3D-floor planes HWFlat::ProcessSector draws, without its view test:
+// planes seen from below top to bottom, then planes seen from above bottom
+// to top, each within the range left by the previous one at the sector's
+// center. 'skipFog': as in a fullbright scene (fog 3D floors skipped).
+struct FFPick
+{
+	unsigned k;			// index in ffloors
+	bool top;			// the 3D floor's top plane, else its bottom
+	int drawnAs;		// sector_t::floor: seen from above, ceiling: from below
+	bool operator==(const FFPick &o) const { return k == o.k && top == o.top && drawnAs == o.drawnAs; }
+};
+
+static bool FFTranslucent(F3DFloor *rover)
+{
+	return (rover->flags & (FF_TRANSLUCENT | FF_ADDITIVETRANS | FF_FOG)) || rover->alpha < 255;
+}
+
+static void PickFFPlanes(sector_t &sec, bool skipFog, TArray<FFPick> &out)
+{
+	out.Clear();
+	auto &ffloors = sec.e->XFloor.ffloors;
+	double lastceilingheight = sec.CenterCeiling();
+	double lastfloorheight = sec.CenterFloor();
+	auto usable = [&](F3DFloor *rover)
+	{
+		if ((rover->flags & (FF_EXISTS | FF_RENDERPLANES | FF_THISINSIDE)) != (FF_EXISTS | FF_RENDERPLANES)) return false;
+		return !(skipFog && (rover->flags & FF_FOG));
+	};
+	for (unsigned k = 0; k < ffloors.Size(); k++)
+	{
+		F3DFloor *rover = ffloors[k];
+		if (!usable(rover)) continue;
+		if (!rover->top.copied && (rover->flags & (FF_INVERTPLANES | FF_BOTHPLANES)))
+		{
+			double ff_top = rover->top.plane->ZatPoint(sec.centerspot);
+			if (ff_top < lastceilingheight)
+			{
+				out.Push({ k, true, sector_t::ceiling });
+				lastceilingheight = ff_top;
+			}
+		}
+		if (!rover->bottom.copied && !(rover->flags & FF_INVERTPLANES))
+		{
+			double ff_bottom = rover->bottom.plane->ZatPoint(sec.centerspot);
+			if (ff_bottom < lastceilingheight)
+			{
+				out.Push({ k, false, sector_t::ceiling });
+				lastceilingheight = ff_bottom;
+				if (rover->alpha < 255) lastceilingheight += EQUAL_EPSILON;
+			}
+		}
+	}
+	for (int k = int(ffloors.Size()) - 1; k >= 0; k--)
+	{
+		F3DFloor *rover = ffloors[k];
+		if (!usable(rover)) continue;
+		if (!rover->bottom.copied && (rover->flags & (FF_INVERTPLANES | FF_BOTHPLANES)))
+		{
+			double ff_bottom = rover->bottom.plane->ZatPoint(sec.centerspot);
+			if (ff_bottom > lastfloorheight || (rover->flags & FF_FIX))
+			{
+				out.Push({ unsigned(k), false, sector_t::floor });
+				lastfloorheight = ff_bottom;
+			}
+		}
+		if (!rover->top.copied && !(rover->flags & FF_INVERTPLANES))
+		{
+			double ff_top = rover->top.plane->ZatPoint(sec.centerspot);
+			if (ff_top > lastfloorheight)
+			{
+				out.Push({ unsigned(k), true, sector_t::floor });
+				lastfloorheight = ff_top;
+				if (rover->alpha < 255) lastfloorheight -= EQUAL_EPSILON;
+			}
+		}
+	}
+}
+
 void Baker::ProcessFlats()
 {
+	TArray<FFPick> picks, picksFullbright, opaque, opaqueFullbright;
 	for (auto &sec : Level->sectors)
 	{
+		auto &ffloors = sec.e->XFloor.ffloors;
+		PickFFPlanes(sec, false, picks);
+		bool deferGroup = false;
+		if (ffloors.Size() > 0)
+		{
+			// The fullbright scene skips fog 3D floors, which can change the
+			// picks of the others; FF_FIX and FF_FADEWALLS carry colormap
+			// state from one 3D plane to the next in ProcessSector; without a
+			// lightlist there is no 3D light to resolve.
+			PickFFPlanes(sec, true, picksFullbright);
+			opaque.Clear();
+			opaqueFullbright.Clear();
+			for (auto &p : picks) if (!FFTranslucent(ffloors[p.k])) opaque.Push(p);
+			for (auto &p : picksFullbright) if (!FFTranslucent(ffloors[p.k])) opaqueFullbright.Push(p);
+			deferGroup = !(opaque == opaqueFullbright) || sec.e->XFloor.lightlist.Size() == 0;
+			for (auto rover : ffloors)
+				if ((rover->flags & FF_EXISTS) && (rover->flags & (FF_FIX | FF_FADEWALLS))) deferGroup = true;
+			for (auto rover : ffloors)
+			{
+				if ((rover->flags & (FF_EXISTS | FF_RENDERPLANES | FF_THISINSIDE)) != (FF_EXISTS | FF_RENDERPLANES) || FFTranslucent(rover)) continue;
+				for (int t = 0; t < 2; t++)
+				{
+					if ((t == 0 ? rover->top : rover->bottom).copied) continue;
+					bool picked = false;
+					for (auto &p : opaque) picked |= ffloors[p.k] == rover && p.top == (t == 0);
+					if (!picked) Out->Stats.ffFlatsNotPicked++;
+				}
+			}
+			if (deferGroup && opaque.Size() > 0) groupForceDeferred[SectorGroup(&sec)] = 1;
+		}
 		for (auto &section : Level->sections.SectionsForSector(&sec))
 		{
 			for (auto sub : section.subsectors)
@@ -1003,7 +1271,7 @@ void Baker::ProcessFlats()
 						Out->TranslucentFlats.Push({ sub, &sec, nullptr, h });
 						continue;
 					}
-					BakeFlat(sub, &sec, h, &sec, h, 0, false, portal);
+					BakeFlat(sub, &sec, h, &sec, h, 0, h, nullptr, portal);
 				}
 
 				// 3D-floor planes, on the target sector's triangulation.
@@ -1012,26 +1280,25 @@ void Baker::ProcessFlats()
 				{
 					F3DFloor *rover = ffloors[k];
 					if ((rover->flags & (FF_EXISTS | FF_RENDERPLANES | FF_THISINSIDE)) != (FF_EXISTS | FF_RENDERPLANES)) continue;
-					bool translucent = (rover->flags & (FF_TRANSLUCENT | FF_ADDITIVETRANS | FF_FOG)) || rover->alpha < 255;
+					if (!FFTranslucent(rover)) continue;
 					for (int t = 0; t < 2; t++)
 					{
 						auto &pr = t == 0 ? rover->top : rover->bottom;
-						if (pr.copied) continue;
-						// the top is seen as a floor, the bottom as a ceiling
-						int h = t == 0 ? sector_t::floor : sector_t::ceiling;
-						if (translucent)
-						{
-							Out->TranslucentFlats.Push({ sub, pr.model, rover, pr.isceiling });
-							continue;
-						}
-						auto tex = TexMan.GetGameTexture(*pr.texture, true);
-						if (!tex || !tex->isValid())
-						{
-							Out->Stats.untexturedFlats++;
-							continue;
-						}
-						BakeFlat(sub, &sec, h, pr.model, pr.isceiling, int(k) + 1, true, false);
+						if (!pr.copied) Out->TranslucentFlats.Push({ sub, pr.model, rover, pr.isceiling });
 					}
+				}
+				for (auto &pick : picks)
+				{
+					F3DFloor *rover = ffloors[pick.k];
+					if (FFTranslucent(rover)) continue;
+					auto &pr = pick.top ? rover->top : rover->bottom;
+					auto tex = TexMan.GetGameTexture(*pr.texture, true);
+					if (!tex || !tex->isValid())
+					{
+						Out->Stats.untexturedFlats++;
+						continue;
+					}
+					BakeFlat(sub, &sec, pick.drawnAs, pr.model, pr.isceiling, int(pick.k) + 1, pick.top ? sector_t::floor : sector_t::ceiling, rover, false);
 				}
 			}
 		}
@@ -1044,7 +1311,9 @@ void Baker::ProcessFlats()
 // tier is owned when all its mesh surfaces are drawn; one deferred piece
 // (a light band, a 3D-floor clip) defers the whole tier, so the classic
 // HWWalls of a tier are either all skipped or all drawn. A sector plane is
-// owned when its (non-3D-floor) flats are in the mesh and drawn.
+// owned when its (non-3D-floor) flats are in the mesh and drawn. A 3D-floor
+// group (a side's 3D-floor sides, a sector's opaque 3D-floor planes) works
+// like a tier.
 //
 //==========================================================================
 
@@ -1053,30 +1322,84 @@ void Baker::ComputeOwnership()
 	enum { HAS_MESH = 1, HAS_DEFERRED = 2 };
 	TArray<uint8_t> tiers(Level->sides.Size() * 3, true);
 	TArray<uint8_t> planes(Level->sectors.Size() * 2, true);
+	TArray<uint8_t> groups(groupWatches.Size(), true);
 	memset(tiers.Data(), 0, tiers.Size());
 	memset(planes.Data(), 0, planes.Size());
+	for (unsigned g = 0; g < groups.Size(); g++) groups[g] = groupForceDeferred[g] ? HAS_DEFERRED : 0;
+	uint32_t groupBase = GroupSideRef(0);
 
 	for (auto &surf : Out->Surfaces)
 	{
 		uint8_t bit = (surf.flags & LMSF_DEFERRED) ? HAS_DEFERRED : HAS_MESH;
-		if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) tiers[surf.sideRef] |= bit;
-		else if (!(surf.flags & LMSF_3DFLOOR)) planes[surf.planeRefs[0]] |= bit;	// plane ref = sector * 2 + plane
+		if (surf.flags & LMSF_3DFLOOR) groups[surf.sideRef - groupBase] |= bit;
+		else if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) tiers[surf.sideRef] |= bit;
+		else planes[surf.planeRefs[0]] |= bit;	// plane ref = sector * 2 + plane
 	}
 	for (auto &surf : Out->Surfaces)
 	{
-		if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL && (tiers[surf.sideRef] & HAS_DEFERRED) && !(surf.flags & LMSF_DEFERRED))
+		if (surf.flags & LMSF_DEFERRED)
+		{
+			Out->Stats.deferredSurfaces++;
+			continue;
+		}
+		bool defer = (surf.flags & LMSF_3DFLOOR) ? (groups[surf.sideRef - groupBase] & HAS_DEFERRED) != 0 :
+			(surf.flags & LMSF_KINDMASK) == LMSK_WALL && (tiers[surf.sideRef] & HAS_DEFERRED);
+		if (defer)
 		{
 			surf.flags |= LMSF_DEFERRED;
 			Out->Stats.deferredByTier++;
+			Out->Stats.deferredSurfaces++;
 		}
-		if (surf.flags & LMSF_DEFERRED) Out->Stats.deferredSurfaces++;
 	}
+	Out->FFGroupBaked.Resize(groups.Size());
+	for (unsigned g = 0; g < groups.Size(); g++)
+	{
+		Out->FFGroupBaked[g] = groups[g] == HAS_MESH;
+		if (!Out->FFGroupBaked[g]) Out->Stats.ffGroupsDeferred++;
+	}
+	Out->FFGroupOwned = Out->FFGroupBaked;
+	Out->Stats.ffGroups = groups.Size();
 	Out->SideTierOwned.Resize(tiers.Size());
 	for (unsigned i = 0; i < tiers.Size(); i++) Out->SideTierOwned[i] = tiers[i] == HAS_MESH;
 	Out->SectorPlaneOwned.Resize(planes.Size());
 	for (unsigned i = 0; i < planes.Size(); i++) Out->SectorPlaneOwned[i] = planes[i] == HAS_MESH;
 	Out->SideTierBaked = Out->SideTierOwned;
 	Out->SectorPlaneBaked = Out->SectorPlaneOwned;
+}
+
+//==========================================================================
+//
+// 3D-floor group tables: watches, and per sector / side the groups that
+// watch it (LevelMeshBake::FFWatchStart, FFSectorDepend, FFSideDepend).
+//
+//==========================================================================
+
+static void BuildCSR(unsigned n, const TArray<std::pair<uint32_t, uint32_t>> &pairs, TArray<uint32_t> &start, TArray<uint32_t> &list);
+
+void Baker::BuildFFTables()
+{
+	TArray<std::pair<uint32_t, uint32_t>> bySector, bySide;
+	Out->FFWatchStart.Resize(groupWatches.Size() + 1);
+	Out->FFWatches.Clear();
+	for (unsigned g = 0; g < groupWatches.Size(); g++)
+	{
+		Out->FFWatchStart[g] = Out->FFWatches.Size();
+		unsigned firstSector = bySector.Size(), firstSide = bySide.Size();
+		for (auto &w : groupWatches[g])
+		{
+			Out->FFWatches.Push(w);
+			auto &list = w.kind == LMFW_TIER ? bySide : bySector;
+			uint32_t key = w.kind == LMFW_TIER ? w.ref / 3 : w.ref >> 1;
+			unsigned first = w.kind == LMFW_TIER ? firstSide : firstSector;
+			bool dup = false;
+			for (unsigned k = first; k < list.Size(); k++) dup |= list[k].first == key;
+			if (!dup) list.Push({ key, g });
+		}
+	}
+	Out->FFWatchStart[groupWatches.Size()] = Out->FFWatches.Size();
+	BuildCSR(Level->sectors.Size(), bySector, Out->FFSectorDependStart, Out->FFSectorDepend);
+	BuildCSR(Level->sides.Size(), bySide, Out->FFSideDependStart, Out->FFSideDepend);
+	Out->Stats.ffWatches = Out->FFWatches.Size();
 }
 
 //==========================================================================
@@ -1213,6 +1536,7 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier); walls not drawn with their side texture %u\n", mapname,
 		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);
 	Printf("LevelMeshBake %s: 3D lights %u, lit surfaces %u, banded walls %u; edge-clamped tiers %u\n", mapname, s.lights3D, s.light3DSurfaces, s.bandedWalls, s.edgeClamped);
+	Printf("LevelMeshBake %s: 3D-floor groups %u (deferred at bake %u), watches %u; opaque 3D planes never drawn %u\n", mapname, s.ffGroups, s.ffGroupsDeferred, s.ffWatches, s.ffFlatsNotPicked);
 	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u; unbounded wall tops %u\n",
 		mapname, s.zMismatch, s.vMismatch, s.zInexact, s.vInexact, s.offsetAnchored[LMV_BOTTOM], s.offsetAnchored[LMV_TOP], s.offsetAnchored[LMV_SIDE], s.offsetAnchored[LMV_FLAT],
 		s.vScaleInconsistent, s.planeRefOverflow, s.ffloorVRefHeuristic, s.edgeUnbounded);
@@ -1278,6 +1602,7 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 	double t1 = I_msTimeF();
 	b.ProcessFlats();
 	b.ComputeOwnership();
+	b.BuildFFTables();
 	b.BuildLight3DTables();
 	double t2 = I_msTimeF();
 
@@ -1372,8 +1697,11 @@ static void PrintPlaneUsers(FLevelLocals *Level, LevelMeshBake *bake, unsigned s
 				(surf.edgeClamp != LM_NOPLANE && (surf.edgeClamp >> 1) == ms);
 			for (auto r : surf.planeRefs) hit |= r != LM_NOPLANE && (r >> 1) == ms;
 			if (!hit) continue;
-			Printf("  surface %u kind %u type %u side %d tier %d lightSector %u planes %d %d %d %d vRef %d edgeTop %d edgeClamp %d\n", i, surf.flags & LMSF_KINDMASK,
-				(surf.flags >> LMSF_WALLTYPESHIFT) & 15, surf.sideRef == 0xffffffffu ? -1 : int(surf.sideRef / 3), surf.sideRef == 0xffffffffu ? -1 : int(surf.sideRef % 3),
+			// 3D-floor surfaces: tier -1, side = their group (sideRef past the side tiers)
+			bool tierRef = surf.sideRef != 0xffffffffu && !(surf.flags & LMSF_3DFLOOR);
+			int sideOrGroup = tierRef ? int(surf.sideRef / 3) : (surf.flags & LMSF_3DFLOOR) ? int(surf.sideRef - Level->sides.Size() * 3) : -1;
+			Printf("  surface %u kind %u type %u%s %d tier %d lightSector %u planes %d %d %d %d vRef %d edgeTop %d edgeClamp %d\n", i, surf.flags & LMSF_KINDMASK,
+				(surf.flags >> LMSF_WALLTYPESHIFT) & 15, (surf.flags & LMSF_3DFLOOR) ? " 3D group" : " side", sideOrGroup, tierRef ? int(surf.sideRef % 3) : -1,
 				surf.lightSector, int(surf.planeRefs[0]), int(surf.planeRefs[1]), int(surf.planeRefs[2]), int(surf.planeRefs[3]), int(surf.vRef), int(surf.edgeTop), int(surf.edgeClamp));
 		}
 	}
