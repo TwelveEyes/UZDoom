@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model (State buffers: polyobject transforms).
 **Type:** task
-**Status:** ready-for-agent
+**Status:** claimed
 **Blocked by:** 09
 
 ## What to build
@@ -29,3 +29,8 @@
 - 2026-10-14 (from 09): cluster xy boxes are still static. The 09 refresh only rewrites
   `bmin.z / bmax.z`, and `scatter.comp` only writes those two words per cluster. A polyobject
   that moves needs an xy refresh, or clusters of its own.
+- 2026-10-16: claimed. Test kit: `tools/abtest/make_polytest.py` → `wads/polytest.wad` and
+  `demos/polytest/POLYTEST_MAP01.lmp`; manifest `ab_manifest_polytest.json` (12 rooms, see the
+  README). Baseline with polyobjects on the classic path on both sides: 155 / 216 ticks fail,
+  all edge specks (at most 449 px, max delta 53; run `20261016T193509Z-ab`). Ticket 25 already
+  removed the polyobject *origin* subsectors from the bake.
