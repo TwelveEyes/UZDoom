@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Frame model; `../research/03-portal-flow.md` (sky portals).
 **Type:** task
-**Status:** ready-for-agent
+**Status:** claimed
 **Blocked by:** 10
 
 ## What to build

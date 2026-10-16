@@ -127,6 +127,30 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   - `lm_polyobjs 0` (level setup) leaves every polyobject classic. `lm_statelog 1` prints each
     polyobject that leaves or re-enters the sector it was baked in (it is drawn classic
     meanwhile).
+- **Sky (ticket 14):** `ab_manifest_skytest.json` replays `demos/skytest/` over
+  `wads/skytest.wad`. `make_skytest.py` writes both (copy the wad into the build's `wads/`
+  too). 9 separate courtyards, each showing one sky rule; the camera looks up (or down) in
+  each:
+  - sky walls above one-sided walls, a low pillar under the sky and a tall one above it;
+  - the sky hack (two sky ceilings at different heights) with a building above the lower sky,
+    and the same with a two-sided `MIDGRATE` on the step;
+  - a sky-ceiling door and a plain door opening and closing;
+  - `noskywalls` on half of a boundary;
+  - a sky-floor pit;
+  - MBF sky transfer (`Static_Init` 255, one flipped, one scrolled by `Scroll_Wall`);
+  - UDMF per-sector `skyceiling` textures;
+  - a sky ceiling that lowers and returns.
+
+  MAP01 has a still `sky1`, MAP02 doublesky with both layers scrolling, MAP03 `skyfog` with
+  sector fog and `forcenoskystretch`. `r_skymode` is a cvar: add `--set-a 'r_skymode 1'
+  --set-b 'r_skymode 1'` for the other mode.
+
+  Before ticket 14 (the classic draws the sky on both sides): MAP01 / MAP02 / MAP03 pass, 0 /
+  0 / 0 of 173 ticks failing (run `20261016T223301Z-ab`).
+- **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
+  with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
+  normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped
+  to 0.
 - **Shader timer in captures:** `P_SetupLevel` stamps `ShaderStartTime` on the real clock, and
   `CheckTimer` restarts the material shader timer until the synthetic `FrameTime` passes it,
   so before 2026-10-15 the warp / shader timer base depended on load time (a slower levelmesh

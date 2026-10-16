@@ -107,6 +107,8 @@ DEM_STOP = 7
 DEM_GENERICCHEAT = 10
 DEM_WARPCHEAT = 35       # i16be x, y, z (d_net.cpp Net_DoCommand)
 DEM_RUNSPECIAL = 62      # i16be special, u8 argc, i32be args (d_net.cpp Net_DoCommand)
+DEM_SETPITCHLIMIT = 63   # u8 up, u8 down degrees (player_t::SendPitchLimits; the
+                         # limits stay 0 / 0 without it: every pitch is clamped to 0)
 BT_ATTACK = 1 << 0       # d_event.h
 BT_USE = 1 << 1          # d_event.h
 ONFLOORZ_I16 = -32768    # c_cmds.cpp warp: ONFLOORZ/65536 -> lands on floorz
@@ -504,6 +506,11 @@ def build_script(steps, start_angle, T):
       warp:X,Y@T          warp to (X, Y) on the floor
       face:DEG@T          turn to the absolute map angle DEG (degrees, 0 = east,
                           90 = north); tracked from --start-angle
+      pitch:DEG@T         look to the absolute pitch DEG (degrees, positive =
+                          up, 0 = level); tracked from 0 (player.zs:
+                          Pitch -= cmd.pitch * 360 / 65536, clamped to the
+                          player's MinPitch / MaxPitch: build the demo with
+                          pitch_limit)
       use@T               press use for one tic
       attack@T            press fire for one tic (weapon flash: player extralight)
       special:N,A1,..@T   DEM_RUNSPECIAL: line special N with args (activator =
@@ -514,6 +521,7 @@ def build_script(steps, start_angle, T):
     cmds = [[0, 0, 0, 0, 0, 0] for _ in range(T)]
     warps, specials = {}, {}
     angle = float(start_angle)
+    pitch = 0.0
     parsed = []
     for st in steps:
         body, _, tic = st.rpartition("@")
@@ -536,6 +544,15 @@ def build_script(steps, start_angle, T):
                 raise ValueError("face on tic 0 is dropped by the engine")
             cmds[tic][2] += turn
             angle += turn * 360.0 / ANGLE_FPP
+        elif kind == "pitch":
+            target = float(args)
+            look = int(round((target - pitch) * ANGLE_FPP / 360.0))
+            if tic == 0:
+                raise ValueError("pitch on tic 0 is dropped by the engine")
+            if not -32767 <= cmds[tic][1] + look <= 32767:
+                raise ValueError(f"pitch step at tic {tic} out of range")
+            cmds[tic][1] += look
+            pitch += look * 360.0 / ANGLE_FPP
         elif kind == "use":
             if tic == 0:
                 raise ValueError("use on tic 0 is dropped by the engine")
@@ -663,7 +680,9 @@ def pack_cmd(c, basis) -> bytes:
     return bytes([flags]) + bytes(out)
 
 
-def build(mapname: str, cmds, seed: int, cheats: list, warps=None, specials=None) -> bytes:
+def build(mapname: str, cmds, seed: int, cheats: list, warps=None, specials=None, pitch_limit=None) -> bytes:
+    """pitch_limit: (up, down) degrees, sent before the first tic (demos
+    with pitch steps need it; None keeps the stream of older demos)."""
     # ZDHD
     zdh = (struct.pack(">HH", DEMOGAMEVERSION, MINVER)
            + mapname.encode("ascii") + b"\x00"
@@ -673,6 +692,8 @@ def build(mapname: str, cmds, seed: int, cheats: list, warps=None, specials=None
     uinf = b"\x00" + b"\\" + b"\x00"
     # BODY: cheat marker(s), then one packed cmd per tic, then STOP
     body = bytearray()
+    if pitch_limit is not None:
+        body += bytes([DEM_SETPITCHLIMIT, int(pitch_limit[0]), int(pitch_limit[1])])
     for c in cheats:
         body += bytes([DEM_GENERICCHEAT, CHEATS[c]])
     basis = None
