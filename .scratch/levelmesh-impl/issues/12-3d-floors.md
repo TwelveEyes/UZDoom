@@ -121,3 +121,41 @@
     3dfloortest 24 -> 44: the 20 new fails are 1-row edge specks where a 3D plane cuts a
     wall (4-8 px, delta 3-17, DC2); `lm_3dfloors 1` (sides only) adds none. Room 5's moving
     3D floor switches its groups to classic and back (`lm_statelog`).
+- 2026-10-16: progress, part D (light bands).
+  - **Design change from the ticket text:** no per-band draw commands or clip distances.
+    While the levelmesh draws a sector its 3D-floor layout is at the bake (a moved layout
+    defers its lights and groups), so the split planes are fixed: the bake cuts every
+    banded wall (`HWWall::lightlist`) into one surface per light layer
+    (`Baker::BakeBands`), the part between the layer's plane and the next one's (the front
+    floor for the last), as `HWWall::RenderTexturedWall`'s loop clips it. Cut vertices lie
+    on the layer plane, anchored to the sector / model plane it is a copy of (offset 0,
+    `LMV_SIDE`); u, v, lightmap uv interpolated. Each band takes the layer's 3D light, with
+    its light level where the layer has a caster. Bands are ordinary surfaces in the wall's
+    cluster: no extra draws, no extra pipeline state; `LMSF_LIGHTLIST` now only marks a
+    banded wall whose layer plane matches no sector plane (left classic, counted).
+  - `lm_3dfloors` bit 4 (bands) for bisecting; default 7.
+  - 3dfloortest: both banded walls (room 3) cut into 4 bands, fail set unchanged (44); new
+    differing pixels are isolated single pixels along the sloped cut (clip plane vs edge,
+    DC2, below the 4 px cluster minimum).
+  - myhouse MAP01: 173 banded walls -> 308 band surfaces, none left classic. Its demo A/B
+    fails 11 ticks (up to 1.37M px) identically with `lm_3dfloors 0`: not 3D-floor related
+    (see 24). Pirates MAP43 / 49 / 54 / 58 have no banded walls.
+  - **Band cost** (`run_matrix.sh --demos demos/vantage --tics 1050`, tics 105-1050, logs
+    `tools/abtest/logs/lm12x{0,3,7}_*`; `lm_3dfloors` 0 = all 3D classic, 3 = sides +
+    planes, 7 = + bands). Band draw count: 0 extra (bands share the cluster draws).
+
+    | vantage | 3D on levelmesh | wall p50 / p95 | lmgpu p50 / p95 | lmtri1 p50 |
+    |---|---|---|---|---|
+    | MYHOUSE_MAP01_V1 | none | 7.48 / 10.71 | 0.239 / 0.248 | 54220 |
+    | MYHOUSE_MAP01_V1 | sides + planes | 7.48 / 10.85 | 0.239 / 0.248 | 56558 |
+    | MYHOUSE_MAP01_V1 | + bands | 7.86 / 11.76 | 0.243 / 0.251 | 56558 |
+    | MYHOUSE_MAP01_V2 | none | 6.94 / 10.13 | 0.242 / 0.251 | 69750 |
+    | MYHOUSE_MAP01_V2 | sides + planes | 8.28 / 12.73 | 0.241 / 0.250 | 70298 |
+    | MYHOUSE_MAP01_V2 | + bands | 7.69 / 11.16 | 0.243 / 0.250 | 70298 |
+    | PIRATES_MAP49_V1 | none | 3.53 / 4.40 | 0.144 / 0.148 | 19204 |
+    | PIRATES_MAP49_V1 | + bands | 3.63 / 4.31 | 0.143 / 0.147 | 19694 |
+    | PIRATES_MAP54_V1 | none | 6.26 / 7.12 | 0.203 / 0.205 | 25447 |
+    | PIRATES_MAP54_V1 | + bands | 6.44 / 8.04 | 0.207 / 0.209 | 30850 |
+
+    Levelmesh GPU time is flat within 0.004 ms; `wall` is CPU-bound by the classic walk,
+    which still runs (ticket 20), and moves by up to 1.3 ms between runs of the same view.

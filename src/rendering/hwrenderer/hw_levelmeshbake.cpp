@@ -76,9 +76,9 @@ CVAR(Int, lm_programs, 7, CVAR_NOSAVE)
 // Debug: draw surfaces lit by a 3D light through the levelmesh (read at
 // level setup); 0 leaves them on the classic path.
 CVAR(Bool, lm_light3d, true, CVAR_NOSAVE)
-// Debug: 3D-floor groups the levelmesh draws (read at level setup): 1 sides,
-// 2 opaque planes; the others stay on the classic path.
-CVAR(Int, lm_3dfloors, 3, CVAR_NOSAVE)
+// Debug: 3D-floor surfaces the levelmesh draws (read at level setup): 1
+// sides, 2 opaque planes, 4 light bands; the others stay on the classic path.
+CVAR(Int, lm_3dfloors, 7, CVAR_NOSAVE)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -400,6 +400,7 @@ struct Baker
 
 	void ProcessSides();
 	void BakeWall(HWWall &w);
+	bool BakeBands(HWWall &w, const LevelMeshSurface &surf, uint32_t firstv, int n, sector_t *lsec, float texz);
 	uint32_t WallVRef(HWWall &w, sector_t *rf, sector_t *rb);
 	uint32_t WallEdgeTop(HWWall &w, sector_t *rf, sector_t *rb, uint32_t firstv, int n);
 	void ProcessFlats();
@@ -920,7 +921,7 @@ void Baker::BakeWall(HWWall &w)
 	auto &lightlist = lsec->e->XFloor.lightlist;
 	if (w.lightlist)
 	{
-		// Banded wall (ticket 12, light bands).
+		// Banded wall: cut into its light layers (BakeBands).
 		surf.flags |= LMSF_LIGHTLIST;
 		surf.lightSector = lsec->Index();
 		st.bandedWalls++;
@@ -952,10 +953,10 @@ void Baker::BakeWall(HWWall &w)
 	surf.sideFlags = SideLightFlags(side, lightTier);
 	if (w.type == RENDERWALL_M2SNF) surf.flags |= LMSF_NOSECTORFOG;
 	surf.lightmapPage = w.lindex >= 0 ? int(w.lindex) : -1;
-	// Not drawn by the levelmesh yet: light bands (ticket 12), heightsecs
-	// (view-dependent fake, ticket 16), sky-hack mid textures (the classic
-	// draws them with a depth bias, GLDL_MASKEDWALLSOFS).
-	if (surf.flags & (LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
+	// Not drawn by the levelmesh yet: heightsecs (view-dependent fake,
+	// ticket 16), sky-hack mid textures (the classic draws them with a depth
+	// bias, GLDL_MASKEDWALLSOFS).
+	if (surf.flags & LMSF_HEIGHTSEC) surf.flags |= LMSF_DEFERRED;
 	if (surf.lightList >= 0 && !lm_light3d) surf.flags |= LMSF_DEFERRED;
 	if ((w.flags & HWWall::HWF_SKYHACK) && w.type == RENDERWALL_M2S) surf.flags |= LMSF_DEFERRED;
 	// HWWall::RenderTexturedWall: clamped two-sided mids also clamp in the shader.
@@ -977,8 +978,204 @@ void Baker::BakeWall(HWWall &w)
 		surf.normal[1] = -dx / len;
 	}
 	surf.normal[2] = 0;
+	if (surf.flags & LMSF_LIGHTLIST)
+	{
+		if ((lm_3dfloors & 4) && BakeBands(w, surf, firstv, n, lsec, texz)) return;
+		surf.flags |= LMSF_DEFERRED;
+		st.bandsDeferred++;
+	}
 	EndSurface(surf, w.seg->Subsector);
 	st.wallSurfaces++;
+}
+
+//==========================================================================
+//
+// Light bands
+//
+// A wall a 3D light's plane crosses is drawn by the classic once per light
+// layer, clipped to the layer by split planes (HWWall::RenderTexturedWall
+// with a lightlist). The bake cuts it into one surface per layer instead:
+// the 3D-floor layout is fixed while the levelmesh draws the sector (a moved
+// layout defers its lights, LML3_DEFERRED), so the cuts stay where the
+// split planes are. A cut vertex lies on the layer plane, anchored to the
+// sector plane that is that plane (offset 0, LMV_SIDE). One cluster draw
+// covers all bands of a wall.
+//
+//==========================================================================
+
+namespace
+{
+
+struct BandVertex
+{
+	double x, y, z, u, v, lu, lv;
+	LevelMeshVertex mv;
+};
+
+// Keeps the part of 'in' with sign * (plane z - z) >= 0 (sign 1: below the
+// plane, -1: above it). Cut vertices get the plane's anchor.
+void ClipBand(const TArray<BandVertex> &in, TArray<BandVertex> &out, const secplane_t &plane, double sign,
+	uint32_t ref, const LevelMeshPlane &packed, float vScale, float texz)
+{
+	constexpr double EPS = 1. / 4096;
+	out.Clear();
+	unsigned n = in.Size();
+	if (n < 3) return;
+	auto dist = [&](const BandVertex &p) { return sign * (plane.ZatPoint(p.x, p.y) - p.z); };
+	auto cut = [&](const BandVertex &a, const BandVertex &b, double da, double db)
+	{
+		double t = da / (da - db);
+		BandVertex c;
+		c.x = a.x + t * (b.x - a.x);
+		c.y = a.y + t * (b.y - a.y);
+		c.u = a.u + t * (b.u - a.u);
+		c.v = a.v + t * (b.v - a.v);
+		c.lu = a.lu + t * (b.lu - a.lu);
+		c.lv = a.lv + t * (b.lv - a.lv);
+		c.mv = a.mv;
+		c.mv.x = (float)c.x;
+		c.mv.y = (float)c.y;
+		c.mv.u = (float)c.u;
+		c.mv.lu = (float)c.lu;
+		c.mv.lv = (float)c.lv;
+		c.mv.zOffset = 0.f;
+		c.mv.anchor = ref | (uint32_t(LMV_SIDE) << LMV_ROLESHIFT);
+		float z = LM_PlaneZ(packed, c.mv.x, c.mv.y);
+		c.z = z;
+		c.mv.vOffset = (float)c.v - vScale * (z - texz);
+		out.Push(c);
+	};
+	for (unsigned i = 0; i < n; i++)
+	{
+		const BandVertex &a = in[i], &b = in[(i + 1) % n];
+		double da = dist(a), db = dist(b);
+		bool ina = da >= -EPS, inb = db >= -EPS;
+		if (ina && inb) out.Push(b);
+		else if (ina && !inb)
+		{
+			if (da > EPS) cut(a, b, da, db);
+		}
+		else if (!ina && inb)
+		{
+			if (db > EPS) cut(a, b, da, db);
+			out.Push(b);
+		}
+	}
+}
+
+// Area of a wall polygon in (along the wall, z).
+double BandArea(const TArray<BandVertex> &poly, double dx, double dy)
+{
+	double a = 0;
+	for (unsigned i = 0; i < poly.Size(); i++)
+	{
+		auto &p = poly[i], &q = poly[(i + 1) % poly.Size()];
+		double sp = p.x * dx + p.y * dy, sq = q.x * dx + q.y * dy;
+		a += sp * q.z - sq * p.z;
+	}
+	return fabs(a) * 0.5;
+}
+
+} // namespace
+
+bool Baker::BakeBands(HWWall &w, const LevelMeshSurface &surf, uint32_t firstv, int n, sector_t *lsec, float texz)
+{
+	auto &st = Out->Stats;
+	auto &lightlist = lsec->e->XFloor.lightlist;
+	if (lightlist.Size() < 2) return false;
+
+	// The sector planes the layer planes are (a lightlist plane is a copy of
+	// one: the sector's ceiling, a 3D floor's plane, the front floor).
+	CandidateList cands;
+	cands.Add(lsec, sector_t::ceiling);
+	cands.Add(lsec, sector_t::floor);
+	cands.Add3DFloors(lsec);
+	sector_t *front = RealSector(Level, w.frontsector);
+	cands.Add(front, sector_t::floor);
+	auto findRef = [&](const secplane_t &plane) -> int
+	{
+		LevelMeshPlane q = LM_PackPlane(plane);
+		for (int i = 0; i < cands.count; i++)
+		{
+			const LevelMeshPlane &c = cands.items[i].plane;
+			auto same = [](float a, float b) { return fabsf(a - b) <= 1e-6f * std::max(1.f, fabsf(a)); };
+			if (same(q.nx * q.negiC, c.nx * c.negiC) && same(q.ny * q.negiC, c.ny * c.negiC) && same(q.d * q.negiC, c.d * c.negiC)) return i;
+		}
+		return -1;
+	};
+
+	TArray<BandVertex> poly;
+	for (int i = 0; i < n; i++)
+	{
+		const FFlatVertex &fv = vbuf[i];
+		poly.Push({ fv.x, fv.y, fv.z, fv.u, fv.v, fv.lu, fv.lv, Out->Vertices[firstv + i] });
+	}
+	double dx = w.glseg.x2 - w.glseg.x1, dy = w.glseg.y2 - w.glseg.y1;
+	double len = sqrt(dx * dx + dy * dy);
+	if (len <= 0) return false;
+	dx /= len;
+	dy /= len;
+
+	// Every layer the classic draws (RenderTexturedWall's loop): the part
+	// between its plane and the next layer's (the front floor for the last).
+	struct Band { unsigned layer; TArray<BandVertex> poly; };
+	TArray<Band> bands;
+	TArray<BandVertex> tmp;
+	for (unsigned i = 0; i < lightlist.Size(); i++)
+	{
+		const secplane_t &upper = lightlist[i].plane;
+		const secplane_t &lower = i + 1 == lightlist.Size() ? w.frontsector->floorplane : lightlist[i + 1].plane;
+		int ui = findRef(upper), li = findRef(lower);
+		if (ui < 0 || li < 0)
+		{
+			st.bandPlaneUnmatched++;
+			return false;
+		}
+		ClipBand(poly, tmp, upper, 1., cands.items[ui].ref, cands.items[ui].plane, surf.vScale, texz);
+		Band band;
+		band.layer = i;
+		ClipBand(tmp, band.poly, lower, -1., cands.items[li].ref, cands.items[li].plane, surf.vScale, texz);
+		if (band.poly.Size() >= 3 && BandArea(band.poly, dx, dy) > 1e-3) bands.Push(std::move(band));
+	}
+	if (bands.Size() == 0) return false;
+
+	// Replace the whole wall by its bands.
+	Out->Vertices.Resize(firstv);
+	Out->Indices.Resize(surf.firstIndex);
+	for (auto &band : bands)
+	{
+		LevelMeshSurface b = surf;
+		uint32_t sindex = Out->Surfaces.Size();
+		b.firstVertex = Out->Vertices.Size();
+		b.firstIndex = Out->Indices.Size();
+		for (auto &r : b.planeRefs) r = LM_NOPLANE;
+		bool overflow = false;
+		for (auto &p : band.poly)
+		{
+			LevelMeshVertex v = p.mv;
+			v.surface = sindex;
+			Out->Vertices.Push(v);
+			AddPlaneRef(b, v.anchor & LMV_REFMASK, overflow);
+		}
+		if (overflow) st.planeRefOverflow++;
+		for (unsigned i = 1; i + 1 < band.poly.Size(); i++)
+		{
+			Out->Indices.Push(b.firstVertex);
+			Out->Indices.Push(b.firstVertex + i);
+			Out->Indices.Push(b.firstVertex + i + 1);
+		}
+		const lightlist_t &light = lightlist[band.layer];
+		b.flags &= ~LMSF_LIGHTLIST;
+		b.lightList = int32_t(Light3DIndex(lsec, light));
+		// RenderTexturedWall: the layer's light level where it has a caster.
+		if (light.caster != nullptr) b.flags |= LMSF_LIGHT3DLEVEL;
+		if (!lm_light3d) b.flags |= LMSF_DEFERRED;
+		EndSurface(b, w.seg->Subsector);
+		st.wallSurfaces++;
+		st.bandSurfaces++;
+		st.light3DSurfaces++;
+	}
+	return true;
 }
 
 //==========================================================================
@@ -1535,7 +1732,8 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 		s.translucentFlats, s.portalFlats, s.untexturedFlats, s.heightsecSurfaces);
 	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier); walls not drawn with their side texture %u\n", mapname,
 		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);
-	Printf("LevelMeshBake %s: 3D lights %u, lit surfaces %u, banded walls %u; edge-clamped tiers %u\n", mapname, s.lights3D, s.light3DSurfaces, s.bandedWalls, s.edgeClamped);
+	Printf("LevelMeshBake %s: 3D lights %u, lit surfaces %u, banded walls %u (band surfaces %u, left classic %u, unmatched plane %u); edge-clamped tiers %u\n", mapname,
+		s.lights3D, s.light3DSurfaces, s.bandedWalls, s.bandSurfaces, s.bandsDeferred, s.bandPlaneUnmatched, s.edgeClamped);
 	Printf("LevelMeshBake %s: 3D-floor groups %u (deferred at bake %u), watches %u; opaque 3D planes never drawn %u\n", mapname, s.ffGroups, s.ffGroupsDeferred, s.ffWatches, s.ffFlatsNotPicked);
 	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u; unbounded wall tops %u\n",
 		mapname, s.zMismatch, s.vMismatch, s.zInexact, s.vInexact, s.offsetAnchored[LMV_BOTTOM], s.offsetAnchored[LMV_TOP], s.offsetAnchored[LMV_SIDE], s.offsetAnchored[LMV_FLAT],

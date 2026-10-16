@@ -73,7 +73,10 @@ struct LevelMeshBakeStats
 	unsigned deferredByTier = 0;				// of those, deferred because another piece of the side tier is
 	unsigned lights3D = 0;						// distinct 3D lights
 	unsigned light3DSurfaces = 0;				// surfaces lit by one (lightList >= 0)
-	unsigned bandedWalls = 0;					// walls drawn with the classic split planes (LMSF_LIGHTLIST)
+	unsigned bandedWalls = 0;					// walls the classic draws with split planes (HWWall::lightlist)
+	unsigned bandSurfaces = 0;					// the light-layer surfaces they were cut into
+	unsigned bandsDeferred = 0;					// banded walls left to the classic (LMSF_LIGHTLIST)
+	unsigned bandPlaneUnmatched = 0;			// of those: a layer plane that is no sector plane
 	unsigned edgeClamped = 0;					// tiers with an edgeClamp (HWWall::Process tier clamp)
 	unsigned ffGroups = 0, ffGroupsDeferred = 0;	// 3D-floor groups, of those deferred at bake
 	unsigned ffWatches = 0;
