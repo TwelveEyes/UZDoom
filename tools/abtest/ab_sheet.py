@@ -17,6 +17,18 @@ or `latest` (the newest directory under runs/).
       Failing-tick sets of two runs of the same combo, and the ticks that
       fail in only one of them (e.g. full lighting vs --fullbright).
 
+  ab_sheet.py bbox RUN [COMBO] [--ticks all|fail] [--threshold N]
+      Per tick (default: the failing ones): the bounding box of the pixels
+      whose max channel delta exceeds the threshold (default 2, the
+      tolerance), and the max delta. Tells a localized difference (one
+      surface) from screen-wide noise or a band (e.g. ceiling speckle).
+
+  ab_sheet.py clusters RUN [COMBO] [--min-px N]
+      Per captured tick: verdict, cluster count, and the clusters of at
+      least N pixels (default 20) no allowlist entry covers (bbox, pixels,
+      max delta), from results.json; a failing tick without such clusters
+      prints the verdict detail (e.g. a cluster over 1M px is not recorded).
+
 Requires numpy and Pillow. Paths are relative to this directory's runs/.
 """
 import argparse
@@ -145,6 +157,29 @@ def cmd_failsets(args):
     print("  only in", os.path.basename(rb), sorted(fb - fa))
 
 
+def cmd_bbox(args):
+    rdir = run_dir(args.run)
+    combo = pick_combo(rdir, args.combo)
+    caps = captures(rdir, combo)
+    ticks = sorted(caps) if args.ticks == "all" else sorted(fail_ticks(rdir, combo) & set(caps))
+    for t in ticks:
+        d = delta(load(caps[t][0]), load(caps[t][1]))
+        ys, xs = np.nonzero(d > args.threshold)
+        box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1) if len(xs) else None
+        print(f"tick {t}: bbox {box}, px {len(xs)}, max delta {int(d.max())}")
+
+
+def cmd_clusters(args):
+    rdir = run_dir(args.run)
+    combo = pick_combo(rdir, args.combo)
+    r = [x for x in results(rdir) if x["combo"] == combo][0]
+    for row in r.get("rows", []):
+        clusters = row.get("clusters", [])
+        big = [(k["bbox"], k["count"], k["max_delta"]) for k in clusters
+               if k["count"] >= args.min_px and k.get("covered_by") is None]
+        print(row["tick"], row["verdict"], len(clusters), big[:6], "" if big or row["verdict"] != "fail" else row.get("detail", ""))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -165,6 +200,17 @@ def main():
     p.add_argument("run_b")
     p.add_argument("combo", nargs="?")
     p.set_defaults(func=cmd_failsets)
+    p = sub.add_parser("bbox")
+    p.add_argument("run")
+    p.add_argument("combo", nargs="?")
+    p.add_argument("--ticks", choices=("fail", "all"), default="fail")
+    p.add_argument("--threshold", type=int, default=2)
+    p.set_defaults(func=cmd_bbox)
+    p = sub.add_parser("clusters")
+    p.add_argument("run")
+    p.add_argument("combo", nargs="?")
+    p.add_argument("--min-px", type=int, default=20)
+    p.set_defaults(func=cmd_clusters)
     args = ap.parse_args()
     args.func(args)
 

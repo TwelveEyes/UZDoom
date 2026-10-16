@@ -30,7 +30,13 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
 - **Inspecting a run:** `ab_sheet.py` (run id, path or `latest`):
   `sheet RUN COMBO TICK...` writes A | B | diff rows to `<run>/<combo>/report/`
   (`--crop x0,y0,x1,y1`); `summary RUN` gives per-combo verdicts, total differing pixels and
-  the worst tick; `failsets RUN_A RUN_B` lists the ticks that fail in only one of two runs.
+  the worst tick; `failsets RUN_A RUN_B` lists the ticks that fail in only one of two runs;
+  `bbox RUN` gives each failing tick's diff bounding box and max delta (one surface vs a
+  screen-wide band); `clusters RUN` lists the uncovered clusters per tick from `results.json`.
+- **Map geometry:** `wad_map.py plot MAP` (top-down line plot, tagged sectors red, labels
+  every 256 units) and `wad_map.py sectors MAP` (tagged / special sectors with heights, light
+  and bounding box), for placing ticks and scripted demo steps. Doom-format maps only;
+  `--wad` picks the WAD (default `wads/DOOM2.WAD`).
 - **Flags:**
   - `--gamestate` sets `r_ab_gamestate 1`: each capture also writes `<map>_<tick>.gstate`
     (per-subsector `SSECMF_DRAWN`, per-line `ML_MAPPED`), and the two paths are set-diffed.
@@ -120,7 +126,8 @@ changes listed here.
   `lmgpu` (see the log header). They lag by the frames in flight and appear only once a
   levelmesh draw has completed. `v4` (ticket 09) adds the dirty state stream of the frame
   (not lagged): `lmsc` sector records compared, `lmss` sector records uploaded, `lmsk`
-  cluster z-ranges uploaded, `lmsb` staging bytes, `lmsms` CPU ms.
+  cluster z-ranges uploaded, `lmsb` staging bytes, `lmsms` CPU ms. `lm_state_stats.py
+  'logs/<tag>_*.perflog'` summarizes those columns (p50 / p95 / max) per log.
 - **Demos:** `make_demo.py --path tour` (default) warps the camera to 26 stops in the map's main
   playable area, with a 360° pan per stop; god + noclip. Output is in `demos/v2/`. `--path
   vantage --at x,y --turn N` holds a single view. The v1 spiral (`--path spiral`, `demos/*.lmp`)
