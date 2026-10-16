@@ -35,6 +35,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <functional>
+#include <unordered_map>
 
 #include "hw_levelmeshbake.h"
 #include "g_levellocals.h"
@@ -62,6 +64,8 @@ EXTERN_CVAR(Bool, gl_seamless)
 
 // Debug: when set, every bake writes <dir>/<map>.obj (tools/abtest/lm_bake_survey.py).
 CVAR(String, lm_bake_objdir, "", 0)
+// Debug: lm_planeusers for these sectors' 3D-floor models after each bake.
+CVAR(String, lm_bake_planeusers, "", 0)
 // Debug: print the first N round-trip failures of each bake.
 CVAR(Int, lm_bake_debug, 0, 0)
 // Cluster triangle budget (ticket 05: 256). Takes effect at the next level setup.
@@ -69,6 +73,9 @@ CVAR(Int, lm_cluster_budget, 256, 0)
 // Debug: material programs the levelmesh draws (bit per ELevelMeshProgram,
 // read at level setup); the others stay on the classic path.
 CVAR(Int, lm_programs, 7, CVAR_NOSAVE)
+// Debug: draw surfaces lit by a 3D light through the levelmesh (read at
+// level setup); 0 leaves them on the classic path.
+CVAR(Bool, lm_light3d, true, CVAR_NOSAVE)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -159,6 +166,18 @@ sector_t *RealSector(FLevelLocals *Level, sector_t *sec)
 	return sec ? &Level->sectors[sec->sectornum] : nullptr;
 }
 
+struct Light3DHash
+{
+	size_t operator()(const LevelMeshLight3DSource &k) const
+	{
+		size_t h = std::hash<uint32_t>()(k.sector);
+		h = h * 31 + std::hash<const void *>()(k.lightsourceModel);
+		h = h * 31 + std::hash<int>()(k.lightsourceFlags);
+		h = h * 31 + std::hash<const void *>()(k.lightLevel);
+		return h * 2 + k.casterFadeWalls;
+	}
+};
+
 //==========================================================================
 //
 // Bake state
@@ -174,12 +193,31 @@ struct Baker
 	VertexContainer gen;
 	int curType = 0;
 	unsigned offsetByType[16] = {};
+	std::unordered_map<LevelMeshLight3DSource, uint32_t, Light3DHash> lightIndex;
+
+	// The stable index of a lightlist entry of 'sec' (LevelMeshLight3DSource).
+	uint32_t Light3DIndex(sector_t *sec, const lightlist_t &light)
+	{
+		LevelMeshLight3DSource k;
+		k.sector = sec->Index();
+		k.lightsourceModel = light.lightsource ? light.lightsource->model : nullptr;
+		k.lightsourceFlags = light.lightsource ? (light.lightsource->flags & (FF_FADEWALLS | FF_FOG)) : 0;
+		k.lightLevel = light.p_lightlevel;
+		k.casterFadeWalls = light.caster && (light.caster->flags & FF_FADEWALLS);
+		auto it = lightIndex.find(k);
+		if (it != lightIndex.end()) return it->second;
+		uint32_t index = Out->Lights3D.Size();
+		Out->Lights3D.Push(k);
+		lightIndex.emplace(k, index);
+		return index;
+	}
 
 	uint32_t BeginSurface(LevelMeshSurface &surf)
 	{
 		for (auto &r : surf.planeRefs) r = LM_NOPLANE;
 		surf.vRef = LM_NOPLANE;
 		surf.edgeTop = LM_NOPLANE;
+		surf.edgeClamp = LM_NOPLANE;
 		surf.firstVertex = Out->Vertices.Size();
 		surf.firstIndex = Out->Indices.Size();
 		return Out->Surfaces.Size();
@@ -260,6 +298,7 @@ struct Baker
 	void ProcessFlats();
 	void BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, int mplane, int lmindex, bool ffloor, bool portal);
 	void ComputeOwnership();
+	void BuildLight3DTables();
 };
 
 //==========================================================================
@@ -362,24 +401,6 @@ bool LevelMesh_NeedsClassicMaterial(FGameTexture *tex)
 
 namespace
 {
-
-static bool SameColormap(const FColormap &a, const FColormap &b)
-{
-	return a.LightColor == b.LightColor && a.FadeColor == b.FadeColor && a.Desaturation == b.Desaturation &&
-		a.BlendFactor == b.BlendFactor && a.FogDensity == b.FogDensity;
-}
-
-// True if a wall the classic emitted carries its sector's own light (the
-// shading resolve recomputes that), false if HWWall::Put3DWall gave it the
-// light level or colormap of a 3D light.
-static bool SectorLit(HWWall &w, sector_t *rf, side_t *side, int tier)
-{
-	if (!SameColormap(w.Colormap, w.frontsector->Colormap)) return false;
-	bool foggy = !w.Colormap.FadeColor.isBlack() || (rf->Level->flags & LEVEL_HASFADETABLE);
-	int orglightlevel = hw_ClampLight(w.frontsector->lightlevel);
-	int rel;
-	return w.lightlevel == RescaleLightLevel(side->GetLightLevel(foggy, orglightlevel, tier, false, &rel));
-}
 
 // The side_t::GetLightLevel inputs of a tier, as LMSD_* bits.
 static uint32_t SideLightFlags(side_t *side, int tier)
@@ -551,6 +572,47 @@ void Baker::BakeWall(HWWall &w)
 	uint32_t vref = WallVRef(w, rf, rb);
 	curType = w.type;
 
+	// HWWall::Process clamps an upper tier's bottom up to the front floor
+	// where that lies above the back ceiling at both ends, and a lower
+	// tier's top down to the front ceiling where that lies below the back
+	// floor (not with ML_DRAWFULLHEIGHT). Those vertices are anchored to the
+	// back sector's plane with the clamp kept as LevelMeshSurface::edgeClamp,
+	// so a lift moving past its neighbour's plane is followed. Only taken
+	// when max / min of the two planes reproduces every edge vertex exactly.
+	uint32_t clampRef = LM_NOPLANE, clampSem = LM_NOPLANE;
+	bool clampMax = false;
+	uint8_t clampRole = 0;
+	if (rb && !is3d && !(w.seg->linedef->flags & ML_DRAWFULLHEIGHT))
+	{
+		if (w.type == RENDERWALL_TOP && (w.frontsector->GetTexture(sector_t::floor) != skyflatnum || w.backsector->GetTexture(sector_t::floor) != skyflatnum))
+		{
+			clampRef = LM_PlaneRef(rf->Index(), sector_t::floor);
+			clampSem = LM_PlaneRef(rb->Index(), sector_t::ceiling);
+			clampMax = true;
+			clampRole = HWWall::VR_BOTTOM;
+		}
+		else if (w.type == RENDERWALL_BOTTOM)
+		{
+			clampRef = LM_PlaneRef(rf->Index(), sector_t::ceiling);
+			clampSem = LM_PlaneRef(rb->Index(), sector_t::floor);
+			clampRole = HWWall::VR_TOP;
+		}
+		if (clampRef != LM_NOPLANE)
+		{
+			LevelMeshPlane cp = Plane(clampRef), sp = Plane(clampSem);
+			for (int i = 0; i < n; i++)
+			{
+				if (roles[i] != clampRole) continue;
+				float zc = LM_PlaneZ(cp, vbuf[i].x, vbuf[i].y), zs = LM_PlaneZ(sp, vbuf[i].x, vbuf[i].y);
+				if ((clampMax ? std::max(zs, zc) : std::min(zs, zc)) != vbuf[i].z)
+				{
+					clampRef = LM_NOPLANE;
+					break;
+				}
+			}
+		}
+	}
+
 	LevelMeshSurface surf = {};
 	uint32_t sindex = BeginSurface(surf);
 	uint32_t firstv = Out->Vertices.Size();
@@ -574,6 +636,13 @@ void Baker::BakeWall(HWWall &w)
 		v.lu = fv.lu;
 		v.lv = fv.lv;
 		v.surface = sindex;
+		if (clampRef != LM_NOPLANE && roles[i] == clampRole)
+		{
+			v.zOffset = 0.f;
+			v.anchor = clampSem | (uint32_t(clampMax ? LMV_BOTTOM : LMV_TOP) << LMV_ROLESHIFT);
+			Out->Vertices.Push(v);
+			continue;
+		}
 		switch (roles[i])
 		{
 		case HWWall::VR_TOP:
@@ -659,6 +728,12 @@ void Baker::BakeWall(HWWall &w)
 	surf.vRef = vref;
 	surf.vScale = vscale;
 	surf.edgeTop = WallEdgeTop(w, rf, rb, firstv, n);
+	if (clampRef != LM_NOPLANE)
+	{
+		surf.edgeClamp = clampRef;
+		if (clampMax) surf.flags |= LMSF_EDGECLAMPMAX;
+		st.edgeClamped++;
+	}
 	// The untranslated id, so the translation table follows the animation:
 	// w.texture is the frame current at bake.
 	FTextureID sideTex = side->GetTexture(tier);
@@ -700,17 +775,38 @@ void Baker::BakeWall(HWWall &w)
 	}
 	surf.lightSector = rf->Index();
 	surf.lightList = -1;
+	// HWWall::Process: a wall of a sector with 3D floors goes through
+	// SplitWall, which lights every piece with the light layer it lies in
+	// (Put3DWall) or, where a layer's plane crosses it, draws it once per
+	// layer with split planes (the HWWall keeps the lightlist).
+	sector_t *lsec = RealSector(Level, w.sub ? w.sub->sector : w.seg->frontsector);
+	auto &lightlist = lsec->e->XFloor.lightlist;
 	if (w.lightlist)
 	{
-		// Banded wall: the classic draws it once per light layer of the sector with split planes (ticket 12).
+		// Banded wall (ticket 12, light bands).
 		surf.flags |= LMSF_LIGHTLIST;
-		surf.lightSector = (w.sub ? w.sub->sector : w.seg->frontsector)->Index();
+		surf.lightSector = lsec->Index();
+		st.bandedWalls++;
 	}
-	else if (w.frontsector && w.frontsector->e->XFloor.lightlist.Size() > 0 && !SectorLit(w, rf, side, tier))
+	else if (lightlist.Size() > 0)
 	{
-		// Within one light layer: HWWall::Put3DWall took the light level or
-		// colormap of a 3D light, not the sector's (ticket 12).
-		surf.flags |= LMSF_LIGHTLIST;
+		// SplitWall: the first layer whose lower plane lies at or below the piece.
+		unsigned li = lightlist.Size() - 1;
+		for (unsigned i = 0; i + 1 < lightlist.Size(); i++)
+		{
+			secplane_t &p = lightlist[i + 1].plane;
+			float low1 = (float)p.ZatPoint(w.glseg.x1, w.glseg.y1);
+			float low2 = (float)p.ZatPoint(w.glseg.x2, w.glseg.y2);
+			if (low1 <= w.zbottom[0] && low2 <= w.zbottom[1])
+			{
+				li = i;
+				break;
+			}
+		}
+		surf.lightList = int32_t(Light3DIndex(lsec, lightlist[li]));
+		// Put3DWall keeps the wall's light level only for the side's own sector light.
+		if (lightlist[li].p_lightlevel != &side->sector->lightlevel) surf.flags |= LMSF_LIGHT3DLEVEL;
+		st.light3DSurfaces++;
 	}
 	surf.lightLevel = w.lightlevel;
 	surf.relLight = w.rellight;
@@ -723,6 +819,7 @@ void Baker::BakeWall(HWWall &w)
 	// heightsecs (view-dependent fake, ticket 16), sky-hack mid textures (the
 	// classic draws them with a depth bias, GLDL_MASKEDWALLSOFS).
 	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
+	if (surf.lightList >= 0 && !lm_light3d) surf.flags |= LMSF_DEFERRED;
 	if ((w.flags & HWWall::HWF_SKYHACK) && w.type == RENDERWALL_M2S) surf.flags |= LMSF_DEFERRED;
 	// HWWall::RenderTexturedWall: clamped two-sided mids also clamp in the shader.
 	if ((w.flags & HWWall::HWF_CLAMPY) && (w.type == RENDERWALL_M2S || w.type == RENDERWALL_M2SNF) && !w.texture->isWarped()) surf.flags |= LMSF_TEXCLAMPY;
@@ -823,20 +920,22 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 		surf.flags |= LMSF_HEIGHTSEC;
 		st.heightsecSurfaces++;
 	}
+	surf.lightList = -1;
 	// HWFlat::ProcessSector: in a sector with 3D floors the plane takes the
-	// light level and colormap of its 3D light (P_GetPlaneLight; ticket 12).
-	if (!ffloor && sec->e->XFloor.ffloors.Size() > 0)
+	// colormap and (unless it is the sector's own) the light level of its
+	// 3D light (P_GetPlaneLight).
+	if (!ffloor && sec->e->XFloor.ffloors.Size() > 0 && sec->e->XFloor.lightlist.Size() > 0)
 	{
 		lightlist_t *light = P_GetPlaneLight(sec, &sec->GetSecPlane(h), h == sector_t::ceiling);
-		FColormap cm = sec->Colormap;
-		CopyFrom3DLight(cm, light);
 		// The classic floor also takes the 3D light's level for an absolute
 		// plane light when the light has no source; the ceiling never does.
 		bool absolute = (sec->GetFlags(h) & PLANEF_ABSLIGHTING) && (h == sector_t::ceiling || light->lightsource != nullptr);
-		bool ownLight = absolute || light->p_lightlevel == &sec->lightlevel;
-		if (!ownLight || !SameColormap(cm, sec->Colormap)) surf.flags |= LMSF_LIGHTLIST;
+		surf.lightList = int32_t(Light3DIndex(sec, *light));
+		if (!absolute && light->p_lightlevel != &sec->lightlevel) surf.flags |= LMSF_LIGHT3DLEVEL;
+		st.light3DSurfaces++;
 	}
 	if (surf.flags & (LMSF_3DFLOOR | LMSF_HEIGHTSEC | LMSF_LIGHTLIST)) surf.flags |= LMSF_DEFERRED;
+	if (surf.lightList >= 0 && !lm_light3d) surf.flags |= LMSF_DEFERRED;
 	FTextureID texid = model->GetTexture(mplane);
 	auto tex = TexMan.GetGameTexture(texid, true);
 	// As walls: material shaders and the plane colors / texture manipulation
@@ -857,7 +956,6 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 	}
 	surf.sideRef = 0xffffffffu;
 	surf.lightSector = sec->Index();
-	surf.lightList = -1;
 	surf.lightLevel = RescaleLightLevel(h == sector_t::floor ? sec->GetFloorLight() : sec->GetCeilingLight());
 	surf.lightmapPage = lm ? int(lm->LightmapNum) : -1;
 	const DVector3 &nrm = splane.Normal();
@@ -981,6 +1079,96 @@ void Baker::ComputeOwnership()
 	Out->SectorPlaneBaked = Out->SectorPlaneOwned;
 }
 
+//==========================================================================
+//
+// 3D-light tables (LevelMeshBake::SectorLights, LayoutPlanes, ...)
+//
+//==========================================================================
+
+// CSR of (key, value) pairs over 'n' keys, values in pair order.
+static void BuildCSR(unsigned n, const TArray<std::pair<uint32_t, uint32_t>> &pairs, TArray<uint32_t> &start, TArray<uint32_t> &list)
+{
+	start.Resize(n + 1);
+	for (auto &v : start) v = 0;
+	for (auto &p : pairs) start[p.first + 1]++;
+	for (unsigned i = 0; i < n; i++) start[i + 1] += start[i];
+	list.Resize(pairs.Size());
+	TArray<uint32_t> fill(n, true);
+	for (unsigned i = 0; i < n; i++) fill[i] = start[i];
+	for (auto &p : pairs) list[fill[p.first]++] = p.second;
+}
+
+void Baker::BuildLight3DTables()
+{
+	unsigned nsec = Level->sectors.Size();
+	auto &lights = Out->Lights3D;
+	TArray<std::pair<uint32_t, uint32_t>> pairs;
+
+	for (unsigned i = 0; i < lights.Size(); i++) pairs.Push({ lights[i].sector, i });
+	BuildCSR(nsec, pairs, Out->SectorLightStart, Out->SectorLights);
+
+	// The planes a lit sector's split and 3D lights depend on: its own and
+	// its 3D floors' (P_Recalculate3DFloors orders and clips by them).
+	TArray<std::pair<uint32_t, uint32_t>> depend;
+	Out->LayoutStart.Resize(nsec + 1);
+	Out->LayoutPlanes.Clear();
+	for (unsigned s = 0; s < nsec; s++)
+	{
+		Out->LayoutStart[s] = Out->LayoutPlanes.Size();
+		if (Out->SectorLightStart[s] == Out->SectorLightStart[s + 1]) continue;
+		sector_t &sec = Level->sectors[s];
+		unsigned first = Out->LayoutPlanes.Size();
+		auto add = [&](sector_t *model, int ceiling)
+		{
+			if (model == nullptr) return;
+			uint32_t ref = LM_PlaneRef(model->Index(), ceiling);
+			for (unsigned k = first; k < Out->LayoutPlanes.Size(); k++)
+				if (Out->LayoutPlanes[k].ref == ref) return;
+			Out->LayoutPlanes.Push({ ref, LM_PackPlane(model->GetSecPlane(ceiling)) });
+			depend.Push({ uint32_t(model->Index()), s });
+		};
+		add(&sec, sector_t::floor);
+		add(&sec, sector_t::ceiling);
+		for (auto rover : sec.e->XFloor.ffloors)
+		{
+			add(rover->top.model, rover->top.isceiling);
+			add(rover->bottom.model, rover->bottom.isceiling);
+		}
+	}
+	Out->LayoutStart[nsec] = Out->LayoutPlanes.Size();
+	// A model sector can be listed for the same dependent sector once per plane.
+	TArray<std::pair<uint32_t, uint32_t>> unique;
+	for (auto &d : depend)
+	{
+		bool dup = false;
+		for (unsigned k = unique.Size(); k-- > 0 && unique[k].second == d.second;)
+			if (unique[k].first == d.first) { dup = true; break; }
+		if (!dup) unique.Push(d);
+	}
+	BuildCSR(nsec, unique, Out->LayoutDependStart, Out->LayoutDepend);
+
+	// The sectors a light's values come from: its sector (colormap, fade of
+	// F3DFloor::GetColormap), the light source's model, the light level's sector.
+	pairs.Clear();
+	const char *base = nsec ? (const char *)&Level->sectors[0].lightlevel : nullptr;
+	for (unsigned i = 0; i < lights.Size(); i++)
+	{
+		auto &l = lights[i];
+		uint32_t from[3] = { l.sector, l.lightsourceModel ? uint32_t(l.lightsourceModel->Index()) : l.sector, l.sector };
+		ptrdiff_t off = (const char *)l.lightLevel - base;
+		if (base && off >= 0 && off % ptrdiff_t(sizeof(sector_t)) == 0 && unsigned(off / ptrdiff_t(sizeof(sector_t))) < nsec)
+			from[2] = uint32_t(off / ptrdiff_t(sizeof(sector_t)));
+		for (int k = 0; k < 3; k++)
+		{
+			bool dup = false;
+			for (int j = 0; j < k; j++) dup |= from[j] == from[k];
+			if (!dup) pairs.Push({ from[k], i });
+		}
+	}
+	BuildCSR(nsec, pairs, Out->LightDependStart, Out->LightDepend);
+	Out->Stats.lights3D = lights.Size();
+}
+
 } // namespace
 
 //==========================================================================
@@ -992,8 +1180,16 @@ void Baker::ComputeOwnership()
 float LevelMeshBake::VertexZ(FLevelLocals *Level, const LevelMeshVertex &v) const
 {
 	float z = PlaneRefZ(Level, v.anchor & LMV_REFMASK, v.x, v.y) + v.zOffset;
-	uint32_t edge = Surfaces[v.surface].edgeTop;
-	if (edge != LM_NOPLANE && (v.anchor >> LMV_ROLESHIFT) != LMV_TOP)
+	auto &surf = Surfaces[v.surface];
+	uint32_t role = v.anchor >> LMV_ROLESHIFT;
+	if (surf.edgeClamp != LM_NOPLANE)
+	{
+		float cz = PlaneRefZ(Level, surf.edgeClamp, v.x, v.y);
+		if (surf.flags & LMSF_EDGECLAMPMAX) { if (role == LMV_BOTTOM) z = std::max(z, cz); }
+		else if (role == LMV_TOP) z = std::min(z, cz);
+	}
+	uint32_t edge = surf.edgeTop;
+	if (edge != LM_NOPLANE && role != LMV_TOP)
 		z = std::min(z, PlaneRefZ(Level, edge, v.x, v.y));
 	return z;
 }
@@ -1016,6 +1212,7 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 		s.translucentFlats, s.portalFlats, s.untexturedFlats, s.heightsecSurfaces);
 	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier); walls not drawn with their side texture %u\n", mapname,
 		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);
+	Printf("LevelMeshBake %s: 3D lights %u, lit surfaces %u, banded walls %u; edge-clamped tiers %u\n", mapname, s.lights3D, s.light3DSurfaces, s.bandedWalls, s.edgeClamped);
 	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u; unbounded wall tops %u\n",
 		mapname, s.zMismatch, s.vMismatch, s.zInexact, s.vInexact, s.offsetAnchored[LMV_BOTTOM], s.offsetAnchored[LMV_TOP], s.offsetAnchored[LMV_SIDE], s.offsetAnchored[LMV_FLAT],
 		s.vScaleInconsistent, s.planeRefOverflow, s.ffloorVRefHeuristic, s.edgeUnbounded);
@@ -1081,6 +1278,7 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 	double t1 = I_msTimeF();
 	b.ProcessFlats();
 	b.ComputeOwnership();
+	b.BuildLight3DTables();
 	double t2 = I_msTimeF();
 
 	auto &st = bake->Stats;
@@ -1103,6 +1301,11 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 	LevelMeshClusters_Build(Level, bake, lm_cluster_budget);
 	bake->PrintClusterStats(Level->MapName.GetChars());
 
+	if ((*lm_bake_planeusers)[0] != 0)
+	{
+		void PrintPlaneUsersList(FLevelLocals *Level, LevelMeshBake *bake, const char *list);
+		PrintPlaneUsersList(Level, bake, lm_bake_planeusers);
+	}
 	if ((*lm_bake_objdir)[0] != 0)
 	{
 		FString name = FStringf("%s/%s.obj", *lm_bake_objdir, Level->MapName.GetChars());
@@ -1142,4 +1345,49 @@ CCMD(lm_dumpobj)
 		Printf("Wrote %s\n", name.GetChars());
 	else
 		Printf("Could not write %s\n", name.GetChars());
+}
+
+// Debug: the drawn (not deferred) surfaces that follow the planes of a
+// sector, or of the 3D floors' model sectors of a sector with 3D floors
+// (vertex anchors, vRef, edgeTop). lm_planeusers <sector> [3d] in the
+// console; lm_bake_planeusers "<sector>,..." (3D models) after each bake.
+static void PrintPlaneUsers(FLevelLocals *Level, LevelMeshBake *bake, unsigned s, bool models)
+{
+	if (s >= Level->sectors.Size()) return;
+	TArray<unsigned> secs;
+	if (models)
+	{
+		for (auto rover : Level->sectors[s].e->XFloor.ffloors)
+			if (rover->model && secs.Find(rover->model->Index()) == secs.Size()) secs.Push(rover->model->Index());
+	}
+	else secs.Push(s);
+	for (unsigned ms : secs)
+	{
+		Printf("LMPLANEUSERS sector %u%s %u:\n", s, models ? " model" : "", ms);
+		for (unsigned i = 0; i < bake->Surfaces.Size(); i++)
+		{
+			auto &surf = bake->Surfaces[i];
+			if (surf.flags & LMSF_DEFERRED) continue;
+			bool hit = (surf.vRef != LM_NOPLANE && (surf.vRef >> 1) == ms) || (surf.edgeTop != LM_NOPLANE && (surf.edgeTop >> 1) == ms) ||
+				(surf.edgeClamp != LM_NOPLANE && (surf.edgeClamp >> 1) == ms);
+			for (auto r : surf.planeRefs) hit |= r != LM_NOPLANE && (r >> 1) == ms;
+			if (!hit) continue;
+			Printf("  surface %u kind %u type %u side %d tier %d lightSector %u planes %d %d %d %d vRef %d edgeTop %d edgeClamp %d\n", i, surf.flags & LMSF_KINDMASK,
+				(surf.flags >> LMSF_WALLTYPESHIFT) & 15, surf.sideRef == 0xffffffffu ? -1 : int(surf.sideRef / 3), surf.sideRef == 0xffffffffu ? -1 : int(surf.sideRef % 3),
+				surf.lightSector, int(surf.planeRefs[0]), int(surf.planeRefs[1]), int(surf.planeRefs[2]), int(surf.planeRefs[3]), int(surf.vRef), int(surf.edgeTop), int(surf.edgeClamp));
+		}
+	}
+}
+
+CCMD(lm_planeusers)
+{
+	auto bake = primaryLevel ? primaryLevel->levelMeshBake : nullptr;
+	if (bake == nullptr || argv.argc() < 2) { Printf("Usage: lm_planeusers <sector> [3d] (needs a levelmesh)\n"); return; }
+	PrintPlaneUsers(primaryLevel, bake, (unsigned)atoi(argv[1]), argv.argc() > 2);
+}
+
+void PrintPlaneUsersList(FLevelLocals *Level, LevelMeshBake *bake, const char *list)
+{
+	FString l = list;
+	for (auto &tok : l.Split(",")) PrintPlaneUsers(Level, bake, (unsigned)atoi(tok.GetChars()), true);
 }

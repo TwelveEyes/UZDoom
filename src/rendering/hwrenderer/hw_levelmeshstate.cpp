@@ -48,6 +48,14 @@
 ** on the level's arrays, never through the object: the map loader calls the
 ** setters before a side's sector pointer is valid.
 **
+** 3D lights (LevelMeshLight3D) are a fourth stream. Their candidates are
+** the lights reading a changed sector (LevelMeshBake::LightDepend) and a
+** sweep. A sector whose 3D-floor layout moved away from the bake (the
+** planes the bake split and lit its surfaces by: LevelMeshBake::LayoutPlanes)
+** sets LML3_DEFERRED on its lights: the vertex stage hides the surfaces lit
+** by them and the classic path draws the sector's side tiers and planes,
+** until the layout is back at the bake.
+**
 ** Diagnostics: lm_statefull compares every record every frame, lm_clusterz 0
 ** stops the cluster z refresh, lm_stateupdate 0 freezes the GPU state at the
 ** load values.
@@ -106,6 +114,10 @@ TArray<uint32_t> DirtySides;
 TArray<LevelMeshSideState> DirtySideRecords, PreviousSideRecords;
 TArray<uint32_t> DirtyXforms;
 TArray<LevelMeshPlaneXform> DirtyXformRecords, PreviousXformRecords;
+TArray<uint32_t> DirtyLights;
+TArray<LevelMeshLight3D> DirtyLightRecords, PreviousLightRecords;
+TArray<uint32_t> MovedSectors;		// dirty sectors whose planes moved
+TArray<uint32_t> LayoutChanged;		// sectors whose LayoutMoved flips with this update
 
 // The level the change hooks report into (set once its records are resident).
 LevelMeshBake *HookBake;
@@ -220,6 +232,93 @@ void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos,
 
 //==========================================================================
 //
+// LevelMesh_FillLight3D
+//
+// The light's current lightlist entry, found by the values that identify it
+// (LevelMeshLight3DSource): the classic reads the entry's extra_colormap,
+// which P_RecalculateLights refreshes from the setters.
+//
+//==========================================================================
+
+void LevelMesh_FillLight3D(FLevelLocals *Level, const LevelMeshLight3DSource &src, bool layoutMoved, LevelMeshLight3D &out)
+{
+	out = {};
+	out.lightLevel = *src.lightLevel;
+	const lightlist_t *found = nullptr;
+	if (src.sector < Level->sectors.Size())
+	{
+		for (auto &l : Level->sectors[src.sector].e->XFloor.lightlist)
+		{
+			sector_t *model = l.lightsource ? l.lightsource->model : nullptr;
+			int flags = l.lightsource ? (l.lightsource->flags & (FF_FADEWALLS | FF_FOG)) : 0;
+			bool fadeWalls = l.caster && (l.caster->flags & FF_FADEWALLS);
+			if (model == src.lightsourceModel && flags == src.lightsourceFlags && l.p_lightlevel == src.lightLevel && fadeWalls == src.casterFadeWalls)
+			{
+				found = &l;
+				break;
+			}
+		}
+	}
+	if (found == nullptr || layoutMoved)
+	{
+		out.flags |= LML3_DEFERRED;
+		if (found == nullptr) return;
+	}
+	const FColormap &cm = found->extra_colormap;
+	out.lightColor = cm.LightColor.d;
+	out.fadeColor = cm.FadeColor.d;
+	out.colormap = cm.Desaturation | (uint32_t(cm.BlendFactor) << 8) | (uint32_t(cm.FogDensity) << 16);
+	if (src.casterFadeWalls && cm.FadeColor != 0) out.flags |= LML3_COPYFOG;
+}
+
+// Whether a sector's 3D-floor layout (the planes the bake split and lit its
+// surfaces by) differs from the bake, in the records last streamed.
+static bool LayoutMoved(const LevelMeshBake *bake, unsigned s)
+{
+	for (uint32_t k = bake->LayoutStart[s]; k < bake->LayoutStart[s + 1]; k++)
+	{
+		const LevelMeshLayoutPlane &lp = bake->LayoutPlanes[k];
+		if (memcmp(&bake->Stream.Sectors[lp.ref >> 1].planes[lp.ref & 1], &lp.plane, sizeof(lp.plane)) != 0) return true;
+	}
+	return false;
+}
+
+// Classic draw-list ownership of a side tier / sector plane: owned while
+// baked, the record is expressible, and its sector's 3D-floor layout is at
+// the bake.
+static uint8_t TierOwned(FLevelLocals *Level, const LevelMeshBake *bake, uint32_t ref)
+{
+	if (!bake->SideTierBaked[ref] || (bake->Stream.Sides.Records[ref].flags & LMTS_DEFERRED)) return 0;
+	sector_t *sec = Level->sides[ref / 3].sector;
+	return !(sec && bake->Stream.LayoutMoved[sec->Index()]);
+}
+
+static uint8_t PlaneOwned(const LevelMeshBake *bake, uint32_t ref)
+{
+	if (!bake->SectorPlaneBaked[ref] || (bake->Stream.Xforms.Records[ref].flags & LMTS_DEFERRED)) return 0;
+	return !bake->Stream.LayoutMoved[ref >> 1];
+}
+
+static void SetTierOwned(FLevelLocals *Level, LevelMeshBake *bake, uint32_t ref)
+{
+	if (ref >= bake->SideTierOwned.Size()) return;
+	uint8_t owned = TierOwned(Level, bake, ref);
+	if (lm_statelog && owned != bake->SideTierOwned[ref])
+		Printf("Levelmesh state: side %u tier %u -> %s\n", ref / 3, ref % 3, owned ? "levelmesh" : "classic");
+	bake->SideTierOwned[ref] = owned;
+}
+
+static void SetPlaneOwned(LevelMeshBake *bake, uint32_t ref)
+{
+	if (ref >= bake->SectorPlaneOwned.Size()) return;
+	uint8_t owned = PlaneOwned(bake, ref);
+	if (lm_statelog && owned != bake->SectorPlaneOwned[ref])
+		Printf("Levelmesh state: sector %u plane %u -> %s\n", ref >> 1, ref & 1, owned ? "levelmesh" : "classic");
+	bake->SectorPlaneOwned[ref] = owned;
+}
+
+//==========================================================================
+//
 // LevelMesh_ResetState
 //
 //==========================================================================
@@ -230,11 +329,15 @@ LevelMeshBake::~LevelMeshBake()
 }
 
 void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors,
-	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms)
+	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms, const TArray<LevelMeshLight3D> &lights3D)
 {
 	auto &st = bake->Stream;
 	st.Sides.Reset(sides);
 	st.Xforms.Reset(xforms);
+	st.Lights3D.Reset(lights3D);
+	st.LayoutMoved.Resize(sectors.Size());
+	for (auto &m : st.LayoutMoved) m = 0;
+	st.LayoutRecheck.Clear();
 	HookBake = bake;
 	HookSides = Level->sides.Size() ? &Level->sides[0] : nullptr;
 	HookSideCount = Level->sides.Size();
@@ -462,7 +565,8 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	auto &st = bake->Stream;
 	unsigned nsec = Level->sectors.Size();
 	unsigned ncl = bake->Clusters.Size();
-	if (st.Sectors.Size() != nsec || st.SectorStamp.Size() != nsec || st.ClusterStamp.Size() != ncl ||
+	if (st.Sectors.Size() != nsec || st.SectorStamp.Size() != nsec || st.ClusterStamp.Size() != ncl || st.LayoutMoved.Size() != nsec ||
+		bake->LayoutStart.Size() != nsec + 1 || bake->LightDependStart.Size() != nsec + 1 || st.Lights3D.Records.Size() != bake->Lights3D.Size() ||
 		bake->ClusterPlaneStart.Size() != (ncl ? ncl + 1 : 0) || bake->SectorClusterStart.Size() != nsec + 1 ||
 		st.Sides.Records.Size() != Level->sides.Size() * 3 || st.Xforms.Records.Size() != nsec * 2) return;
 
@@ -478,6 +582,8 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		st.Sides.Changed.Clear();
 		std::swap(st.Xforms.ChangedBefore, st.Xforms.Changed);
 		st.Xforms.Changed.Clear();
+		std::swap(st.Lights3D.ChangedBefore, st.Lights3D.Changed);
+		st.Lights3D.Changed.Clear();
 	}
 	if (++st.Stamp == 0)
 	{
@@ -485,6 +591,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		for (auto &s : st.ClusterStamp) s = 0;
 		for (auto &s : st.Sides.Stamp) s = 0;
 		for (auto &s : st.Xforms.Stamp) s = 0;
+		for (auto &s : st.Lights3D.Stamp) s = 0;
 		st.Stamp = 1;
 	}
 	const uint32_t stamp = st.Stamp;
@@ -500,6 +607,11 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	DirtyXforms.Clear();
 	DirtyXformRecords.Clear();
 	PreviousXformRecords.Clear();
+	DirtyLights.Clear();
+	DirtyLightRecords.Clear();
+	PreviousLightRecords.Clear();
+	MovedSectors.Clear();
+	LayoutChanged.Clear();
 	unsigned candidates = 0;
 
 	// Side tiers and plane textures first: a plane texture change can change
@@ -526,6 +638,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		old = rec;
 		DirtySectors.Push(s);
 		DirtyRecords.Push(rec);
+		if (moved) MovedSectors.Push(s);
 		if (!moved || !lm_clusterz) return;
 		for (uint32_t k = bake->SectorClusterStart[s]; k < bake->SectorClusterStart[s + 1]; k++)
 		{
@@ -570,6 +683,31 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	}
 
 
+	// 3D-floor layouts depending on a moved plane; the lights of a sector
+	// whose layout flips, and the lights reading a changed sector.
+	auto layout = [&](uint32_t t)
+	{
+		bool moved = LayoutMoved(bake, t);
+		if (moved == !!st.LayoutMoved[t] || LayoutChanged.Find(t) < LayoutChanged.Size()) return;
+		st.LayoutMoved[t] = moved;
+		LayoutChanged.Push(t);
+		for (uint32_t k = bake->SectorLightStart[t]; k < bake->SectorLightStart[t + 1]; k++) st.Lights3D.Touch(bake->SectorLights[k]);
+	};
+	Candidates = std::move(st.LayoutRecheck);
+	st.LayoutRecheck.Clear();
+	for (uint32_t t : Candidates) layout(t);
+	for (uint32_t s : MovedSectors)
+		for (uint32_t k = bake->LayoutDependStart[s]; k < bake->LayoutDependStart[s + 1]; k++) layout(bake->LayoutDepend[k]);
+	for (uint32_t s : DirtySectors)
+		for (uint32_t k = bake->LightDependStart[s]; k < bake->LightDependStart[s + 1]; k++) st.Lights3D.Touch(bake->LightDepend[k]);
+	candidates += StreamRecords(st.Lights3D, stamp, lm_statefull, recordSweep,
+		[&](unsigned i, LevelMeshLight3D &out)
+		{
+			auto &src = bake->Lights3D[i];
+			LevelMesh_FillLight3D(Level, src, st.LayoutMoved[src.sector], out);
+		},
+		DirtyLights, DirtyLightRecords, PreviousLightRecords);
+
 	for (uint32_t c : DirtyClusters)
 	{
 		auto &cl = bake->Clusters[c];
@@ -581,7 +719,7 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	}
 
 	size_t bytes = 0;
-	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size())
+	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size() || DirtyLights.Size())
 	{
 		LevelMeshStateUpdate update;
 		update.id = bake->Id;
@@ -592,6 +730,8 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		update.sides = LM_Span(DirtySideRecords);
 		update.xformIndices = LM_Span(DirtyXforms);
 		update.xforms = LM_Span(DirtyXformRecords);
+		update.light3DIndices = LM_Span(DirtyLights);
+		update.lights3D = LM_Span(DirtyLightRecords);
 		bytes = screen->UpdateLevelMeshState(update);
 		if (bytes == 0)
 		{
@@ -600,8 +740,16 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 			for (unsigned i = 0; i < DirtySectors.Size(); i++) st.Sectors[DirtySectors[i]] = PreviousRecords[i];
 			for (unsigned i = 0; i < DirtySides.Size(); i++) st.Sides.Records[DirtySides[i]] = PreviousSideRecords[i];
 			for (unsigned i = 0; i < DirtyXforms.Size(); i++) st.Xforms.Records[DirtyXforms[i]] = PreviousXformRecords[i];
+			for (unsigned i = 0; i < DirtyLights.Size(); i++) st.Lights3D.Records[DirtyLights[i]] = PreviousLightRecords[i];
+			for (uint32_t t : LayoutChanged)
+			{
+				st.LayoutMoved[t] = !st.LayoutMoved[t];
+				st.LayoutRecheck.Push(t);
+			}
 			DirtySides.Clear();
 			DirtyXforms.Clear();
+			DirtyLights.Clear();
+			LayoutChanged.Clear();
 			for (auto &z : PreviousClusterZ)
 			{
 				bake->Clusters[z.cluster].bmin[2] = z.zmin;
@@ -610,32 +758,25 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 			ClusterUpdates.Clear();
 		}
 	}
-	// Classic draw-list ownership follows LMTS_DEFERRED (uploaded records only).
-	for (unsigned k = 0; k < DirtySides.Size(); k++)
+	// Classic draw-list ownership follows LMTS_DEFERRED and the 3D-floor
+	// layouts (uploaded records only).
+	for (uint32_t ref : DirtySides) SetTierOwned(Level, bake, ref);
+	for (uint32_t ref : DirtyXforms) SetPlaneOwned(bake, ref);
+	for (uint32_t t : LayoutChanged)
 	{
-		uint32_t ref = DirtySides[k];
-		if (ref < bake->SideTierOwned.Size())
-		{
-			uint8_t owned = bake->SideTierBaked[ref] && !(DirtySideRecords[k].flags & LMTS_DEFERRED);
-			if (lm_statelog && owned != bake->SideTierOwned[ref])
-				Printf("Levelmesh state: side %u tier %u -> %s\n", ref / 3, ref % 3, owned ? "levelmesh" : "classic");
-			bake->SideTierOwned[ref] = owned;
-		}
-	}
-	for (unsigned k = 0; k < DirtyXforms.Size(); k++)
-	{
-		uint32_t ref = DirtyXforms[k];
-		if (ref < bake->SectorPlaneOwned.Size())
-		{
-			uint8_t owned = bake->SectorPlaneBaked[ref] && !(DirtyXformRecords[k].flags & LMTS_DEFERRED);
-			if (lm_statelog && owned != bake->SectorPlaneOwned[ref])
-				Printf("Levelmesh state: sector %u plane %u -> %s\n", ref >> 1, ref & 1, owned ? "levelmesh" : "classic");
-			bake->SectorPlaneOwned[ref] = owned;
-		}
+		if (lm_statelog) Printf("Levelmesh state: sector %u 3D-floor layout %s\n", t, st.LayoutMoved[t] ? "moved: classic" : "at the bake: levelmesh");
+		sector_t &sec = Level->sectors[t];
+		for (line_t *line : sec.Lines)
+			for (side_t *side : line->sidedef)
+				if (side && side->sector == &sec)
+					for (int tier = 0; tier < 3; tier++) SetTierOwned(Level, bake, side->Index() * 3 + tier);
+		SetPlaneOwned(bake, t * 2);
+		SetPlaneOwned(bake, t * 2 + 1);
 	}
 	st.Changed.Append(DirtySectors);
 	st.Sides.Changed.Append(DirtySides);
 	st.Xforms.Changed.Append(DirtyXforms);
+	st.Lights3D.Changed.Append(DirtyLights);
 	LevelMeshStateTime.Unclock();
 
 	lmStateStats.candidates += candidates;

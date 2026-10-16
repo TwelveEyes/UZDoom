@@ -71,6 +71,10 @@ struct LevelMeshBakeStats
 	unsigned edgeUnbounded = 0;					// walls left without edgeTop (a non-top vertex above it at load)
 	unsigned deferredSurfaces = 0;				// LMSF_DEFERRED: drawn by the classic path (ticket 08)
 	unsigned deferredByTier = 0;				// of those, deferred because another piece of the side tier is
+	unsigned lights3D = 0;						// distinct 3D lights
+	unsigned light3DSurfaces = 0;				// surfaces lit by one (lightList >= 0)
+	unsigned bandedWalls = 0;					// walls drawn with the classic split planes (LMSF_LIGHTLIST)
+	unsigned edgeClamped = 0;					// tiers with an edgeClamp (HWWall::Process tier clamp)
 	double wallMs = 0, flatMs = 0, totalMs = 0;
 };
 
@@ -130,6 +134,33 @@ struct LevelMeshTierBase
 	int program = LMP_DEFAULT;	// material program (bucket)
 };
 
+// What identifies a 3D light (LevelMeshLight3D) across P_Recalculate3DFloors:
+// the lightlist rebuild recreates the clipped (FF_DYNAMIC) copies of the 3D
+// floors, so the light is keyed by the values the classic reads, not by
+// F3DFloor pointers. LevelMesh_FillLight3D finds the current entry by it.
+struct LevelMeshLight3DSource
+{
+	uint32_t sector;				// the sector whose lightlist it is
+	sector_t *lightsourceModel;		// lightsource->model, nullptr: the sector's own colormap
+	int lightsourceFlags;			// lightsource->flags & (FF_FADEWALLS | FF_FOG) (F3DFloor::GetColormap)
+	short *lightLevel;				// p_lightlevel
+	bool casterFadeWalls;			// caster && (caster->flags & FF_FADEWALLS) (CopyFrom3DLight)
+
+	bool operator==(const LevelMeshLight3DSource &o) const
+	{
+		return sector == o.sector && lightsourceModel == o.lightsourceModel && lightsourceFlags == o.lightsourceFlags &&
+			lightLevel == o.lightLevel && casterFadeWalls == o.casterFadeWalls;
+	}
+};
+
+// A plane the bake's split and 3D lighting of a sector depends on, with its
+// value at bake (LevelMeshBake::LayoutPlanes).
+struct LevelMeshLayoutPlane
+{
+	uint32_t ref;
+	LevelMeshPlane plane;
+};
+
 // The dirty state stream's bookkeeping (hw_levelmeshstate.cpp).
 struct LevelMeshStateStream
 {
@@ -145,6 +176,9 @@ struct LevelMeshStateStream
 	unsigned SweepCursor = 0;
 	LevelMeshRecordStream<LevelMeshSideState> Sides;		// side * 3 + tier
 	LevelMeshRecordStream<LevelMeshPlaneXform> Xforms;		// plane ref
+	LevelMeshRecordStream<LevelMeshLight3D> Lights3D;		// LevelMeshBake::Lights3D
+	TArray<uint8_t> LayoutMoved;			// per sector: its 3D-floor layout differs from the bake (LML3_DEFERRED)
+	TArray<uint32_t> LayoutRecheck;			// sectors whose layout must be compared again (an update that was not uploaded)
 };
 
 struct LevelMeshClusterStats
@@ -199,6 +233,19 @@ public:
 	TArray<int8_t> PlaneProgram;		// per sector plane: material program of its surfaces (-2 = none)
 	TArray<uint8_t> PlanePortal;		// per sector plane: baked with a sector portal (HWFlat draws it opaque over the portal)
 
+	// 3D lights (LevelMeshSurface::lightList), and per sector with 3D floors
+	// (CSR, numsectors + 1 entries each): its lights; the planes its
+	// surfaces were split and lit by (its own and its 3D floors' model
+	// planes) at their bake values. Per sector, the sectors whose 3D-floor
+	// layout depends on its planes, and the lights that read its light
+	// level or colormap.
+	TArray<LevelMeshLight3DSource> Lights3D;
+	TArray<uint32_t> SectorLightStart, SectorLights;
+	TArray<uint32_t> LayoutStart;
+	TArray<LevelMeshLayoutPlane> LayoutPlanes;
+	TArray<uint32_t> LayoutDependStart, LayoutDepend;
+	TArray<uint32_t> LightDependStart, LightDepend;
+
 	uint64_t Id = 0;				// unique per bake (backend residency)
 	bool GeometryReleased = false;	// Vertices / Indices freed after the upload
 
@@ -245,6 +292,8 @@ void LevelMesh_ReleaseResources(FLevelLocals *Level);
 void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out);
 void LevelMesh_FillSideState(const LevelMeshBake *bake, side_t &side, int tier, LevelMeshSideState &out);
 void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos, LevelMeshPlaneXform &out);
+// 'layoutMoved': the light's sector's 3D-floor layout differs from the bake.
+void LevelMesh_FillLight3D(FLevelLocals *Level, const LevelMeshLight3DSource &src, bool layoutMoved, LevelMeshLight3D &out);
 
 // The levelmesh program (ELevelMeshProgram) of a texture's material shader,
 // -1 for material shaders the levelmesh cannot draw yet (classic path).
@@ -259,7 +308,7 @@ bool LevelMesh_HasPlaneColorEffects(sector_t *sec, int pos);
 // Resets the dirty state stream to the records just uploaded and attaches
 // the change hooks to the level.
 void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors,
-	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms);
+	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms, const TArray<LevelMeshLight3D> &lights3D);
 
 // Frame boundary for the state stream (once per rendered frame, before any
 // viewpoint).

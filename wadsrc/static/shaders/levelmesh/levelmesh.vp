@@ -115,9 +115,17 @@ void main()
 
 	LMTextureEntry tex = lmTextures[LM_SurfaceTexture(surf)];
 	uint kind = surf.flags & LMSF_KINDMASK;
-	// A wall tier whose planes crossed collapses (LevelMeshSurface::edgeTop;
-	// LevelMeshBake::VertexZ is the CPU reference).
-	if (kind == LMSK_WALL && surf.edgeTop != LM_NOPLANE && (v.anchor >> LMV_ROLESHIFT) != LMV_TOP)
+	// The classic tier clamp (LevelMeshSurface::edgeClamp), then a wall tier
+	// whose planes crossed collapses (edgeTop). LevelMeshBake::VertexZ is
+	// the CPU reference.
+	uint role = v.anchor >> LMV_ROLESHIFT;
+	if (kind == LMSK_WALL && surf.edgeClamp != LM_NOPLANE)
+	{
+		float cz = LM_PlaneZ(lmSectors[surf.edgeClamp >> 1].planes[surf.edgeClamp & 1u], v.x, v.y);
+		if ((surf.flags & LMSF_EDGECLAMPMAX) != 0u) { if (role == LMV_BOTTOM) z = max(z, cz); }
+		else if (role == LMV_TOP) z = min(z, cz);
+	}
+	if (kind == LMSK_WALL && surf.edgeTop != LM_NOPLANE && role != LMV_TOP)
 		z = min(z, LM_PlaneZ(lmSectors[surf.edgeTop >> 1].planes[surf.edgeTop & 1u], v.x, v.y));
 	vec2 tc;
 	if (kind == LMSK_WALL) tc = LM_WallTexCoord(v, surf, z);

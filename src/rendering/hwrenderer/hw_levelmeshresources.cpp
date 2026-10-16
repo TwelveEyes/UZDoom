@@ -79,6 +79,8 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 			}
 		}
 	}
+	TArray<LevelMeshLight3D> lights3D(bake->Lights3D.Size(), true);
+	for (unsigned i = 0; i < lights3D.Size(); i++) LevelMesh_FillLight3D(Level, bake->Lights3D[i], false, lights3D[i]);
 	for (auto &surf : bake->Surfaces) use(surf.textureId);
 	TArray<int> textureIds;
 	for (unsigned i = 0; i < ntex; i++)
@@ -95,10 +97,11 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	data.sectors = LM_Span(sectors);
 	data.sides = LM_Span(sides);
 	data.planeXforms = LM_Span(xforms);
+	data.lights3D = LM_Span(lights3D);
 	data.textureIds = LM_Span(textureIds);
 	data.translationTableSize = ntex;
 	screen->SetLevelMeshData(&data);
-	LevelMesh_ResetState(Level, bake, sectors, sides, xforms);
+	LevelMesh_ResetState(Level, bake, sectors, sides, xforms, lights3D);
 
 	if (!lm_keepgeometry)
 	{

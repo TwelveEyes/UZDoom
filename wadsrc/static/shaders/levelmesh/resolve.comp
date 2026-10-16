@@ -359,6 +359,20 @@ Colormap SectorColormap(LMSectorState sec)
 	return cm;
 }
 
+// CopyFrom3DLight (r_defs.h): the 3D light's light color, desaturation and
+// blend factor, and its fog for an FF_FADEWALLS caster with a fade color.
+void CopyFrom3DLight(inout Colormap cm, LMLight3D light)
+{
+	cm.lightColor = light.lightColor;
+	cm.desaturation = int(light.colormap & 0xffu);
+	cm.blendFactor = int((light.colormap >> 8) & 0xffu);
+	if ((light.flags & LML3_COPYFOG) != 0u)
+	{
+		cm.fadeColor = light.fadeColor;
+		cm.fogDensity = int(light.colormap >> 16);
+	}
+}
+
 // FColormap::Clear
 Colormap ClearedColormap()
 {
@@ -392,6 +406,14 @@ LMResolved Resolve(LMSurface surf)
 		int fakeRel;
 		int lightlevel = RescaleLightLevel(SideLightLevel(surf, foggy, orglightlevel, fakeRel));
 		int rellight = CalcRelLight(lightlevel, orglightlevel, fakeRel);
+		// HWWall::SplitWall -> Put3DWall: the light layer the piece lies in
+		// (the relative light stays the sector's).
+		if (surf.lightList >= 0)
+		{
+			LMLight3D light = lmLights3D[surf.lightList];
+			if ((surf.flags & LMSF_LIGHT3DLEVEL) != 0u) lightlevel = RescaleLightLevel(light.lightLevel);
+			CopyFrom3DLight(cm, light);
+		}
 		// HWF_GLOW: GetWallGlow returned true (LevelMesh_FillSectorState
 		// zeroes both heights otherwise).
 		glow = sec.glowTop[3] > 0.0 || sec.glowBottom[3] > 0.0;
@@ -410,6 +432,13 @@ LMResolved Resolve(LMSurface surf)
 	{
 		// HWFlat::ProcessSector / Process / PutFlat
 		int lightlevel = RescaleLightLevel(sec.planeLight[kind == LMSK_CEILING ? 1 : 0]);
+		// In a sector with 3D floors: P_GetPlaneLight's light layer.
+		if (surf.lightList >= 0)
+		{
+			LMLight3D light = lmLights3D[surf.lightList];
+			if ((surf.flags & LMSF_LIGHT3DLEVEL) != 0u) lightlevel = RescaleLightLevel(light.lightLevel);
+			CopyFrom3DLight(cm, light);
+		}
 		// The current animation frame (LevelMeshTextureEntry follows it).
 		if ((lmTextures[LM_SurfaceTexture(surf)].layers & LMTE_FULLBRIGHT) != 0u)
 		{

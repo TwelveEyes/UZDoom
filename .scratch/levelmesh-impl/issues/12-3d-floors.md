@@ -61,3 +61,33 @@
     the sector. The 3D-light state buffer here should replace both rules with a per-surface
     3D-light ref, resolved in `resolve.comp` (`SetColor` / `SetFog` with the 3D light's level
     and `CopyFrom3DLight` colormap).
+- 2026-10-16: progress, part B (3D-light state buffer).
+  - Test map: `tools/abtest/make_3dfloortest.py` writes `wads/3dfloortest.wad` and its demo
+    (`ab_manifest_3dfloortest.json`, 14 rooms). With everything 3D on the classic path, 24 of
+    107 ticks fail on DC2 ceiling speckle only; compare runs with `ab_sheet.py failsets`.
+  - `LevelMeshLight3D` records (8 words, `LMBIND_LIGHTS3D`), one per distinct lightlist entry,
+    keyed at bake by (sector, lightsource model, lightsource FADEWALLS / FOG, p_lightlevel,
+    caster FADEWALLS): the clipped FF_DYNAMIC copies are recreated by every
+    P_Recalculate3DFloors, so no F3DFloor pointers. Hash map at bake, stable index.
+    `LevelMesh_FillLight3D` finds the current entry by the key and copies its extra_colormap.
+  - Every wall / flat of a sector with 3D floors carries `lightList` (the layer SplitWall /
+    P_GetPlaneLight gives it) and `LMSF_LIGHT3DLEVEL` where the classic replaces the light
+    level; `resolve.comp` applies `CopyFrom3DLight`. `SectorLit` and the LMSF_LIGHTLIST
+    deferral of non-banded surfaces are gone; banded walls (`w.lightlist`) stay deferred
+    (part D).
+  - Refresh is O(changed): the lights reading a changed sector (`LightDepend` CSR) plus a
+    sweep. A sector whose 3D-floor layout (its own planes and its 3D floors' model planes,
+    `LayoutPlanes`) moved from the bake sets `LML3_DEFERRED` on its lights: the vertex stage
+    hides their surfaces and the sector's tiers / planes go back to the classic draw lists
+    until the layout is at the bake again (`lm_statelog` prints the switches). `lm_light3d 0`
+    (level setup) defers every 3D-lit surface, for bisecting.
+  - **Lift fix (found here, not 3D-specific):** HWWall::Process clamps an upper tier's
+    bottom to the front floor where that lies above the back ceiling (and a lower tier's top
+    to the front ceiling). The bake anchored those vertices to the plane that won at load, so
+    a lift starting above its neighbour's ceiling dragged its upper tiers down with it into a
+    wall sheet across the opening (Pirates MAP58 ticks 210-270, the lift ride flicker). Now
+    anchored to the back plane with `LevelMeshSurface::edgeClamp` (max / min in the vertex
+    stage), taken only when it reproduces every edge vertex bit-exactly at load.
+  - A/B (full lighting): 3dfloortest unchanged fail set (speckle only); Pirates MAP58 26 -> 23
+    fails (differing px 8.9M -> 1.3M); MAP43 8 -> 9 (tick 900: a 2x2 speck on a flat now drawn
+    by the levelmesh, DC2); DOOM2 MAP01 3, movers unchanged (MAP30 19).

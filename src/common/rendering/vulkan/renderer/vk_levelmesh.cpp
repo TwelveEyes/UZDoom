@@ -64,7 +64,7 @@ constexpr size_t MIN_RING_SIZE = 256 * 1024;
 const char *BufferName(int b)
 {
 	static const char *names[] = { "vertices", "indices", "surfaces", "clusters", "cluster sectors", "cluster surfaces", "sector state", "side state", "plane xform", "texture table",
-		"resolved", "shading" };
+		"resolved", "shading", "3D lights" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "buffer names out of sync");
 	return names[b];
 }
@@ -168,7 +168,7 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LM_SET %d\n#define LM_TEXTURE_SET %d\n", lmSet, textureSet);
 	d << "#define LM_MATERIAL_LOCATION 15\n";	// past the generated varyings
 	static const char *names[] = { "VERTICES", "INDICES", "SURFACES", "CLUSTERS", "CLUSTERSECTORS", "CLUSTERSURFACES",
-		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING" };
+		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING", "LIGHTS3D" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "binding names out of sync");
 	for (int b = 0; b < LMBIND_NUMBUFFERS; b++) d.AppendFormat("#define LMBIND_%s %d\n", names[b], b);
 	d.AppendFormat("#define LMBIND_SAMPLERS %d\n#define NUMSAMPLERS %d\n", (int)LMBIND_SAMPLERS, (int)NUMSAMPLERS);
@@ -183,6 +183,9 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LMVF_FULLBRIGHT %d\n", (int)LMVF_FULLBRIGHT);
 	d.AppendFormat("#define LMSK_FLOOR %uu\n#define LMSK_CEILING %uu\n", (unsigned)LMSK_FLOOR, (unsigned)LMSK_CEILING);
 	d.AppendFormat("#define LMSF_DEFERRED %uu\n#define LMSF_NOSECTORFOG %uu\n", (unsigned)LMSF_DEFERRED, (unsigned)LMSF_NOSECTORFOG);
+	d.AppendFormat("#define LMSF_EDGECLAMPMAX %uu\n#define LMV_BOTTOM %uu\n", (unsigned)LMSF_EDGECLAMPMAX, (unsigned)LMV_BOTTOM);
+	d.AppendFormat("#define LMSF_LIGHT3DLEVEL %uu\n#define LML3_COPYFOG %uu\n#define LML3_DEFERRED %uu\n",
+		(unsigned)LMSF_LIGHT3DLEVEL, (unsigned)LML3_COPYFOG, (unsigned)LML3_DEFERRED);
 	d.AppendFormat("#define LMTE_TEXFMASK 0x%xu\n#define LMTE_FULLBRIGHT 0x%xu\n", (unsigned)LMTE_TEXFMASK, (unsigned)LMTE_FULLBRIGHT);
 	d.AppendFormat("#define LMSF_STATETEXTURE %uu\n#define LMTS_DEFERRED %uu\n", (unsigned)LMSF_STATETEXTURE, (unsigned)LMTS_DEFERRED);
 	d.AppendFormat("#define LMSF_PROGRAMMASK 0x%xu\n#define LMSF_PROGRAMSHIFT %uu\n#define LMP_DEFAULT %uu\n",
@@ -302,6 +305,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		{ nullptr, data->translationTableSize * sizeof(LevelMeshTextureEntry), data->translationTableSize, 0 },
 		{ nullptr, data->surfaces.size * sizeof(LevelMeshResolved), data->surfaces.size, 0 },
 		{ nullptr, sizeof(LevelMeshShading), 1, 0 },
+		{ data->lights3D.data, data->lights3D.size * sizeof(LevelMeshLight3D), data->lights3D.size, 0 },
 	};
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();
@@ -609,8 +613,8 @@ bool VkLevelMesh::CreateScatter()
 	defines.AppendFormat("#define LM_CLUSTER_ZMIN %uu\n#define LM_CLUSTER_ZMAX %uu\n",
 		(unsigned)(offsetof(LevelMeshCluster, bmin) / 4 + 2), (unsigned)(offsetof(LevelMeshCluster, bmax) / 4 + 2));
 	defines.AppendFormat("#define LM_CLUSTERZ_WORDS %uu\n", (unsigned)(sizeof(LevelMeshClusterZ) / 4));
-	defines.AppendFormat("#define LM_SIDE_WORDS %uu\n#define LM_XFORM_WORDS %uu\n",
-		(unsigned)(sizeof(LevelMeshSideState) / 4), (unsigned)(sizeof(LevelMeshPlaneXform) / 4));
+	defines.AppendFormat("#define LM_SIDE_WORDS %uu\n#define LM_XFORM_WORDS %uu\n#define LM_LIGHT3D_WORDS %uu\n",
+		(unsigned)(sizeof(LevelMeshSideState) / 4), (unsigned)(sizeof(LevelMeshPlaneXform) / 4), (unsigned)(sizeof(LevelMeshLight3D) / 4));
 	static_assert(offsetof(LevelMeshClusterZ, cluster) == 0 && offsetof(LevelMeshClusterZ, zmin) == 4 && offsetof(LevelMeshClusterZ, zmax) == 8, "scatter.comp reads LevelMeshClusterZ by word");
 	try
 	{
@@ -653,7 +657,8 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	unsigned ncl = update.clusters.size;
 	unsigned nside = std::min(update.sideIndices.size, update.sides.size);
 	unsigned nxf = std::min(update.xformIndices.size, update.xforms.size);
-	if (nsec == 0 && ncl == 0 && nside == 0 && nxf == 0) return 0;
+	unsigned nl3 = std::min(update.light3DIndices.size, update.lights3D.size);
+	if (nsec == 0 && ncl == 0 && nside == 0 && nxf == 0 && nl3 == 0) return 0;
 	for (unsigned i = 0; i < nsec; i++)
 		if (update.sectorIndices.data[i] >= mCounts[LMBIND_SECTORSTATE]) return 0;
 	for (unsigned i = 0; i < ncl; i++)
@@ -662,6 +667,8 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 		if (update.sideIndices.data[i] >= mCounts[LMBIND_SIDESTATE]) return 0;
 	for (unsigned i = 0; i < nxf; i++)
 		if (update.xformIndices.data[i] >= mCounts[LMBIND_PLANEXFORM]) return 0;
+	for (unsigned i = 0; i < nl3; i++)
+		if (update.light3DIndices.data[i] >= mCounts[LMBIND_LIGHTS3D]) return 0;
 	if (!CreateScatter()) return 0;
 
 	// Layout: [indices | records] per record kind, then the cluster entries;
@@ -670,7 +677,8 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	size_t secIdx = 0, secRec = secIdx + align(nsec * 4);
 	size_t sideIdx = secRec + nsec * sizeof(LevelMeshSectorState), sideRec = sideIdx + align(nside * 4);
 	size_t xfIdx = sideRec + nside * sizeof(LevelMeshSideState), xfRec = xfIdx + align(nxf * 4);
-	size_t clRec = xfRec + nxf * sizeof(LevelMeshPlaneXform);
+	size_t l3Idx = xfRec + nxf * sizeof(LevelMeshPlaneXform), l3Rec = l3Idx + align(nl3 * 4);
+	size_t clRec = l3Rec + nl3 * sizeof(LevelMeshLight3D);
 	size_t size = clRec + ncl * sizeof(LevelMeshClusterZ);
 	auto alloc = AllocUpload(size);
 	uint8_t *dst = (uint8_t *)alloc.data;
@@ -688,6 +696,11 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	{
 		memcpy(dst + xfIdx, update.xformIndices.data, nxf * 4);
 		memcpy(dst + xfRec, update.xforms.data, nxf * sizeof(LevelMeshPlaneXform));
+	}
+	if (nl3)
+	{
+		memcpy(dst + l3Idx, update.light3DIndices.data, nl3 * 4);
+		memcpy(dst + l3Rec, update.lights3D.data, nl3 * sizeof(LevelMeshLight3D));
 	}
 	if (ncl) memcpy(dst + clRec, update.clusters.data, ncl * sizeof(LevelMeshClusterZ));
 
@@ -716,6 +729,9 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	pc.xformIndices = word(xfIdx);
 	pc.xformRecords = word(xfRec);
 	pc.numXforms = nxf;
+	pc.light3DIndices = word(l3Idx);
+	pc.light3DRecords = word(l3Rec);
+	pc.numLights3D = nl3;
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();
 	// Earlier writes (level upload, earlier scatters) before this one.
@@ -727,7 +743,7 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mScatterLayout.get(), 1, slot.scatterSet.get());
 	cmd->pushConstants(mScatterLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ScatterConstants), &pc);
 	size_t items = (size_t)nsec * (sizeof(LevelMeshSectorState) / 4) + ncl + (size_t)nside * (sizeof(LevelMeshSideState) / 4) +
-		(size_t)nxf * (sizeof(LevelMeshPlaneXform) / 4);
+		(size_t)nxf * (sizeof(LevelMeshPlaneXform) / 4) + (size_t)nl3 * (sizeof(LevelMeshLight3D) / 4);
 	cmd->dispatch((uint32_t)std::min<size_t>((items + 63) / 64, 65535), 1, 1);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)

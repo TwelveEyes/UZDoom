@@ -50,7 +50,7 @@ struct LMSurface
 	float texOffsetScale, rowOffsetScale;
 	float renderWidth;
 	float wrapWidth;
-	uint reserved;
+	uint edgeClamp;
 };
 
 struct LMCluster
@@ -115,6 +115,16 @@ struct LMPlaneXform
 	uint reserved[3];
 };
 
+struct LMLight3D
+{
+	int lightLevel;
+	uint lightColor;
+	uint fadeColor;
+	uint colormap;
+	uint flags;
+	uint reserved[3];
+};
+
 struct LMTextureEntry
 {
 	uint slot;
@@ -132,13 +142,15 @@ layout(set = LM_SET, binding = LMBIND_SECTORSTATE, std430) buffer readonly LMSec
 layout(set = LM_SET, binding = LMBIND_SIDESTATE, std430) buffer readonly LMSideBuffer { LMSideState lmSides[]; };
 layout(set = LM_SET, binding = LMBIND_PLANEXFORM, std430) buffer readonly LMPlaneXformBuffer { LMPlaneXform lmPlaneXforms[]; };
 layout(set = LM_SET, binding = LMBIND_TEXTURETABLE, std430) buffer readonly LMTextureBuffer { LMTextureEntry lmTextures[]; };
+layout(set = LM_SET, binding = LMBIND_LIGHTS3D, std430) buffer readonly LMLight3DBuffer { LMLight3D lmLights3D[]; };
 #ifndef LM_RESOLVE_WRITER
 layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolvedBuffer { LMResolved lmResolved[]; };
 #endif
 
 // The surface's current texture (untranslated id) and whether the classic
-// path draws it instead (LMTS_DEFERRED): walls follow their side tier,
-// sector planes their plane (LMSF_STATETEXTURE).
+// path draws it instead: walls follow their side tier, sector planes their
+// plane (LMSF_STATETEXTURE, LMTS_DEFERRED); surfaces lit by a 3D light
+// follow its sector's 3D-floor layout (LML3_DEFERRED).
 int LM_SurfaceTexture(LMSurface surf)
 {
 	if ((surf.flags & LMSF_STATETEXTURE) == 0u) return surf.textureId;
@@ -148,6 +160,7 @@ int LM_SurfaceTexture(LMSurface surf)
 
 bool LM_StateDeferred(LMSurface surf)
 {
+	if (surf.lightList >= 0 && (lmLights3D[surf.lightList].flags & LML3_DEFERRED) != 0u) return true;
 	if ((surf.flags & LMSF_STATETEXTURE) == 0u) return false;
 	if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) return (lmSides[surf.sideRef].flags & LMTS_DEFERRED) != 0u;
 	return (lmPlaneXforms[surf.planeRefs[0]].flags & LMTS_DEFERRED) != 0u;

@@ -53,6 +53,7 @@ enum ELevelMeshBinding
 	LMBIND_TEXTURETABLE,
 	LMBIND_RESOLVED,		// per surface: LevelMeshResolved of the current view (resolve.comp)
 	LMBIND_SHADING,			// LevelMeshShading of the current view
+	LMBIND_LIGHTS3D,		// LevelMeshLight3D
 	LMBIND_NUMBUFFERS,
 	LMBIND_SAMPLERS = LMBIND_NUMBUFFERS,	// sampler[NUMSAMPLERS], indexed by clamp mode
 };
@@ -189,9 +190,10 @@ private:
 		uint32_t clusterEntries, numClusters;
 		uint32_t sideIndices, sideRecords, numSides;
 		uint32_t xformIndices, xformRecords, numXforms;
-		uint32_t padding;
+		uint32_t light3DIndices, light3DRecords, numLights3D;
+		uint32_t padding[2];
 	};
-	static_assert(sizeof(ScatterConstants) == 12 * 4, "scatter.comp declares 12 words of push constants");
+	static_assert(sizeof(ScatterConstants) == 16 * 4, "scatter.comp declares 16 words of push constants");
 	bool mScatterCreated = false, mScatterFailed = false;
 	std::unique_ptr<VulkanShader> mScatterShader;
 	std::unique_ptr<VulkanDescriptorSetLayout> mScatterSetLayout;

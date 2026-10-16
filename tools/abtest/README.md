@@ -85,7 +85,7 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   material-shader difference.
 - **3D floors (ticket 12):** `ab_manifest_3dfloortest.json` replays `demos/3dfloortest/` over
   `wads/3dfloortest.wad`. `make_3dfloortest.py` writes both (copy the wad into the build's
-  `wads/` too). 13 rooms: solid boxes with the sector's and with another 3D light, whole-room
+  `wads/` too). 14 rooms: solid boxes with the sector's and with another 3D light, whole-room
   light layers (walls split per layer), a sloped light plane across the walls (banded walls),
   stacked layers with `FF_DOUBLESHADOW`, a moving 3D floor, masked sides, light / color changes
   on a control sector, translucent and fog 3D floors (classic, ticket 16), `ExtraFloor_LightOnly`,

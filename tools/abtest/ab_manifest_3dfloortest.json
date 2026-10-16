@@ -57,12 +57,12 @@
   300,
   400
  ],
- "comment": "3D-floor A/B (.scratch/levelmesh-impl ticket 12): wads/3dfloortest.wad and demos/3dfloortest/ (both from make_3dfloortest.py), a scripted tour of 13 rooms: solid / non-solid / sloped / stacked / moving / masked / translucent / fog / light-only / upper-texture / swimmable 3D floors and 3D lights, light and color changes; captured every 5 tics. Same tolerance as ab_manifest.json.",
+ "comment": "3D-floor A/B (.scratch/levelmesh-impl ticket 12): wads/3dfloortest.wad and demos/3dfloortest/ (both from make_3dfloortest.py), a scripted tour of 14 rooms: solid / non-solid / sloped / stacked / moving / masked / translucent / fog / light-only / upper-texture / swimmable 3D floors and 3D lights, light and color changes; captured every 5 tics. Same tolerance as ab_manifest.json.",
  "demo_dir": "demos/3dfloortest",
  "demo_ticks": {
   "start": 5,
   "step": 5,
-  "last": 505
+  "last": 535
  },
  "maps": [
   {

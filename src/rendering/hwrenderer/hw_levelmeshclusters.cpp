@@ -191,6 +191,8 @@ struct ClusterBuilder
 		// A wall's edge bound can become its vertices' z (LevelMeshSurface::edgeTop).
 		uint32_t edge = Bake->Surfaces[surface].edgeTop;
 		if (edge != LM_NOPLANE) AddPlane(edge, 0.f);
+		uint32_t clamp = Bake->Surfaces[surface].edgeClamp;
+		if (clamp != LM_NOPLANE) AddPlane(clamp, 0.f);
 		cur.bucketIndices[bucket] += count * 3;
 		if (lastSurface != surface)
 		{

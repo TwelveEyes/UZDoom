@@ -82,12 +82,14 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_HEIGHTSEC = 1 << 8,	// front or back sector has a Boom heightsec (view-dependent in classic, baked unfaked)
 	// 1 << 9 reserved: dither eligibility (ticket 18; WALLF_DITHERTRANS_* is per-frame state)
 	LMSF_SKEW = 1 << 10,		// sloped / skewed texture alignment
-	LMSF_LIGHTLIST = 1 << 11,	// lit by lightSector's 3D lightlist: banded (classic split planes) or one 3D light (Put3DWall, P_GetPlaneLight)
+	LMSF_LIGHTLIST = 1 << 11,	// banded wall: lit by lightSector's 3D lightlist per layer (classic split planes)
 	LMSF_SKY = 1 << 12,			// unused for mesh surfaces (sky goes to side lists); reserved
 	LMSF_DEFERRED = 1 << 13,	// not drawn by the levelmesh yet: the classic path owns it (LMB_DEFERRED)
 	LMSF_TEXCLAMPY = 1 << 14,	// TEXF_ClampY texture mode (classic SetTextureClamp: clamped two-sided mid texture)
 	LMSF_STATETEXTURE = 1 << 15,	// the texture is the streamed one (side tier / plane), not textureId
 	LMSF_NOSECTORFOG = 1 << 16,	// walls: fog of light 255 without the sector colormap (RENDERWALL_M2SNF)
+	LMSF_LIGHT3DLEVEL = 1 << 17,	// the 3D light (lightList) replaces the light level (HWWall::Put3DWall, HWFlat::ProcessSector)
+	LMSF_EDGECLAMPMAX = 1 << 18,	// edgeClamp raises the bottom vertices (upper tier); otherwise it lowers the top vertices (lower tier)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
 	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..29
 	LMSF_PROGRAMMASK = 3u << 28,
@@ -121,7 +123,7 @@ struct LevelMeshSurface
 	int32_t textureId;		// untranslated FTextureID
 	uint32_t sideRef;		// side * 3 + tier (side_t::top/mid/bottom), 0xffffffff for flats
 	uint32_t lightSector;	// sector providing the base light
-	int32_t lightList;		// 3D light layer index, -1 = none / not recorded (ticket 12)
+	int32_t lightList;		// LevelMeshLight3D index of the 3D light the classic lights it with, -1 = none (no 3D floors)
 	int32_t lightLevel;		// classic lightlevel at bake (RescaleLightLevel applied; reference only, the resolve recomputes it)
 	int32_t relLight;		// classic rellight at bake (reference only)
 	int32_t sideLight;		// side Light (low 16) | TierLights[tier] (high 16)
@@ -149,9 +151,42 @@ struct LevelMeshSurface
 	float rowOffsetScale;	// FTexCoordInfo::RowOffset divisor
 	float renderWidth;		// FTexCoordInfo::mRenderWidth (FloatToTexU)
 	float wrapWidth;		// two-sided mid textures: TextureAdjustWidth (DoMidTexture wraps the x offset into it); 0 = no wrap
-	uint32_t reserved;
+	// Walls: the plane HWWall::Process clamps a tier's inner edge to. An
+	// upper tier ends at the back ceiling, raised to the front floor where
+	// that lies above it (LMSF_EDGECLAMPMAX: bottom vertices = max); a lower
+	// tier starts at the back floor, lowered to the front ceiling where that
+	// lies below it (top vertices = min). The vertices are anchored to the
+	// back sector's plane, so the clamp follows both planes as they move.
+	// LM_NOPLANE = none.
+	uint32_t edgeClamp;
 };
 static_assert(sizeof(LevelMeshSurface) == 32 * 4, "LevelMeshSurface must stay std430-compatible");
+
+// A 3D light: one lightlist_t of a sector with 3D floors, identified at bake
+// by (sector, lightsource, p_lightlevel, caster), the inputs the classic
+// copies into a surface's light (HWWall::Put3DWall, HWFlat::ProcessSector:
+// CopyFrom3DLight). The index is stable for the level; the lightlist itself
+// is rebuilt by P_Recalculate3DFloors. Streamed dirty-only
+// (LevelMesh_FillLight3D). std430-compatible: 8 x 32 bit.
+enum ELevelMeshLight3DFlags : uint32_t
+{
+	LML3_COPYFOG = 1,		// CopyFrom3DLight also copies the fog (caster FF_FADEWALLS, fade color set)
+	// The sector's 3D floors or planes are not where the bake split and lit
+	// its surfaces (a moving 3D floor), or the light is gone from the
+	// lightlist: the classic path draws the sector's surfaces.
+	LML3_DEFERRED = 2,
+};
+
+struct LevelMeshLight3D
+{
+	int32_t lightLevel;		// *p_lightlevel
+	uint32_t lightColor;	// extra_colormap.LightColor (PalEntry)
+	uint32_t fadeColor;		// extra_colormap.FadeColor (PalEntry)
+	uint32_t colormap;		// Desaturation | BlendFactor << 8 | FogDensity << 16
+	uint32_t flags;			// LML3_*
+	uint32_t reserved[3];
+};
+static_assert(sizeof(LevelMeshLight3D) == 8 * 4, "LevelMeshLight3D must stay std430-compatible");
 
 // The material programs of the levelmesh: the classic material shaders
 // (FMaterial::GetShaderIndex) it builds a levelmesh variant of. The value is
@@ -398,6 +433,8 @@ struct LevelMeshStateUpdate
 	LevelMeshSpan<LevelMeshSideState> sides;		// parallel to sideIndices
 	LevelMeshSpan<uint32_t> xformIndices;			// plane refs
 	LevelMeshSpan<LevelMeshPlaneXform> xforms;		// parallel to xformIndices
+	LevelMeshSpan<uint32_t> light3DIndices;
+	LevelMeshSpan<LevelMeshLight3D> lights3D;		// parallel to light3DIndices
 };
 
 // Everything the backend uploads at level setup. The arrays only need to
@@ -414,6 +451,7 @@ struct LevelMeshUploadData
 	LevelMeshSpan<LevelMeshSectorState> sectors;
 	LevelMeshSpan<LevelMeshSideState> sides;
 	LevelMeshSpan<LevelMeshPlaneXform> planeXforms;
+	LevelMeshSpan<LevelMeshLight3D> lights3D;
 	LevelMeshSpan<int> textureIds;		// ids resolved into the translation table
 	unsigned translationTableSize = 0;	// number of texture ids (TexMan.NumTextures())
 };

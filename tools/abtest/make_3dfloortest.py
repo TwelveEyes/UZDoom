@@ -16,8 +16,9 @@ Sector_Set3DFloor lines on small control sectors south of the row (y < 0).
      the box takes the 3D light (P_GetPlaneLight)
   2  room, non-solid, 64..80, light 96 + green: the room's walls are split
      at the 3D floor (Put3DWall pieces below it), floor in the 3D light
-  3  room, non-solid, sloped bottom 24..88 across x, top 96, light 80: the
-     light plane crosses the north / south walls (banded walls, split planes)
+  3  room, non-solid, bottom -64, sloped top -32..160 across x, light 80:
+     the light plane (the 3D floor's top) crosses the bottom edge of the
+     north / south walls (banded walls: the classic split planes)
   4  room, two non-solid 3D floors: 8..24 light 224, and 104..120 light 64
      with FF_DOUBLESHADOW
   5  room, non-solid, 16..32, light 96, moved by the demo
@@ -32,6 +33,8 @@ Sector_Set3DFloor lines on small control sectors south of the row (y < 0).
      texture)
   12 room, swimmable (FF_BOTHPLANES | FF_ALLSIDES), opaque, 0..56: the
      camera is inside it
+  13 room, non-solid, bottom 16, sloped top 40..104, light 80: the light
+     plane lies inside the north / south walls (SplitWall cuts them along it)
 
 The demo visits every room (warp to x0 + 128, y 48), looks north, then
 north-east across the divider into the next room. Captured every 5 tics.
@@ -46,7 +49,7 @@ import os
 import make_demo
 from make_lighttest import write_wad
 
-ROOMS = 13
+ROOMS = 14
 W = 256
 DEPTH = 512
 FLOOR, CEIL, LIGHT = 0, 192, 160
@@ -62,7 +65,7 @@ ROOMDEFS = {
     0: (True, [dict(bottom=8, top=32, light=LIGHT, tex="METAL")]),
     1: (True, [dict(bottom=56, top=88, light=96, color=0xff8080, tex="WOOD1")]),
     2: (False, [dict(bottom=64, top=80, light=96, color=0x80ff80, tex="STONE2", type=NONSOLID)]),
-    3: (False, [dict(bottom=24, top=96, light=80, tex="STONE2", type=NONSOLID, slope=(24, 88))]),
+    3: (False, [dict(bottom=-64, top=160, light=80, tex="STONE2", type=NONSOLID, slope=(-32, 160))]),
     4: (False, [dict(bottom=8, top=24, light=224, tex="METAL", type=NONSOLID),
                 dict(bottom=104, top=120, light=64, tex="WOOD1", type=NONSOLID, flags=F_DOUBLESHADOW)]),
     5: (False, [dict(bottom=16, top=32, light=96, tex="METAL", type=NONSOLID, id=205)]),
@@ -73,6 +76,7 @@ ROOMDEFS = {
     10: (False, [dict(bottom=0, top=96, light=64, tex="-", special=50)]),
     11: (True, [dict(bottom=24, top=88, light=LIGHT, tex="METAL", flags=F_UPPER)]),
     12: (False, [dict(bottom=0, top=56, light=LIGHT, tex="SFALL1", type=SWIM)]),
+    13: (False, [dict(bottom=16, top=104, light=80, tex="STONE2", type=NONSOLID, slope=(40, 104))]),
 }
 
 
@@ -90,13 +94,13 @@ def block(kind, props):
     return "%s\n{\n%s}\n" % (kind, "".join("%s = %s;\n" % (k, fmt(v)) for k, v in props.items()))
 
 
-def floor_slope(x0, z0, z1):
-    """UDMF floorplane_a..d for z = z0 + (z1 - z0) * (x - x0) / W (normalized:
-    the loader normalizes a, b, c but not d)."""
+def ceiling_slope(x0, z0, z1):
+    """UDMF ceilingplane_a..d for z = z0 + (z1 - z0) * (x - x0) / W
+    (normalized: the loader normalizes a, b, c but not d). z = -(d + a x) / c
+    with c = -1 (a ceiling's normal points down): a = k, d = z0 - k x0."""
     k = (z1 - z0) / W
     n = math.sqrt(k * k + 1)
-    # a x + c z + d = 0 with z = z0 + k (x - x0): a = -k, c = 1, d = -(z0 - k x0)
-    return {"floorplane_a": -k / n, "floorplane_b": 0.0, "floorplane_c": 1.0 / n, "floorplane_d": -(z0 - k * x0) / n}
+    return {"ceilingplane_a": k / n, "ceilingplane_b": 0.0, "ceilingplane_c": -1.0 / n, "ceilingplane_d": (z0 - k * x0) / n}
 
 
 def build_textmap():
@@ -161,7 +165,7 @@ def build_textmap():
             if "id" in c:
                 props["id"] = c["id"]
             if "slope" in c:
-                props.update(floor_slope(x0, *c["slope"]))
+                props.update(ceiling_slope(x0, *c["slope"]))
             cs = sector(props)
             ring = [(cx0, cy0), (cx0, cy0 + 64), (cx0 + 64, cy0 + 64), (cx0 + 64, cy0)]
             for e in range(4):
