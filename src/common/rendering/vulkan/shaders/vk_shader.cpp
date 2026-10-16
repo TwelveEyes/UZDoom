@@ -298,7 +298,8 @@ static const char *shaderBindings = R"(
 		int uBoneIndexBase;
 
 		int uDataIndex;
-		int uLevelMeshFlags, padding3;
+		int uLevelMeshFlags;
+		float uLevelMeshTime;
 	};
 
 	// material types
@@ -495,21 +496,28 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername
 //
 // The vertex stage is the levelmesh variant (shaders/levelmesh/levelmesh.vp,
 // vertex pulling, no vertex inputs); the fragment stage is the shared main.fp
-// with the default material, its samplers redirected to the bindless table.
+// with the program's material (ELevelMeshProgram = the shader index:
+// default, warp 1, warp 2, composed as the classic material shaders are),
+// its samplers redirected to the bindless table.
 //
 //==========================================================================
 
-VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passType)
+VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passType, int program)
 {
-	auto &prog = mLevelMeshShaders[alphatest ? 1 : 0][passType];
+	static_assert(LMP_DEFAULT == SHADER_Default && LMP_WARP1 == SHADER_Warp1 && LMP_WARP2 == SHADER_Warp2, "levelmesh programs are shader indices");
+	if (program < 0 || program >= LMP_COUNT) program = LMP_DEFAULT;
+	auto &prog = mLevelMeshShaders[program][alphatest ? 1 : 0][passType];
 	if (!prog.frag)
 	{
 		FString defines = VkLevelMesh::ShaderDefines(VkLevelMesh::LM_SET_INDEX, VkLevelMesh::LM_TEXTURE_SET_INDEX);
-		FString name = FStringf("levelmesh%s%s", alphatest ? "" : "_nat", passType == GBUFFER_PASS ? "_gbuffer" : "");
 		if (!mLevelMeshVert)
 			mLevelMeshVert = LoadLevelMeshVertShader("levelmesh_vert", defines.GetChars());
-		prog.frag = LoadFragShader(name, "shaders/glsl/main.fp", defaultshaders[SHADER_Default].gettexelfunc, defaultshaders[SHADER_Default].lightfunc,
-			defines.GetChars(), alphatest, passType == GBUFFER_PASS, static_cast<AllShaderIndex>(SHADER_Default), true);
+		const FDefaultShader &shader = defaultshaders[program];
+		defines << shader.Defines;
+		FString name = FStringf("levelmesh_%s%s%s", shader.ShaderName, alphatest ? "" : "_nat", passType == GBUFFER_PASS ? "_gbuffer" : "");
+		name.Substitute(" ", "");
+		prog.frag = LoadFragShader(name, "shaders/glsl/main.fp", shader.gettexelfunc, shader.lightfunc,
+			defines.GetChars(), alphatest, passType == GBUFFER_PASS, static_cast<AllShaderIndex>(program), true);
 	}
 	return &prog;
 }

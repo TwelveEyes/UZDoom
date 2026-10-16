@@ -31,6 +31,7 @@
 #include "zvulkan/vulkanbuilders.h"
 #include <list>
 #include "shaderuniforms.h"
+#include "hwrenderer/data/hw_levelmeshdata.h"
 
 #define SHADER_MIN_REQUIRED_TEXTURE_LAYERS 11
 
@@ -78,7 +79,8 @@ struct PushConstants
 
 	int uDataIndex;
 	int uLevelMeshFlags;	// levelmesh pipelines only (LMVF_*); 0 for classic draws
-	int padding2, padding3;
+	float uLevelMeshTime;	// levelmesh pipelines only: (FrameTime - firstFrame) / 1000, the material timer at speed 1
+	int padding3;
 };
 
 class VkShaderProgram
@@ -104,7 +106,7 @@ public:
 
 	// Levelmesh: the vertex shader is shared by all programs (vert is null in
 	// the returned program; use GetLevelMeshVert).
-	VkShaderProgram *GetLevelMesh(bool alphatest, EPassType passType);
+	VkShaderProgram *GetLevelMesh(bool alphatest, EPassType passType, int program);
 	VulkanShader *GetLevelMeshVert() { return mLevelMeshVert.get(); }
 	std::unique_ptr<VulkanShader> LoadComputeShader(FString shadername, const char *lump, const char *defines);
 
@@ -127,7 +129,7 @@ private:
 	std::vector<VkShaderProgram> mMaterialShaders[MAX_PASS_TYPES];
 	std::vector<VkShaderProgram> mMaterialShadersNAT[MAX_PASS_TYPES];
 	std::vector<VkShaderProgram> mEffectShaders[MAX_PASS_TYPES];
-	VkShaderProgram mLevelMeshShaders[2][MAX_PASS_TYPES];
+	VkShaderProgram mLevelMeshShaders[LMP_COUNT][2][MAX_PASS_TYPES];
 	std::unique_ptr<VulkanShader> mLevelMeshVert;
 	uint8_t compilePass = 0, compileState = 0;
 	int compileIndex = 0;

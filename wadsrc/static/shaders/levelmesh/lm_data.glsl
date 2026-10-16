@@ -120,6 +120,8 @@ struct LMTextureEntry
 	uint slot;
 	uint layers;
 	float displayWidth, displayHeight;
+	float shaderSpeed;
+	uint reserved[3];
 };
 
 layout(set = LM_SET, binding = LMBIND_VERTICES, std430) buffer readonly LMVertexBuffer { LMVertex lmVertices[]; };

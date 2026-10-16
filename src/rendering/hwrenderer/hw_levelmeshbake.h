@@ -127,6 +127,7 @@ struct LevelMeshTierBase
 	bool valid = false;			// the tier has levelmesh surfaces
 	bool midClip = false;		// two-sided mid texture without wrap: the y offset moves its geometry
 	float yOffset = 0;			// at bake (midClip)
+	int program = LMP_DEFAULT;	// material program (bucket)
 };
 
 // The dirty state stream's bookkeeping (hw_levelmeshstate.cpp).
@@ -195,6 +196,8 @@ public:
 	TArray<uint8_t> SideTierBaked;
 	TArray<uint8_t> SectorPlaneBaked;
 	TArray<LevelMeshTierBase> TierBase;	// per side tier
+	TArray<int8_t> PlaneProgram;		// per sector plane: material program of its surfaces (-2 = none)
+	TArray<uint8_t> PlanePortal;		// per sector plane: baked with a sector portal (HWFlat draws it opaque over the portal)
 
 	uint64_t Id = 0;				// unique per bake (backend residency)
 	bool GeometryReleased = false;	// Vertices / Indices freed after the upload
@@ -243,8 +246,15 @@ void LevelMesh_FillSectorState(sector_t &sec, LevelMeshSectorState &out);
 void LevelMesh_FillSideState(const LevelMeshBake *bake, side_t &side, int tier, LevelMeshSideState &out);
 void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos, LevelMeshPlaneXform &out);
 
-// Non-default material shaders the levelmesh cannot draw yet (classic path).
+// The levelmesh program (ELevelMeshProgram) of a texture's material shader,
+// -1 for material shaders the levelmesh cannot draw yet (classic path).
+int LevelMesh_MaterialProgram(FGameTexture *tex);
 bool LevelMesh_NeedsClassicMaterial(FGameTexture *tex);
+
+// Side / plane colors and texture manipulation HWWall::RenderTexturedWall /
+// HWFlat::DrawFlat apply (not expressible by the resolve yet: classic path).
+bool LevelMesh_HasWallColorEffects(side_t *side, int tier, sector_t *frontsector);
+bool LevelMesh_HasPlaneColorEffects(sector_t *sec, int pos);
 
 // Resets the dirty state stream to the records just uploaded and attaches
 // the change hooks to the level.

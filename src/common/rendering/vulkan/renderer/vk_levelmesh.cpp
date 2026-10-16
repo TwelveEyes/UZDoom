@@ -185,6 +185,8 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LMSF_DEFERRED %uu\n#define LMSF_NOSECTORFOG %uu\n", (unsigned)LMSF_DEFERRED, (unsigned)LMSF_NOSECTORFOG);
 	d.AppendFormat("#define LMTE_TEXFMASK 0x%xu\n#define LMTE_FULLBRIGHT 0x%xu\n", (unsigned)LMTE_TEXFMASK, (unsigned)LMTE_FULLBRIGHT);
 	d.AppendFormat("#define LMSF_STATETEXTURE %uu\n#define LMTS_DEFERRED %uu\n", (unsigned)LMSF_STATETEXTURE, (unsigned)LMTS_DEFERRED);
+	d.AppendFormat("#define LMSF_PROGRAMMASK 0x%xu\n#define LMSF_PROGRAMSHIFT %uu\n#define LMP_DEFAULT %uu\n",
+		(unsigned)LMSF_PROGRAMMASK, (unsigned)LMSF_PROGRAMSHIFT, (unsigned)LMP_DEFAULT);
 	d.AppendFormat("#define LMSD_ABSLIGHTING %uu\n#define LMSD_ABSLIGHTING_TIER %uu\n#define LMSD_NOFAKECONTRAST %uu\n",
 		(unsigned)LMSD_ABSLIGHTING, (unsigned)LMSD_ABSLIGHTING_TIER, (unsigned)LMSD_NOFAKECONTRAST);
 	d.AppendFormat("#define LMSD_SMOOTHLIGHTING %uu\n#define LMSD_LIGHT_FOG %uu\n", (unsigned)LMSD_SMOOTHLIGHTING, (unsigned)LMSD_LIGHT_FOG);
@@ -479,7 +481,13 @@ LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 	// Layer flags (TEXF_*, already in place) only describe layers that are bound.
 	uint32_t flags = it->second.count > 1 ? (uint32_t)mat->GetLayerFlags() & LMTE_TEXFMASK : 0;
 	if (tex->isFullbright()) flags |= LMTE_FULLBRIGHT;
-	return { it->second.first, it->second.count | flags, (float)tex->GetDisplayWidth(), (float)tex->GetDisplayHeight() };
+	LevelMeshTextureEntry e = {};
+	e.slot = it->second.first;
+	e.layers = it->second.count | flags;
+	e.displayWidth = (float)tex->GetDisplayWidth();
+	e.displayHeight = (float)tex->GetDisplayHeight();
+	e.shaderSpeed = tex->GetShaderSpeed();
+	return e;
 }
 
 bool VkLevelMesh::TextureReady(int id)
@@ -808,8 +816,21 @@ void VkLevelMesh::PrintStats()
 	size_t ring = 0;
 	for (auto &slot : mRing) if (slot.buffer) ring += slot.buffer->size;
 	Printf("VkLevelMesh: device-local %.2f MB, staging ring %.2f MB (%d slots), upload %.1f ms\n", total / (1024.0 * 1024.0), ring / (1024.0 * 1024.0), HW_MAX_PIPELINE_BUFFERS, mUploadMs);
-	unsigned resolved = 0;
-	for (auto &e : mTable) if (e.slot) resolved++;
+	unsigned resolved = 0, brightmapped = 0;
+	for (auto &e : mTable)
+	{
+		if (e.slot) resolved++;
+		if (e.layers & TEXF_Brightmap) brightmapped++;
+	}
+	FString buckets;
+	static const char *programs[] = { "default", "warp1", "warp2" };
+	static_assert(sizeof(programs) / sizeof(programs[0]) == LMP_COUNT, "program names");
+	for (int b = 0; b < (int)LMB_COUNT; b++)
+	{
+		if (b == LMB_DEFERRED) buckets.AppendFormat(" deferred %u", mBucketIndices[b] / 3);
+		else buckets.AppendFormat(" %s%s %u", programs[b >> 1], (b & 1) ? "/masked" : "", mBucketIndices[b] / 3);
+	}
+	Printf("VkLevelMesh: triangles per bucket:%s; %u brightmapped texture entries\n", buckets.GetChars(), brightmapped);
 	Printf("VkLevelMesh: %u clusters, %u triangles; bindless slots %u used / %u capacity (high water %u), %u materials, %u overflows; texture table %u entries, %u resolved, %u pending, %u resolve calls\n",
 		mCounts[LMBIND_CLUSTERS], mCounts[LMBIND_INDICES] / 3, mSlotsUsed, mBindlessCapacity, mNextSlot, (unsigned)mMaterials.size(), mSlotOverflows,
 		(unsigned)mTable.size(), resolved, (unsigned)mPending.size(), mResolveCalls);

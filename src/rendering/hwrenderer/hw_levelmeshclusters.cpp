@@ -40,7 +40,7 @@ namespace
 uint32_t SurfaceBucket(const LevelMeshSurface &surf)
 {
 	if (surf.flags & LMSF_DEFERRED) return LMB_DEFERRED;
-	return (surf.flags & LMSF_MASKED) ? LMB_MASKED : LMB_OPAQUE;
+	return LM_Bucket((surf.flags & LMSF_PROGRAMMASK) >> LMSF_PROGRAMSHIFT, (surf.flags & LMSF_MASKED) != 0);
 }
 
 struct ClusterBuilder

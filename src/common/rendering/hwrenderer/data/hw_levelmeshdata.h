@@ -89,6 +89,8 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_STATETEXTURE = 1 << 15,	// the texture is the streamed one (side tier / plane), not textureId
 	LMSF_NOSECTORFOG = 1 << 16,	// walls: fog of light 255 without the sector colormap (RENDERWALL_M2SNF)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
+	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..29
+	LMSF_PROGRAMMASK = 3u << 28,
 };
 
 // LevelMeshSurface::sideFlags: the side_t::GetLightLevel inputs of the
@@ -151,24 +153,44 @@ struct LevelMeshSurface
 };
 static_assert(sizeof(LevelMeshSurface) == 32 * 4, "LevelMeshSurface must stay std430-compatible");
 
-// Material buckets. Inside a cluster the index range is ordered by bucket.
-// Opaque and masked follow the classic draw lists (HWDrawInfo::AddWall /
-// AddFlat): only two-sided mid textures (and 3D-floor / portal planes) are
-// alpha tested. LMB_DEFERRED holds the surfaces the levelmesh does not draw
-// yet (3D floors, heightsecs, light bands, sky-hack mid textures); the classic
-// path keeps drawing them (LevelMeshBake::SideTierOwned / SectorPlaneOwned).
-// Ticket 11 makes bucket membership runtime state.
-enum ELevelMeshBucket : uint32_t
+// The material programs of the levelmesh: the classic material shaders
+// (FMaterial::GetShaderIndex) it builds a levelmesh variant of. The value is
+// the shader index (SHADER_Default, SHADER_Warp1, SHADER_Warp2). Other
+// material shaders (specular / PBR, paletted, user shaders, canvases) stay on
+// the classic path (LevelMesh_NeedsClassicMaterial).
+enum ELevelMeshProgram : uint32_t
 {
-	LMB_OPAQUE,
-	LMB_MASKED,
-	LMB_DEFERRED,
-	LMB_COUNT,
-	LMB_DRAWN = LMB_DEFERRED	// buckets the levelmesh draws
+	LMP_DEFAULT,
+	LMP_WARP1,
+	LMP_WARP2,
+	LMP_COUNT,
 };
 
+// Material buckets: alpha class (opaque / masked) x program. Inside a
+// cluster the index range is ordered by bucket. Opaque and masked follow the
+// classic draw lists (HWDrawInfo::AddWall / AddFlat): only two-sided mid
+// textures (and 3D-floor / portal planes) are alpha tested. LMB_DEFERRED
+// holds the surfaces the levelmesh does not draw yet (3D floors, heightsecs,
+// light bands, sky-hack mid textures); the classic path keeps drawing them
+// (LevelMeshBake::SideTierOwned / SectorPlaneOwned). A texture swap that
+// would change a surface's bucket defers its tier / plane at runtime
+// (LMTS_DEFERRED) instead.
+enum ELevelMeshBucket : uint32_t
+{
+	LMB_OPAQUE,		// LMP_DEFAULT
+	LMB_MASKED,
+	LMB_DRAWN = 2 * LMP_COUNT,	// buckets the levelmesh draws: program * 2 + masked
+	LMB_DEFERRED = LMB_DRAWN,
+	LMB_COUNT,
+};
+
+inline uint32_t LM_Bucket(uint32_t program, bool masked)
+{
+	return program * 2 + (masked ? 1 : 0);
+}
+
 // A spatial group of triangles: a BSP subtree cut at the triangle budget.
-// std430-compatible: 16 x 32 bit.
+// std430-compatible: 20 x 32 bit.
 struct LevelMeshCluster
 {
 	float bmin[3];			// xy AABB; z from the load heights, refreshed when an anchor plane moves (LevelMesh_UpdateState)
@@ -180,7 +202,7 @@ struct LevelMeshCluster
 	uint32_t firstSector, numSectors;	// into the cluster -> sector list (vertex anchor sectors)
 	uint32_t firstSurface, numSurfaces;	// into the cluster -> surface list
 };
-static_assert(sizeof(LevelMeshCluster) == 16 * 4, "LevelMeshCluster must stay std430-compatible");
+static_assert(sizeof(LevelMeshCluster) == 20 * 4, "LevelMeshCluster must stay std430-compatible");
 
 // Per-sector state. std430-compatible: 24 x 32 bit. Every field is
 // streamed dirty-only (LevelMesh_UpdateState compares the whole packed
@@ -250,12 +272,16 @@ enum ELevelMeshTextureEntryFlags : uint32_t
 	LMTE_FULLBRIGHT = 1u << 31,		// FGameTexture::isFullbright of the current frame
 };
 
+// std430-compatible: 8 x 32 bit.
 struct LevelMeshTextureEntry
 {
 	uint32_t slot;
 	uint32_t layers;		// number of layers (low 16 bits) | TEXF_* (LMTE_TEXFMASK) | LMTE_*
 	float displayWidth, displayHeight;	// FGameTexture display size (flat texture matrix)
+	float shaderSpeed;		// FGameTexture::GetShaderSpeed (material shader timer)
+	uint32_t reserved[3];
 };
+static_assert(sizeof(LevelMeshTextureEntry) == 8 * 4, "LevelMeshTextureEntry must stay std430-compatible");
 
 // Per-view shading inputs of the resolve (resolve.comp). The C++ light
 // chain (hw_lighting.cpp, hw_setcolor.cpp, hw_walls.cpp, hw_flats.cpp)

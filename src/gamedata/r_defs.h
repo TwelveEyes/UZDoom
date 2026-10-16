@@ -57,8 +57,11 @@ struct FLevelLocals;
 void LevelMesh_SectorChanged(sector_t *sec);
 // ... a sector plane's texture transform or texture changed.
 void LevelMesh_PlaneChanged(sector_t *sec, int pos);
-// ... a side tier's texture, offsets or scales changed (tier -1: all three).
+// ... a side tier's texture, offsets, scales or colors changed (tier -1: all three).
 void LevelMesh_SideChanged(struct side_t *side, int tier);
+// ... a sector's special / additive colors or texture manipulation changed
+// (its planes and the walls that may inherit them).
+void LevelMesh_SectorColorsChanged(sector_t *sec);
 
 struct LightmapSurface;
 struct LightProbe;
@@ -1088,6 +1091,7 @@ public:
 	{
 		SpecialColors[slot] = PalEntry(255, r, g, b);
 		if ((slot == sector_t::wallbottom || slot == sector_t::walltop) && SpecialColors[slot] != 0xffffffff) CheckExColorFlag();
+		LevelMesh_SectorColorsChanged(this);
 	}
 
 	void SetSpecialColor(int slot, PalEntry rgb)
@@ -1095,6 +1099,7 @@ public:
 		rgb.a = 255;
 		SpecialColors[slot] = rgb;
 		if ((slot == sector_t::wallbottom || slot == sector_t::walltop) && rgb != 0xffffffff) CheckExColorFlag();
+		LevelMesh_SectorColorsChanged(this);
 	}
 
 	void SetAdditiveColor(int slot, PalEntry rgb)
@@ -1102,7 +1107,7 @@ public:
 		rgb.a = 255;
 		AdditiveColors[slot] = rgb;
 		if ((slot == sector_t::walltop) && AdditiveColors[slot] != 0xffffffff) CheckExColorFlag(); // Wallbottom of this is not used.
-
+		LevelMesh_SectorColorsChanged(this);
 	}
 
 	// TextureFX parameters
@@ -1111,6 +1116,7 @@ public:
 	{
 		if (tm) planes[slot].TextureFx = *tm;	// this is for getting the data from a texture.
 		else planes[slot].TextureFx = {};
+		LevelMesh_SectorColorsChanged(this);
 	}
 
 
@@ -1440,6 +1446,7 @@ struct side_t
 	{
 		textures[which].flags &= ~And;
 		textures[which].flags |= Or;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetSpecialColor(int which, int slot, int r, int g, int b, bool useown = true)
@@ -1448,6 +1455,7 @@ struct side_t
 		if (useown) textures[which].flags |= part::UseOwnSpecialColors;
 		else  textures[which].flags &= ~part::UseOwnSpecialColors;
 		Flags |= WALLF_EXTCOLOR;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetSpecialColor(int which, int slot, PalEntry rgb, bool useown = true)
@@ -1457,6 +1465,7 @@ struct side_t
 		if (useown) textures[which].flags |= part::UseOwnSpecialColors;
 		else  textures[which].flags &= ~part::UseOwnSpecialColors;
 		Flags |= WALLF_EXTCOLOR;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	// Note that the sector being passed in here may not be the actual sector this sidedef belongs to
@@ -1481,12 +1490,14 @@ struct side_t
 		{
 			textures[which].flags &= (~flag);
 		}
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetAdditiveColor(int which, PalEntry rgb)
 	{
 		rgb.a = 255;
 		textures[which].AdditiveColor = rgb;
+		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureFx(int slot, const TextureManipulation* tm)
@@ -1500,6 +1511,7 @@ struct side_t
 		{
 			textures[slot].TextureFx = {};
 		}
+		LevelMesh_SideChanged(this, slot);
 	}
 
 	PalEntry GetAdditiveColor(int which, sector_t *frontsector) const

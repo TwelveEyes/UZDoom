@@ -79,6 +79,15 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   unwrapped mid texture's y offset (classic path). `--set-b 'lm_statelog 1'` prints every
   tier / plane that switches between the levelmesh and the classic path, and every swap that
   waits a frame for an unresolved texture, to the run's stdout.
+  Rooms 7 / 8 add warped textures (the levelmesh warp material programs) and GLDEFS
+  brightmaps. `lm_programs N` (bit per program: 1 default, 2 warp, 4 warp2; read at level
+  setup) sends the other material programs back to the classic path, to bisect a
+  material-shader difference.
+- **Shader timer in captures:** `P_SetupLevel` stamps `ShaderStartTime` on the real clock, and
+  `CheckTimer` restarts the material shader timer until the synthetic `FrameTime` passes it,
+  so before 2026-10-15 the warp / shader timer base depended on load time (a slower levelmesh
+  bake shifted warped flats by whole tics). The capture now restamps it on the first captured
+  frame of the map (`d_abcapture.cpp`).
 - **Never pass `+set vk_debug 1` without a scratch `-config`:** `vk_debug` is archived, so it
   persists into the user's ini and silently puts the validation layer into every later perf
   run. The A/B driver and `lm_bake_survey.py` already use fresh configs; `run_matrix.sh` does

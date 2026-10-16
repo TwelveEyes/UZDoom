@@ -22,6 +22,7 @@ MAPS += [("myhouse", "DOOM2.WAD", "myhouse.pk3", m) for m in ("MAP01", "20PAM")]
 MAPS += [("Pirates", "DOOM2.WAD", "Pirates!.wad", m) for m in ("MAP50", "MAP51", "MAP57", "MAP43", "MAP49", "MAP54", "MAP58")]
 MAPS += [("SOS", "DOOM2.WAD", "SOS_Boom.wad", m) for m in ("MAP32", "MAP12", "MAP45", "MAP46")]
 MAPS += [("planisf", "DOOM2.WAD", "planisf2.wad", "MAP01")]
+MAPS += [("lighttest", "DOOM2.WAD", "lighttest.wad", "MAP01"), ("texturetest", "DOOM2.WAD", "texturetest.wad", "MAP01")]
 
 NUM = r"([\d.]+)"
 
@@ -60,6 +61,9 @@ def parse(lines):
         m = re.search(r"VkLevelMesh: device-local " + NUM + r" MB, staging ring " + NUM + r" MB .*upload " + NUM + r" ms", l)
         if m:
             d.update(dev_mb=float(m.group(1)), ring_mb=float(m.group(2)), upload_ms=float(m.group(3)))
+        m = re.search(r"VkLevelMesh: triangles per bucket: (.*); (\d+) brightmapped texture entries", l)
+        if m:
+            d.update(buckets=m.group(1), brightmapped=int(m.group(2)))
         m = re.search(r"VkLevelMesh: \d+ clusters, \d+ triangles; bindless slots (\d+) used / (\d+) capacity.*?(\d+) materials, (\d+) overflows; texture table (\d+) entries, (\d+) resolved", l)
         if m:
             d.update(slots=int(m.group(1)), slot_cap=int(m.group(2)), materials=int(m.group(3)), slot_overflows=int(m.group(4)),
@@ -133,7 +137,7 @@ def main():
             "vscale_inconsistent", "planeref_overflow", "ff_vref_heuristic", "poly_skipped", "deferred", "wall_tex_not_side"]
     ccols = ["label", "map", "triangles", "clusters", "cl_ms", "cl_min", "cl_p50", "cl_p90", "cl_max", "cl_hist", "chunked_leaves",
              "chunk_clusters", "split_surfaces", "mixed_bucket", "cl_sector_refs", "max_fanout", "fallback_leaves", "hole_surfaces",
-             "dev_mb", "upload_ms", "materials", "slots", "slot_overflows", "tex_resolved"] + (["vuids"] if a.vkdebug else [])
+             "dev_mb", "upload_ms", "materials", "slots", "slot_overflows", "tex_resolved", "buckets", "brightmapped"] + (["vuids"] if a.vkdebug else [])
     with open(a.out + ".md", "w") as f:
         f.write("| " + " | ".join(cols) + " |\n|" + "---|" * len(cols) + "\n")
         for r in rows:

@@ -64,17 +64,20 @@ enum
 	LMPHASE_FINALIZE,
 };
 
-// Counter buffer layout (uint32 each, cull.comp LMC_*)
+// Counter buffer layout (uint32 each, cull.comp LMC_*). Everything before
+// LMC_COUNT is cleared per Draw; the bucket bases after it are per level.
 enum
 {
-	LMC_COMPACT = 0,		// [LMB_DRAWN] compaction cursor per bucket, both phases
-	LMC_P1END = 2,			// [LMB_DRAWN] end of phase 1 per bucket
-	LMC_COMMANDS = 4,		// [2 * LMB_DRAWN] per-cluster commands per phase and bucket
-	LMC_CLUSTERS = 8,		// [2] clusters drawn per phase
-	LMC_INDICES = 10,		// [2 * LMB_DRAWN] indices drawn per phase and bucket
-	LMC_FRUSTUMCULLED = 14,
-	LMC_OCCLUDED = 15,
-	LMC_COUNT = 16,
+	LMC_COMPACT = 0,							// [LMB_DRAWN] compaction cursor per bucket, both phases
+	LMC_P1END = LMC_COMPACT + LMB_DRAWN,		// [LMB_DRAWN] end of phase 1 per bucket
+	LMC_COMMANDS = LMC_P1END + LMB_DRAWN,		// [2 * LMB_DRAWN] per-cluster commands per phase and bucket
+	LMC_CLUSTERS = LMC_COMMANDS + 2 * LMB_DRAWN,	// [2] clusters drawn per phase
+	LMC_INDICES = LMC_CLUSTERS + 2,				// [2 * LMB_DRAWN] indices drawn per phase and bucket
+	LMC_FRUSTUMCULLED = LMC_INDICES + 2 * LMB_DRAWN,
+	LMC_OCCLUDED,
+	LMC_COUNT,
+	LMC_BASE = LMC_COUNT,						// [LMB_DRAWN] compacted index region per bucket (per level)
+	LMC_TOTAL = LMC_BASE + LMB_DRAWN,
 };
 
 // Timestamp points
@@ -91,7 +94,7 @@ enum
 	TS_COUNT
 };
 
-static_assert(LMB_DRAWN == 2, "the cull constants carry two bucket bases");
+static_assert(LMC_COUNT == 6 * LMB_DRAWN + 4, "VkLevelMeshRenderer::NumCounters");
 static_assert(TS_COUNT <= 8, "VkLevelMeshRenderer::NumPoints");
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
@@ -118,8 +121,8 @@ static FString CullDefines()
 		(unsigned)LMPHASE_FIRST, (unsigned)LMPHASE_SECOND, (unsigned)LMPHASE_SINGLE, (unsigned)LMPHASE_FINALIZE);
 	d.AppendFormat("#define LMC_COMPACT %uu\n#define LMC_P1END %uu\n#define LMC_COMMANDS %uu\n#define LMC_CLUSTERS %uu\n",
 		(unsigned)LMC_COMPACT, (unsigned)LMC_P1END, (unsigned)LMC_COMMANDS, (unsigned)LMC_CLUSTERS);
-	d.AppendFormat("#define LMC_INDICES %uu\n#define LMC_FRUSTUMCULLED %uu\n#define LMC_OCCLUDED %uu\n",
-		(unsigned)LMC_INDICES, (unsigned)LMC_FRUSTUMCULLED, (unsigned)LMC_OCCLUDED);
+	d.AppendFormat("#define LMC_INDICES %uu\n#define LMC_FRUSTUMCULLED %uu\n#define LMC_OCCLUDED %uu\n#define LMC_BASE %uu\n",
+		(unsigned)LMC_INDICES, (unsigned)LMC_FRUSTUMCULLED, (unsigned)LMC_OCCLUDED, (unsigned)LMC_BASE);
 	return d;
 }
 
@@ -146,8 +149,8 @@ bool VkLevelMeshRenderer::CreateObjects()
 		mHiZShaders[2] = shaders->LoadComputeShader("levelmesh_hiz_level", "shaders/levelmesh/hiz.comp", "");
 		for (int pass = NORMAL_PASS; pass <= GBUFFER_PASS; pass++)
 		{
-			shaders->GetLevelMesh(false, (EPassType)pass);
-			shaders->GetLevelMesh(true, (EPassType)pass);
+			shaders->GetLevelMesh(false, (EPassType)pass, LMP_DEFAULT);
+			shaders->GetLevelMesh(true, (EPassType)pass, LMP_DEFAULT);
 		}
 	}
 	catch (const CVulkanError &e)
@@ -263,11 +266,34 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 	deleteList->Add(std::move(mCullSet));
 	mShading.reset();
 
+	// The material programs this level draws (warp variants on demand).
+	try
+	{
+		auto shaders = fb->GetShaderManager();
+		for (int b = 0; b < (int)LMB_DRAWN; b++)
+		{
+			if (lm->GetBucketIndexCount(b) == 0) continue;
+			for (int pass = NORMAL_PASS; pass <= GBUFFER_PASS; pass++)
+				shaders->GetLevelMesh((b & 1) != 0, (EPassType)pass, b >> 1);
+		}
+	}
+	catch (const CVulkanError &e)
+	{
+		Printf("Levelmesh: material shader compile failed, using the classic path: %s\n", e.what());
+		mFailed = true;
+		return false;
+	}
+
 	mLevelId = lm->GetId();
 	mNumClusters = lm->GetClusterCount();
-	mBucketBase[0] = 0;
-	mBucketBase[1] = lm->GetBucketIndexCount(LMB_OPAQUE);
-	size_t compactCount = std::max<size_t>((size_t)lm->GetBucketIndexCount(LMB_OPAQUE) + lm->GetBucketIndexCount(LMB_MASKED), 4);
+	size_t compactCount = 0;
+	for (int b = 0; b < (int)LMB_DRAWN; b++)
+	{
+		mBucketBase[b] = (uint32_t)compactCount;
+		mBucketCount[b] = lm->GetBucketIndexCount(b);
+		compactCount += mBucketCount[b];
+	}
+	compactCount = std::max<size_t>(compactCount, 4);
 
 	mVisibility = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
@@ -276,7 +302,7 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 		.Create(dev);
 	mCounters = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
-		.Size(LMC_COUNT * sizeof(uint32_t))
+		.Size(LMC_TOTAL * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.Counters")
 		.Create(dev);
 	// 2 * LMB_DRAWN compaction draws, then 2 * LMB_DRAWN regions of per-cluster commands.
@@ -298,6 +324,7 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 
 	// Nothing was visible "last frame": the first frame draws everything in phase 2.
 	cmd->fillBuffer(mVisibility->buffer, 0, VK_WHOLE_SIZE, 0);
+	cmd->updateBuffer(mCounters->buffer, LMC_BASE * sizeof(uint32_t), sizeof(mBucketBase), mBucketBase);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -444,20 +471,20 @@ void VkLevelMeshRenderer::BuildHiZ(VulkanCommandBuffer *cmd)
 //
 //==========================================================================
 
-VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked)
+VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program)
 {
 	const auto &t = mTarget;
 	bool cull = lm_backfacecull != 0;
 	uint64_t bits = (uint64_t)masked | ((uint64_t)t.drawBuffers << 1) | ((uint64_t)t.samples << 4) | ((uint64_t)t.depthTest << 12) |
 		((uint64_t)t.depthWrite << 13) | ((uint64_t)t.depthClamp << 14) | ((uint64_t)t.stencilTest << 15) | ((uint64_t)t.depthFunc << 16) |
-		((uint64_t)t.stencilOp << 20) | ((uint64_t)t.colorMask << 24) | ((uint64_t)cull << 28);
+		((uint64_t)t.stencilOp << 20) | ((uint64_t)t.colorMask << 24) | ((uint64_t)cull << 28) | ((uint64_t)program << 32);
 	PipelineKey key = { t.renderPass, bits };
 	auto &pipeline = mPipelines[key];
 	if (pipeline) return pipeline.get();
 
 	EPassType passType = t.drawBuffers > 1 ? GBUFFER_PASS : NORMAL_PASS;
 	auto shaders = fb->GetShaderManager();
-	auto program = shaders->GetLevelMesh(masked, passType);
+	auto shaderProgram = shaders->GetLevelMesh(masked, passType, program);
 
 	static const VkStencilOp op2vk[] = { VK_STENCIL_OP_KEEP, VK_STENCIL_OP_INCREMENT_AND_CLAMP, VK_STENCIL_OP_DECREMENT_AND_CLAMP };
 	static const VkCompareOp depthfunc2vk[] = { VK_COMPARE_OP_LESS, VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_ALWAYS };
@@ -465,7 +492,7 @@ VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked)
 	GraphicsPipelineBuilder builder;
 	builder.Cache(fb->GetRenderPassManager()->GetCache());
 	builder.AddVertexShader(shaders->GetLevelMeshVert());
-	builder.AddFragmentShader(program->frag.get());
+	builder.AddFragmentShader(shaderProgram->frag.get());
 	builder.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT);
 	builder.AddDynamicState(VK_DYNAMIC_STATE_SCISSOR);
 	builder.AddDynamicState(VK_DYNAMIC_STATE_DEPTH_BIAS);
@@ -573,6 +600,8 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 	pc.uTextureMode &= 0xffff;	// the material layer flags are per surface (lm_frag.glsl)
 	pc.uLightIndex = -1;
 	pc.uLevelMeshFlags = (int)view.flags;
+	// VkRenderState::ApplyStreamData: the material timer at speed 1 (lm_frag.glsl scales it per surface).
+	pc.uLevelMeshTime = static_cast<float>((double)(screen->FrameTime - state->firstFrame) / 1000.);
 	if (view.shading == nullptr) pc.uLevelMeshFlags |= LMVF_FULLBRIGHT;	// nothing resolved
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
@@ -582,8 +611,9 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
 	for (int b = 0; b < (int)LMB_DRAWN; b++)
 	{
-		bool masked = b == LMB_MASKED;
-		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(masked));
+		if (mBucketCount[b] == 0) continue;
+		bool masked = (b & 1) != 0;
+		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(masked, b >> 1));
 		// As HWDrawInfo::RenderScene: AlphaFunc(Alpha_GEqual, gl_mask_threshold).
 		pc.uAlphaThreshold = masked ? view.maskThreshold - 0.001f : -0.001f;
 		cmd->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
@@ -658,7 +688,7 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-	cmd->fillBuffer(mCounters->buffer, 0, VK_WHOLE_SIZE, 0);
+	cmd->fillBuffer(mCounters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -672,8 +702,6 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 	pc.cullMode = (uint32_t)view.cullMode;
 	pc.drawMode = (uint32_t)view.drawMode;
 	pc.numClusters = mNumClusters;
-	pc.bucketBase[0] = mBucketBase[0];
-	pc.bucketBase[1] = mBucketBase[1];
 	pc.hizLevels = (uint32_t)mHiZLevels;
 
 	auto copyCounters = [&]()
@@ -759,7 +787,9 @@ void VkLevelMeshRenderer::Harvest()
 		for (int p = 0; p < 2; p++)
 		{
 			s.clusters[p] = c[LMC_CLUSTERS + p];
-			s.triangles[p] = (c[LMC_INDICES + p * LMB_DRAWN] + c[LMC_INDICES + p * LMB_DRAWN + 1]) / 3;
+			uint32_t indices = 0;
+			for (int b = 0; b < (int)LMB_DRAWN; b++) indices += c[LMC_INDICES + p * LMB_DRAWN + b];
+			s.triangles[p] = indices / 3;
 		}
 		s.frustumCulled = c[LMC_FRUSTUMCULLED];
 		s.occluded = c[LMC_OCCLUDED];

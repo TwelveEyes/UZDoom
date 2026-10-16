@@ -60,9 +60,9 @@ private:
 		float viewProj[16];
 		float viewport[4];
 		uint32_t phase, cullMode, drawMode, numClusters;
-		uint32_t bucketBase[2];
 		uint32_t hizLevels;
 		uint32_t finalizePhase;
+		uint32_t padding[2];
 	};
 
 	// Keep in sync with the push constant block of resolve.comp.
@@ -86,7 +86,7 @@ private:
 	bool PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd);
 	bool PrepareHiZ(int width, int height, VkSampleCountFlagBits samples);
 	void UpdateCullSet();
-	VulkanPipeline *GetDrawPipeline(bool masked);
+	VulkanPipeline *GetDrawPipeline(bool masked, int program);
 	void Cull(VulkanCommandBuffer *cmd, CullConstants &pc, uint32_t phase);
 	void Resolve(VulkanCommandBuffer *cmd);
 	void UploadShading(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshShading &shading);
@@ -119,7 +119,8 @@ private:
 	// Per level
 	uint64_t mLevelId = 0;
 	unsigned mNumClusters = 0;
-	uint32_t mBucketBase[2] = {};
+	uint32_t mBucketBase[LMB_DRAWN] = {};	// compacted index region per drawn bucket
+	uint32_t mBucketCount[LMB_DRAWN] = {};	// indices per drawn bucket over all clusters (0 = not drawn)
 	std::unique_ptr<VulkanBuffer> mVisibility, mCounters, mDrawArgs, mCompact;
 	std::unique_ptr<VulkanBuffer> mDrawn;	// per cluster: drawn by the last cull phase (resolve.comp input)
 	std::unique_ptr<VulkanDescriptorSet> mCullSet;
@@ -137,7 +138,7 @@ private:
 	std::vector<std::unique_ptr<VulkanDescriptorSet>> mHiZSets;
 
 	// Timings + counter readback: a ring of query / readback slots, one per Draw.
-	enum { NumSlots = 8, NumPoints = 8, NumCounters = 16 };
+	enum { NumSlots = 8, NumPoints = 8, NumCounters = 6 * LMB_DRAWN + 4 };	// LMC_COUNT
 	std::unique_ptr<VulkanQueryPool> mQueries;
 	std::unique_ptr<VulkanBuffer> mReadback;
 	uint32_t *mReadbackData = nullptr;

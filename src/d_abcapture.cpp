@@ -22,6 +22,7 @@
 #include "doomstat.h"
 #include "engineerrors.h"
 #include "g_levellocals.h"
+#include "i_time.h"
 #include "m_misc.h"
 #include "menu.h"
 #include "printf.h"
@@ -208,7 +209,8 @@ void AbCapture_BeginRenderPass ()
 
 	FLevelLocals *L = (gamestate == GS_LEVEL) ? primaryLevel : nullptr;
 
-	if (L != CapturedLevel)
+	bool newMap = L != CapturedLevel;
+	if (newMap)
 	{
 		// New map (or out of a level): the tick list applies per map, so
 		// restart the per-map frame counter and the done flags.
@@ -238,6 +240,13 @@ void AbCapture_BeginRenderPass ()
 
 	AbCaptureTic++;
 	AbCaptureActive = true;
+	// P_SetupLevel stamps ShaderStartTime from the real clock (the capture
+	// clock is only active during render passes), and CheckTimer
+	// (hw_entrypoint.cpp) restarts the material shader timer until the
+	// synthetic FrameTime passes it: the warp / shader timer base then
+	// depended on how long the level took to load. Restamp it on the
+	// capture clock so the timer starts at the map's first captured frame.
+	if (newMap) L->ShaderStartTime = I_msTimeFS();
 }
 
 //==========================================================================

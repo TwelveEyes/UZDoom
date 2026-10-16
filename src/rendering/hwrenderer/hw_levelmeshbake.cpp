@@ -66,6 +66,9 @@ CVAR(String, lm_bake_objdir, "", 0)
 CVAR(Int, lm_bake_debug, 0, 0)
 // Cluster triangle budget (ticket 05: 256). Takes effect at the next level setup.
 CVAR(Int, lm_cluster_budget, 256, 0)
+// Debug: material programs the levelmesh draws (bit per ELevelMeshProgram,
+// read at level setup); the others stay on the classic path.
+CVAR(Int, lm_programs, 7, CVAR_NOSAVE)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -272,6 +275,10 @@ void Baker::ProcessSides()
 	sector_t backcopy;
 	Out->TierBase.Resize(Level->sides.Size() * 3);
 	for (auto &tb : Out->TierBase) tb = {};
+	Out->PlaneProgram.Resize(Level->sectors.Size() * 2);
+	for (auto &p : Out->PlaneProgram) p = -2;
+	Out->PlanePortal.Resize(Level->sectors.Size() * 2);
+	for (auto &p : Out->PlanePortal) p = 0;
 
 	for (auto &side : Level->sides)
 	{
@@ -333,16 +340,24 @@ void Baker::ProcessSides()
 
 } // namespace
 
-// Materials the levelmesh fragment stage cannot draw yet: it only builds the
-// default material shader (no warp, specular / PBR, paletted, user shaders
-// or canvases). Animation frames are assumed to share their base's shader.
+// The levelmesh program of a texture's material (FMaterial's shader index:
+// default, warp 1, warp 2), or -1 for the material shaders the levelmesh
+// does not build (specular / PBR, paletted, user shaders, canvases).
+// Animation frames are assumed to share their base's shader.
+int LevelMesh_MaterialProgram(FGameTexture *tex)
+{
+	if (tex == nullptr) return LMP_DEFAULT;
+	if (tex->isHardwareCanvas() || tex->GetUseType() == ETextureType::SWCanvas) return -1;
+	if (tex->GetShaderIndex() != SHADER_Default) return -1;
+	int program = LMP_DEFAULT;
+	if (tex->isWarped()) program = tex->isWarped() == 1 ? LMP_WARP1 : LMP_WARP2;
+	else if (tex->GetNormalmap() != nullptr) return -1;	// specular / PBR
+	return (lm_programs & (1 << program)) ? program : -1;
+}
+
 bool LevelMesh_NeedsClassicMaterial(FGameTexture *tex)
 {
-	if (tex == nullptr) return false;
-	if (tex->isWarped() || tex->isHardwareCanvas() || tex->GetUseType() == ETextureType::SWCanvas) return true;
-	if (tex->GetShaderIndex() != SHADER_Default) return true;
-	if (tex->GetNormalmap() != nullptr) return true;	// specular / PBR
-	return false;
+	return LevelMesh_MaterialProgram(tex) < 0;
 }
 
 namespace
@@ -380,7 +395,9 @@ static uint32_t SideLightFlags(side_t *side, int tier)
 
 // Side colors, additive color and texture manipulation the classic wall draw
 // applies (HWWall::RenderTexturedWall); white / none draws unchanged.
-static bool HasWallColorEffects(side_t *side, int tier, sector_t *frontsector)
+} // namespace
+
+bool LevelMesh_HasWallColorEffects(side_t *side, int tier, sector_t *frontsector)
 {
 	if (frontsector == nullptr) return false;
 	if (uint32_t(side->GetSpecialColor(tier, side_t::walltop, frontsector)) != 0xffffffffu) return true;
@@ -388,6 +405,14 @@ static bool HasWallColorEffects(side_t *side, int tier, sector_t *frontsector)
 	if ((uint32_t(side->GetAdditiveColor(tier, frontsector)) & 0xffffff) != 0) return true;
 	return side->textures[tier].TextureFx.AddColor.a != 0;
 }
+
+bool LevelMesh_HasPlaneColorEffects(sector_t *sec, int pos)
+{
+	return sec->SpecialColors[pos] != 0xffffffff || (sec->AdditiveColors[pos] & 0xffffff) != 0 || sec->planes[pos].TextureFx.AddColor.a != 0;
+}
+
+namespace
+{
 
 //==========================================================================
 //
@@ -706,7 +731,10 @@ void Baker::BakeWall(HWWall &w)
 	// resolve covers light, fog, desaturation and glow). The values
 	// HWWall::RenderTexturedWall applies are tested, not WALLF_EXTCOLOR: the
 	// map loader sets that flag on every side (sector_t::CheckExColorFlag).
-	if (LevelMesh_NeedsClassicMaterial(w.texture) || HasWallColorEffects(side, tier, w.frontsector)) surf.flags |= LMSF_DEFERRED;
+	int program = LevelMesh_MaterialProgram(w.texture);
+	if (program < 0 || LevelMesh_HasWallColorEffects(side, tier, w.frontsector)) surf.flags |= LMSF_DEFERRED;
+	else surf.flags |= uint32_t(program) << LMSF_PROGRAMSHIFT;
+	if (surf.flags & LMSF_STATETEXTURE) Out->TierBase[surf.sideRef].program = program;
 	float dx = w.glseg.x2 - w.glseg.x1, dy = w.glseg.y2 - w.glseg.y1;
 	float len = sqrtf(dx * dx + dy * dy);
 	if (len > 0)
@@ -813,15 +841,20 @@ void Baker::BakeFlat(subsector_t *sub, sector_t *sec, int h, sector_t *model, in
 	auto tex = TexMan.GetGameTexture(texid, true);
 	// As walls: material shaders and the plane colors / texture manipulation
 	// HWFlat::DrawFlat applies (ticket 11).
-	if (LevelMesh_NeedsClassicMaterial(tex) || model->SpecialColors[mplane] != 0xffffffff || (model->AdditiveColors[mplane] & 0xffffff) != 0 ||
-		model->planes[mplane].TextureFx.AddColor.a != 0)
-		surf.flags |= LMSF_DEFERRED;
+	int program = LevelMesh_MaterialProgram(tex);
+	if (program < 0 || LevelMesh_HasPlaneColorEffects(model, mplane)) surf.flags |= LMSF_DEFERRED;
+	else surf.flags |= uint32_t(program) << LMSF_PROGRAMSHIFT;
 	// HWDrawInfo::AddFlat: only 3D-floor and portal planes are alpha tested.
 	if (tex && tex->isMasked() && (ffloor || portal)) surf.flags |= LMSF_MASKED;
 	surf.vScale = 0;
 	surf.textureId = texid.GetIndex();
 	// Sector planes follow their plane's streamed texture (3D-floor planes stay baked, ticket 12).
-	if (!ffloor) surf.flags |= LMSF_STATETEXTURE;
+	if (!ffloor)
+	{
+		surf.flags |= LMSF_STATETEXTURE;
+		Out->PlaneProgram[ref] = int8_t(program);
+		Out->PlanePortal[ref] = portal;
+	}
 	surf.sideRef = 0xffffffffu;
 	surf.lightSector = sec->Index();
 	surf.lightList = -1;

@@ -18,7 +18,8 @@
 ** Material layer i is bindless slot (slot + i); a layer the material does
 ** not have reads the null texture in slot 0, like the classic dummy layers.
 **
-** vLMMaterial = (base slot, layer count, sampler index, texture-mode flags)
+** vLMMaterial = (base slot, layer count, sampler index | texture-mode flags,
+** material shader timer as float bits)
 **
 ** The surface's resolved shading (levelmesh.vp, resolve.comp) replaces the
 ** render state's light, fog, desaturation and glow: those names become the
@@ -63,7 +64,8 @@ uint LM_LayerSlot(uint layer)
 // wrapping: identical with nearest filtering, a sub-texel edge difference
 // with linear filtering.) A macro: vTexCoord is declared after this include.
 // The sampler index is the classic clamp mode, built as clamp bits.
-#define LM_SAMPLER (((vLMMaterial.z & LM_SAMPLER_CLAMPY) != 0u && (vTexCoord.y < 0.0 || vTexCoord.y > 1.0)) ? (vLMMaterial.z & ~LM_SAMPLER_CLAMPY) : vLMMaterial.z)
+#define LM_SAMPLER_BITS (vLMMaterial.z & 3u)
+#define LM_SAMPLER (((LM_SAMPLER_BITS & LM_SAMPLER_CLAMPY) != 0u && (vTexCoord.y < 0.0 || vTexCoord.y > 1.0)) ? (LM_SAMPLER_BITS & ~LM_SAMPLER_CLAMPY) : LM_SAMPLER_BITS)
 
 #define LM_LAYER(i) sampler2D(lmBindless[nonuniformEXT(LM_LayerSlot(i))], lmSamplers[nonuniformEXT(LM_SAMPLER)])
 
@@ -84,6 +86,11 @@ uint LM_LayerSlot(uint layer)
 // layer flags are per surface.
 int LM_TextureMode()
 {
-	return uTextureMode | int(vLMMaterial.w);
+	return uTextureMode | int(vLMMaterial.z & LMTE_TEXFMASK);
 }
 #define uTextureMode LM_TextureMode()
+
+// The material shader timer of the surface's texture (func_warp.fp, user
+// shaders), not the render state's.
+#undef timer
+#define timer uintBitsToFloat(vLMMaterial.w)

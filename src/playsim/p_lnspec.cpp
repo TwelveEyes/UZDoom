@@ -3428,6 +3428,8 @@ FUNC(LS_Sector_SetPlaneReflection)
 		sector_t * s = &Level->sectors[secnum];
 		if (!s->floorplane.isSlope()) s->reflect[sector_t::floor] = arg1 / 255.f;
 		if (!s->ceilingplane.isSlope()) Level->sectors[secnum].reflect[sector_t::ceiling] = arg2 / 255.f;
+		LevelMesh_PlaneChanged(s, sector_t::floor);
+		LevelMesh_PlaneChanged(s, sector_t::ceiling);
 	}
 
 	return true;

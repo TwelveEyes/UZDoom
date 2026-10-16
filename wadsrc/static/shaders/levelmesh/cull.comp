@@ -56,15 +56,16 @@ layout(push_constant) uniform CullConstants
 	uint cullMode;
 	uint drawMode;
 	uint numClusters;
-	uint bucketBase0, bucketBase1;	// compacted index regions per drawn bucket
 	uint hizLevels;
 	uint finalizePhase;
+	uint padding0, padding1;
 };
 
 shared uint sDraw;
 shared uint sDest[LMB_DRAWN];
 
-uint BucketBase(uint b) { return b == 0u ? bucketBase0 : bucketBase1; }
+// Compacted index region per drawn bucket (per level, after the cleared counters).
+uint BucketBase(uint b) { return counters[LMC_BASE + b]; }
 
 // Clip-space AABB test. Returns 0 = outside, 1 = inside (no occlusion
 // information), 2 = inside with a valid screen rect / nearest depth.

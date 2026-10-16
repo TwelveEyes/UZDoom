@@ -22,7 +22,10 @@ line specials (make_demo.py `special:` steps) and one switch press:
   6  two-sided mid texture MIDGRATE on the divider 6 | 7 (line id 6, no
      wrap): an x offset (levelmesh), then a y offset (moves the clipped
      geometry: classic fallback)
-  7  plain end room
+  7  warped textures (ANIMDEFS): floor FLAT1 (warp), north wall BIGBRIK2
+     (warp2, speed 2): the levelmesh warp material programs
+  8  brightmaps (GLDEFS, generated PNG maps): light 64, north wall STARTAN3,
+     floor FLOOR0_1 (a bindless brightmap layer, TEXF_Brightmap)
 
 Usage: make_texturetest.py [--out wads/texturetest.wad]
 """
@@ -32,7 +35,7 @@ import os
 
 from make_lighttest import block, write_wad
 
-ROOMS = 8
+ROOMS = 9
 W = 256
 DEPTH = 512
 
@@ -48,6 +51,10 @@ def sector_props(i):
         p.update(id=3, texturefloor="FLOOR5_1")
     elif i == 4:
         p.update(heightfloor=-16, texturefloor="FLAT5_4")
+    elif i == 7:
+        p.update(texturefloor="FLAT1")
+    elif i == 8:
+        p.update(lightlevel=64)
     return p
 
 
@@ -83,11 +90,16 @@ def build_textmap():
         elif i in (4, 5):
             north["id"] = i
             sides[north["sidefront"]]["texturemiddle"] = "STARTAN3"
+        elif i == 7:
+            sides[north["sidefront"]]["texturemiddle"] = "BIGBRIK2"
+        elif i == 8:
+            sides[north["sidefront"]]["texturemiddle"] = "STARTAN3"
         lines += [south, north]
+        # end walls: the front (right-hand) side faces into the room
         if i == 0:
-            lines.append({"v1": vert(x0, DEPTH), "v2": vert(x0, 0), "sidefront": side(0, tex), "blocking": True})
+            lines.append({"v1": vert(x0, 0), "v2": vert(x0, DEPTH), "sidefront": side(0, tex), "blocking": True})
         if i == ROOMS - 1:
-            lines.append({"v1": vert(x1, 0), "v2": vert(x1, DEPTH), "sidefront": side(i, tex), "blocking": True})
+            lines.append({"v1": vert(x1, DEPTH), "v2": vert(x1, 0), "sidefront": side(i, tex), "blocking": True})
         else:
             # divider at x1: front = east room (i + 1), back = room i
             mid = "MIDGRATE" if i == 6 else "-"
@@ -119,13 +131,41 @@ map MAP01 "Texture state test"
 }
 """
 
+ANIMDEFS = b"""
+warp flat FLAT1
+warp2 texture BIGBRIK2 2
+"""
+
+GLDEFS = b"""
+brightmap texture STARTAN3
+{
+	map "BMSTART"
+}
+brightmap flat FLOOR0_1
+{
+	map "BMFLOOR"
+}
+"""
+
+
+def brightmap_png(w, h, cell):
+    """A grayscale checker of lit cells: the brightmap layer lifts them to full brightness."""
+    from PIL import Image
+    import io
+    img = Image.new("L", (w, h))
+    img.putdata([255 if ((x // cell) + (y // cell)) % 2 == 0 else 0 for y in range(h) for x in range(w)])
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     here = os.path.dirname(os.path.abspath(__file__))
     ap.add_argument("--out", default=os.path.join(here, "wads", "texturetest.wad"))
     args = ap.parse_args()
-    lumps = [("MAPINFO", MAPINFO), ("MAP01", b""), ("TEXTMAP", build_textmap()), ("ENDMAP", b"")]
+    lumps = [("MAPINFO", MAPINFO), ("ANIMDEFS", ANIMDEFS), ("GLDEFS", GLDEFS),
+             ("BMSTART", brightmap_png(128, 128, 16)), ("BMFLOOR", brightmap_png(64, 64, 8)), ("MAP01", b""), ("TEXTMAP", build_textmap()), ("ENDMAP", b"")]
     write_wad(args.out, lumps)
     print("wrote %s (%d rooms)" % (args.out, ROOMS))
 

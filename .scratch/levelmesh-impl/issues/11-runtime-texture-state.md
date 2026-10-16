@@ -95,3 +95,26 @@
     `LevelMesh_FillSectorState`); sectors whose plane texture glows without auto-glow are
     candidates every frame (`LevelMeshStateStream::AnimatedGlow`, built at load). A plane
     texture change must refresh that list and mark the sector changed.
+- 2026-10-15: progress, part A committed (7a73f37303): animation table, side / plane-xform
+  record streams, wall UV deltas (details go into the resolution).
+  - Demo A/B (full lighting, fail ticks before -> after): movers MAP30 64 -> 19, DOOM2 MAP01
+    20 -> 3, MAP23 9 -> 3, MAP27 8 -> 2, Hexen MAP10 18 -> 12, Heretic E1M2 9 -> 3, SOS MAP32
+    49 -> 7, planisf MAP01 44 -> 15, Pirates MAP43 12 -> 8, SOS MAP46 55 -> 16 (HEAD binary
+    from a worktree: every remaining fail also fails there). MAP30 static 30/30 pass.
+  - **Finding for triage (not 11):** large regions the classic renders black (nothing drawn)
+    where the levelmesh draws geometry: movers MAP30 ticks 300/305/360/365 (stairs room),
+    SOS MAP46 210/660/2280 (vertical strips), Hexen MAP01 270/300, SOS MAP32 120/2040,
+    Hexen MAP10 30/1770. Independent of the state stream (`lm_stateupdate 0` changes
+    nothing). Remaining: Pirates MAP43 120/630 upper walls against the sky (14), MAP30 tour
+    spectre fuzz, sub-min specks.
+- 2026-10-15: part B committed (e1be6f0642): texture swaps through the streamed records,
+  runtime classic fallback (LMTS_DEFERRED), switch preload, `make_texturetest.py` map + demo.
+- 2026-10-15: part C (material buckets): buckets are alpha class x material program
+  (default, warp1, warp2: levelmesh variants of the classic material shaders, per-texture
+  shader speed in the texture table, timer push constant); specular / PBR / paletted / user
+  shaders / canvases stay classic. Runtime fallback also for reflective / portal planes and
+  side / plane colors set at runtime (hooks in the color setters, Sector_SetPlaneReflection).
+  Capture fix: `ShaderStartTime` is restamped on the capture clock (the warp timer base
+  depended on load time). Pirates MAP49 with levelmesh warps 63 -> 3 fails (= with warps on
+  the classic path), MAP43 48 -> 8 (reflective water was drawn opaque), every other set
+  unchanged, determinism 87/87, vk_debug survey only the known VUIDs.

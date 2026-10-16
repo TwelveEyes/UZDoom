@@ -124,11 +124,14 @@ void main()
 	else tc = LM_FlatTexCoord(v, surf, tex);
 
 	// Material for the fragment stage: bindless base slot, layer count,
-	// sampler (classic clamp mode: walls pass HWF_CLAMPX/Y, flats CLAMP_NONE),
-	// texture-mode flags (material layers + ClampY, see LMSF_TEXCLAMPY).
+	// sampler (classic clamp mode: walls pass HWF_CLAMPX/Y, flats CLAMP_NONE)
+	// | texture-mode flags (material layers + ClampY, see LMSF_TEXCLAMPY),
+	// material shader timer.
 	uint samplerMode = 0u;
 	uint texflags = tex.layers & LMTE_TEXFMASK;
-	if (kind == LMSK_WALL)
+	uint program = (surf.flags & LMSF_PROGRAMMASK) >> LMSF_PROGRAMSHIFT;
+	// FGameTexture::GetClampMode: warped textures never clamp.
+	if (kind == LMSK_WALL && program == LMP_DEFAULT)
 	{
 		// The classic sets HWF_CLAMPX only while the u range lies within one
 		// texture width (HWWall::DoMidTexture, CheckTexturePosition for
@@ -138,7 +141,9 @@ void main()
 		if ((surf.flags & LMSF_CLAMPY) != 0u) samplerMode |= 2u;
 		if ((surf.flags & LMSF_TEXCLAMPY) != 0u) texflags |= LM_TEXF_CLAMPY;
 	}
-	vLMMaterial = uvec4(tex.slot, tex.layers & 0xffffu, samplerMode, texflags);
+	// VkRenderState::ApplyStreamData: timer = (FrameTime - firstFrame) * GetShaderSpeed() / 1000.
+	float materialTimer = uLevelMeshTime * tex.shaderSpeed;
+	vLMMaterial = uvec4(tex.slot, tex.layers & 0xffffu, samplerMode | texflags, floatBitsToUint(materialTimer));
 
 	vec4 worldcoord = ModelMatrix * vec4(v.x, z, v.y, 1.0);
 	vec4 eyeCoordPos = ViewMatrix * worldcoord;

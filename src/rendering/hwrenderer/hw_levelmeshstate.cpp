@@ -158,7 +158,8 @@ static bool SideStateExpressible(const LevelMeshTierBase &tb, side_t &side, int 
 {
 	if (!texid.isValid()) return false;		// no texture: the classic decides what (if anything) to draw
 	auto tex = TexMan.GetGameTexture(texid, true);
-	if (tex == nullptr || !tex->isValid() || LevelMesh_NeedsClassicMaterial(tex)) return false;
+	// Another material program would need another bucket.
+	if (tex == nullptr || !tex->isValid() || LevelMesh_MaterialProgram(tex) != tb.program) return false;
 	FTexCoordInfo tci;
 	tci.GetFromTexture(tex, (float)side.GetTextureXScale(tier), (float)side.GetTextureYScale(tier),
 		!!(side.GetLevel()->flags3 & LEVEL3_FORCEWORLDPANNING));
@@ -168,6 +169,7 @@ static bool SideStateExpressible(const LevelMeshTierBase &tb, side_t &side, int 
 	// HWWall::DoMidTexture clips an unwrapped two-sided mid texture to its
 	// height above / below the y offset.
 	if (tb.midClip && (float)side.GetTextureYOffset(tier) != tb.yOffset) return false;
+	if (LevelMesh_HasWallColorEffects(&side, tier, side.sector)) return false;
 	return true;
 }
 
@@ -190,10 +192,21 @@ void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos,
 	out = {};
 	FTextureID texid = sec.GetTexture(pos);
 	out.textureId = texid.GetIndex();
-	// HWFlat::ProcessSector draws no sky plane; material shaders and
-	// untextured planes stay classic.
+	// HWFlat::ProcessSector draws no sky plane; untextured planes and a
+	// material program other than the baked surfaces' (another bucket) stay
+	// classic.
 	auto tex = TexMan.GetGameTexture(texid, true);
-	if (texid == skyflatnum || !texid.isValid() || tex == nullptr || !tex->isValid() || LevelMesh_NeedsClassicMaterial(tex))
+	unsigned ref = sec.Index() * 2 + pos;
+	int baked = ref < bake->PlaneProgram.Size() ? bake->PlaneProgram[ref] : -2;
+	if (texid == skyflatnum || !texid.isValid() || tex == nullptr || !tex->isValid() || (baked >= -1 && LevelMesh_MaterialProgram(tex) != baked))
+		out.flags |= LMTS_DEFERRED;
+	// HWFlat::ProcessSector draws a reflective plane (Sector_SetPlaneReflection)
+	// translucent over its plane mirror, and a portal plane opaque only at
+	// alpha 1; the bake made a surface only for the opaque cases. Plane
+	// colors set at runtime are not expressible yet.
+	bool portal = sec.ValidatePortal(pos) != nullptr;
+	bool bakedPortal = ref < bake->PlanePortal.Size() && bake->PlanePortal[ref];
+	if (sec.GetReflect(pos) > 0 || portal != bakedPortal || (portal && sec.GetAlpha(pos) != 1.) || LevelMesh_HasPlaneColorEffects(&sec, pos))
 		out.flags |= LMTS_DEFERRED;
 	auto &xf = sec.planes[pos].xform;
 	out.xOffset = (float)xf.xOffs;
@@ -282,6 +295,18 @@ void LevelMesh_SideChanged(side_t *side, int tier)
 	auto &rs = HookBake->Stream.Sides;
 	if (tier >= 0 && tier < 3) rs.Touch(s * 3 + tier);
 	else for (int t = 0; t < 3; t++) rs.Touch(s * 3 + t);
+}
+
+void LevelMesh_SectorColorsChanged(sector_t *sec)
+{
+	if (HookBake == nullptr || sec < HookSectors || sec >= HookSectors + HookSectorCount) return;
+	unsigned s = unsigned(sec - HookSectors);
+	HookBake->Stream.Xforms.Touch(s * 2);
+	HookBake->Stream.Xforms.Touch(s * 2 + 1);
+	// Walls without their own colors take the sector's (side_t::GetSpecialColor).
+	for (line_t *line : sec->Lines)
+		for (side_t *side : line->sidedef)
+			if (side && side->sector == sec) LevelMesh_SideChanged(side, -1);
 }
 
 void LevelMesh_PlaneChanged(sector_t *sec, int pos)

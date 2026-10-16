@@ -119,7 +119,7 @@ def cmd_summary(args):
         if args.combo and args.combo not in r["combo"]:
             continue
         counts = {}
-        for row in r["rows"]:
+        for row in r.get("rows", []):
             counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
         total, worst = 0, (0, None)
         for t, (pa, pb) in sorted(captures(rdir, r["combo"]).items()):
@@ -133,7 +133,7 @@ def cmd_summary(args):
 
 def fail_ticks(rdir, combo):
     r = [x for x in results(rdir) if x["combo"] == combo][0]
-    return {row["tick"] for row in r["rows"] if row["verdict"] == "fail"}
+    return {row["tick"] for row in r.get("rows", []) if row["verdict"] == "fail"}
 
 
 def cmd_failsets(args):
