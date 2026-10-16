@@ -334,6 +334,14 @@
    "warp": "MAP01",
    "demo": "PLANISF_MAP01.lmp",
    "static_ticks": null
+  },
+  {
+   "name": "CITADEL_MAP01",
+   "iwad": "DOOM2.WAD",
+   "pwad": "citadel.pk3",
+   "warp": "MAP01",
+   "demo": "CITADEL_MAP01.lmp",
+   "static_ticks": null
   }
  ]
 }
