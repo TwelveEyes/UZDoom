@@ -114,8 +114,19 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
     `ExtraFloor_LightOnly` room;
   - `Line_SetTextureOffset` on a polyobject side.
 
-  Before ticket 13 (polyobjects on the classic path on both sides), 155 of 216 ticks fail, all
-  on edge specks: at most 449 px, max delta 53 (run `20261016T193509Z-ab`).
+  Room 1 turns the camera so the box's bake position leaves the view while the box does not:
+  the culling test of the polyobject's cluster box.
+
+  - classic vs levelmesh: `run --manifest tools/abtest/ab_manifest_polytest.json --mode demo`
+    fails 158 of 227 ticks, all on edge specks (at most 391 px, max delta 30). Before ticket
+    13, with polyobjects classic on both sides, it was 155 of 216 at up to 449 px / delta 53
+    (older demo).
+  - culling holes: `--set-a 'gl_uselevelmesh 1' --set-a 'lm_cullmode 0' --set-b 'lm_cullmode 2'`
+    (or `1`) passes. Adding `--set-b 'lm_polybox 0'` is the negative control: ticks 120-145
+    lose room 1's box.
+  - `lm_polyobjs 0` (level setup) leaves every polyobject classic. `lm_statelog 1` prints each
+    polyobject that leaves or re-enters the sector it was baked in (it is drawn classic
+    meanwhile).
 - **Shader timer in captures:** `P_SetupLevel` stamps `ShaderStartTime` on the real clock, and
   `CheckTimer` restarts the material shader timer until the synthetic `FrameTime` passes it,
   so before 2026-10-15 the warp / shader timer base depended on load time (a slower levelmesh

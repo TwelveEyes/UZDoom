@@ -102,6 +102,14 @@ struct LMSideState
 	float xOffset, yOffset;
 	float xScale, yScale;
 	uint flags;
+	uint polyobj;		// polyobject sides: LMPolyobj index
+	int fakeContrast;	// polyobject sides: the current fake contrast pair
+};
+
+struct LMPolyobj
+{
+	float m[4];
+	float t[2];
 	uint reserved[2];
 };
 
@@ -143,6 +151,7 @@ layout(set = LM_SET, binding = LMBIND_SIDESTATE, std430) buffer readonly LMSideB
 layout(set = LM_SET, binding = LMBIND_PLANEXFORM, std430) buffer readonly LMPlaneXformBuffer { LMPlaneXform lmPlaneXforms[]; };
 layout(set = LM_SET, binding = LMBIND_TEXTURETABLE, std430) buffer readonly LMTextureBuffer { LMTextureEntry lmTextures[]; };
 layout(set = LM_SET, binding = LMBIND_LIGHTS3D, std430) buffer readonly LMLight3DBuffer { LMLight3D lmLights3D[]; };
+layout(set = LM_SET, binding = LMBIND_POLYOBJS, std430) buffer readonly LMPolyobjBuffer { LMPolyobj lmPolyobjs[]; };
 #ifndef LM_RESOLVE_WRITER
 layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolvedBuffer { LMResolved lmResolved[]; };
 #endif
@@ -161,11 +170,36 @@ int LM_SurfaceTexture(LMSurface surf)
 
 bool LM_StateDeferred(LMSurface surf)
 {
+	// A polyobject out of the sector it was baked in: its side records.
+	if ((surf.flags & LMSF_POLYOBJ) != 0u && (lmSides[surf.sideRef].flags & LMTS_DEFERRED) != 0u) return true;
 	if (surf.lightList >= 0 && (lmLights3D[surf.lightList].flags & LML3_DEFERRED) != 0u) return true;
 	if ((surf.flags & LMSF_3DFLOOR) != 0u) return (lmSides[surf.sideRef].flags & LMTS_DEFERRED) != 0u;
 	if ((surf.flags & LMSF_STATETEXTURE) == 0u) return false;
 	if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) return (lmSides[surf.sideRef].flags & LMTS_DEFERRED) != 0u;
 	return (lmPlaneXforms[surf.planeRefs[0]].flags & LMTS_DEFERRED) != 0u;
+}
+
+// A vertex's map xy: polyobject walls are baked polyobject-local and placed
+// by their polyobject's transform (LevelMeshPolyobj), the rest as baked.
+vec2 LM_VertexXY(LMVertex v, LMSurface surf)
+{
+	if ((surf.flags & LMSF_POLYOBJ) == 0u) return vec2(v.x, v.y);
+	LMPolyobj po = lmPolyobjs[lmSides[surf.sideRef].polyobj];
+	precise float x = po.m[0] * v.x + po.m[1] * v.y + po.t[0];
+	precise float y = po.m[2] * v.x + po.m[3] * v.y + po.t[1];
+	return vec2(x, y);
+}
+
+// The map-space normal of a surface: a polyobject wall's normal follows its
+// transform (the cofactor matrix keeps it perpendicular to the moved wall).
+vec3 LM_SurfaceNormal(LMSurface surf)
+{
+	vec3 n = vec3(surf.normal[0], surf.normal[1], surf.normal[2]);
+	if ((surf.flags & LMSF_POLYOBJ) == 0u) return n;
+	LMPolyobj po = lmPolyobjs[lmSides[surf.sideRef].polyobj];
+	vec2 r = vec2(po.m[3] * n.x - po.m[2] * n.y, -po.m[1] * n.x + po.m[0] * n.y);
+	float len = length(r);
+	return len > 0.0 ? vec3(r / len, n.z) : n;
 }
 
 // LM_PlaneZ: same operation order as the C++ (no contraction into FMA).

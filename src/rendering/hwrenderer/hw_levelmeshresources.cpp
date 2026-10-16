@@ -28,6 +28,7 @@
 #include "c_dispatch.h"
 #include "printf.h"
 #include "v_video.h"
+#include "po_man.h"
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
@@ -48,6 +49,19 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	TArray<uint8_t> used(ntex, true);
 	memset(used.Data(), 0, ntex);
 	auto use = [&](int id) { if (id > 0 && (unsigned)id < ntex) used[id] = 1; };
+
+	// Polyobjects: where they are now (a savegame may have moved them since
+	// the bake), their clusters' boxes there, and whether they are still in
+	// the sector they were baked in (their side records follow it).
+	TArray<LevelMeshPolyobj> polyobjs(bake->PolyBaked.Size(), true);
+	for (unsigned i = 0; i < polyobjs.Size(); i++)
+	{
+		LevelMesh_FillPolyobj(Level, bake, i, polyobjs[i]);
+		if (!bake->PolyBaked[i]) continue;
+		bake->PolyDeferred[i] = LevelMesh_PolyobjLeftSector(Level, bake, i);
+		for (uint32_t c = bake->PolyClusterStart[i]; c < bake->PolyClusterStart[i + 1]; c++)
+			LevelMesh_PolyClusterBox(bake, c, polyobjs[i], bake->Clusters[c].bmin, bake->Clusters[c].bmax);
+	}
 
 	for (unsigned i = 0; i < Level->sectors.Size(); i++)
 	{
@@ -105,10 +119,18 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	data.sides = LM_Span(sides);
 	data.planeXforms = LM_Span(xforms);
 	data.lights3D = LM_Span(lights3D);
+	data.polyobjs = LM_Span(polyobjs);
 	data.textureIds = LM_Span(textureIds);
 	data.translationTableSize = ntex;
 	screen->SetLevelMeshData(&data);
-	LevelMesh_ResetState(Level, bake, sectors, sides, xforms, lights3D);
+	LevelMesh_ResetState(Level, bake, sectors, sides, xforms, lights3D, polyobjs);
+	// A polyobject already out of its bake sector starts on the classic path.
+	for (unsigned i = 0; i < bake->PolyBaked.Size(); i++)
+	{
+		if (!bake->PolyBaked[i] || !bake->PolyDeferred[i]) continue;
+		for (side_t *side : Level->Polyobjects[i].Sidedefs)
+			for (int t = 0; t < 3; t++) bake->SideTierOwned[side->Index() * 3 + t] = 0;
+	}
 
 	if (!lm_keepgeometry)
 	{

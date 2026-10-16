@@ -15,7 +15,9 @@ Polyobject numbers are 1 + the room index (room 9: 10 and 13).
 
   0  static box (64 x 64), STARTAN3; the demo starts a Scroll_Wall on its
      south side (line id 500): the side state of a polyobject side
-  1  slide: box 64 x 32, Polyobj_Move east 64 then back (translation)
+  1  slide: box 64 x 32, Polyobj_Move east 88; the camera turns to 20
+     degrees (the box's bake position leaves the view, the box does not:
+     the culling test of its cluster box), then the box moves back
   2  rotate: bar 112 x 16 around its centre, Polyobj_RotateLeft 90 degrees
      then RotateRight 45 (rotation; the walls' fake contrast changes)
   3  swing door: slab 96 x 8 hinged at its west end, Polyobj_DoorSwing 90
@@ -36,7 +38,7 @@ Polyobject numbers are 1 + the room index (room 9: 10 and 13).
   9  mirror: box 10 (Polyobj_StartLine mirror = 13) west of box 13; box 10
      moves 48 west, its mirror 48 east, then back
   10 sliding door: an opening in the north wall (x0 + 96 .. x0 + 160) to a
-     closet (y 512 .. 640); a 64 x 8 door poly just inside it slides 64 east
+     closet (y 512 .. 640); a 64 x 8 door poly just inside it slides 72 east
      into the void behind the wall (Polyobj_DoorSlide), waits, closes
   11 texture offsets: static box (south side line id 511),
      Line_SetTextureOffset x 16 / y 8, then 40 / 0
@@ -235,11 +237,11 @@ HOLD = 30       # tics per room without movement
 
 def demo_steps():
     """make_demo.py script steps and the demo length. Each entry: room ->
-    (hold tics, [(tic offset, special args)])."""
+    (hold tics, [(tic offset, special args)][, [(tic offset, face degrees)]])."""
     F = 1 << 16
     room_specials = {
         0: (60, [(4, (52, 500, F, 0, 0, 2))]),
-        1: (90, [(4, (4, 2, 16, 0, 64)), (44, (4, 2, 16, 128, 64))]),
+        1: (140, [(4, (4, 2, 16, 0, 88)), (60, (4, 2, 16, 128, 88))], [(54, 20), (100, 90)]),
         2: (90, [(4, (2, 3, 16, 64)), (44, (3, 3, 16, 32))]),
         3: (120, [(4, (7, 4, 16, 64, 35))]),
         4: (130, [(4, (4, 5, 16, 0, 96)), (64, (4, 5, 16, 128, 96))]),
@@ -248,15 +250,18 @@ def demo_steps():
         7: (60, [(6, (112, 107, 64)), (16, (212, 107, 255, 64, 64)), (36, (112, 107, 200))]),
         8: (90, [(4, (4, 9, 16, 0, 48)), (44, (4, 9, 16, 128, 48))]),
         9: (90, [(4, (4, 10, 16, 128, 48)), (44, (4, 10, 16, 0, 48))]),
-        10: (120, [(4, (8, 11, 16, 0, 64, 35))]),
+        10: (120, [(4, (8, 11, 16, 0, 72, 35))]),
         11: (60, [(6, (53, 511, 16 * F, 8 * F, 0, 2)), (30, (53, 511, 40 * F, 0, 0, 2))]),
     }
     steps, t = [], 2
     for i in range(ROOMS):
         x0 = i * W
-        hold, specials = room_specials.get(i, (HOLD, []))
+        entry = room_specials.get(i, (HOLD, []))
+        hold, specials = entry[0], entry[1]
         steps.append("warp:%d,48@%d" % (x0 + 128, t))
         steps.append("face:90@%d" % (t + 1))
+        for dt, deg in (entry[2] if len(entry) > 2 else []):
+            steps.append("face:%d@%d" % (deg, t + dt))
         steps.append("face:60@%d" % (t + hold - 10))
         for dt, args in specials:
             steps.append("special:%s@%d" % (",".join(str(a) for a in args), t + dt))

@@ -90,6 +90,7 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_NOSECTORFOG = 1 << 16,	// walls: fog of light 255 without the sector colormap (RENDERWALL_M2SNF)
 	LMSF_LIGHT3DLEVEL = 1 << 17,	// the 3D light (lightList) replaces the light level (HWWall::Put3DWall, HWFlat::ProcessSector)
 	LMSF_EDGECLAMPMAX = 1 << 18,	// edgeClamp raises the bottom vertices (upper tier); otherwise it lowers the top vertices (lower tier)
+	LMSF_POLYOBJ = 1 << 19,		// polyobject wall: x / y are polyobject-local, placed by its LevelMeshPolyobj (index in the side record)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
 	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..29
 	LMSF_PROGRAMMASK = 3u << 28,
@@ -278,7 +279,13 @@ struct LevelMeshSideState
 	float xOffset, yOffset;		// side_t::GetTextureX/YOffset
 	float xScale, yScale;
 	uint32_t flags;				// LMTS_*
-	uint32_t reserved[2];
+	// Polyobject sides (LMSF_POLYOBJ surfaces): the polyobject's index
+	// (LevelMeshPolyobj), and the fake contrast pair of the side's current
+	// direction (smooth rel low 16 | classic rel high 16, as
+	// LevelMeshSurface::fakeContrast): the classic recomputes it from the
+	// rotated line. 0 for other sides.
+	uint32_t polyobj;
+	int32_t fakeContrast;
 };
 static_assert(sizeof(LevelMeshSideState) == 8 * 4, "LevelMeshSideState must stay std430-compatible");
 
@@ -411,14 +418,29 @@ template<class T> struct LevelMeshSpan
 	unsigned size = 0;
 };
 
-// A refreshed cluster z-range (the xy box never changes).
-struct LevelMeshClusterZ
+// A refreshed cluster box: the z-range follows the anchor planes, the xy
+// box of a polyobject's cluster follows the polyobject.
+struct LevelMeshClusterBox
 {
 	uint32_t cluster;
-	float zmin, zmax;
+	float bmin[3], bmax[3];
 	uint32_t reserved;
 };
-static_assert(sizeof(LevelMeshClusterZ) == 4 * 4, "LevelMeshClusterZ must stay std430-compatible");
+static_assert(sizeof(LevelMeshClusterBox) == 8 * 4, "LevelMeshClusterBox must stay std430-compatible");
+
+// Where a polyobject is: its walls' vertices are baked polyobject-local,
+// and the vertex stage places them at (m[0] x + m[1] y + t[0],
+// m[2] x + m[3] y + t[1]). An affine map, not a rotation: the classic's
+// frame interpolation moves each vertex linearly between two tics
+// (DPolyobjInterpolation), which is an affine map of the local coordinates.
+// std430-compatible: 8 x 32 bit. Streamed dirty-only.
+struct LevelMeshPolyobj
+{
+	float m[4];
+	float t[2];
+	uint32_t reserved[2];
+};
+static_assert(sizeof(LevelMeshPolyobj) == 8 * 4, "LevelMeshPolyobj must stay std430-compatible");
 
 // One frame's dirty state, as LevelMesh_UpdateState hands it to
 // DFrameBuffer::UpdateLevelMeshState. Every index appears at most once.
@@ -428,13 +450,15 @@ struct LevelMeshStateUpdate
 	uint64_t id = 0;		// the bake the records belong to
 	LevelMeshSpan<uint32_t> sectorIndices;
 	LevelMeshSpan<LevelMeshSectorState> sectors;	// parallel to sectorIndices
-	LevelMeshSpan<LevelMeshClusterZ> clusters;
+	LevelMeshSpan<LevelMeshClusterBox> clusters;
 	LevelMeshSpan<uint32_t> sideIndices;			// side * 3 + tier
 	LevelMeshSpan<LevelMeshSideState> sides;		// parallel to sideIndices
 	LevelMeshSpan<uint32_t> xformIndices;			// plane refs
 	LevelMeshSpan<LevelMeshPlaneXform> xforms;		// parallel to xformIndices
 	LevelMeshSpan<uint32_t> light3DIndices;
 	LevelMeshSpan<LevelMeshLight3D> lights3D;		// parallel to light3DIndices
+	LevelMeshSpan<uint32_t> polyobjIndices;
+	LevelMeshSpan<LevelMeshPolyobj> polyobjs;		// parallel to polyobjIndices
 };
 
 // Everything the backend uploads at level setup. The arrays only need to
@@ -452,6 +476,7 @@ struct LevelMeshUploadData
 	LevelMeshSpan<LevelMeshSideState> sides;
 	LevelMeshSpan<LevelMeshPlaneXform> planeXforms;
 	LevelMeshSpan<LevelMeshLight3D> lights3D;
+	LevelMeshSpan<LevelMeshPolyobj> polyobjs;
 	LevelMeshSpan<int> textureIds;		// ids resolved into the translation table
 	unsigned translationTableSize = 0;	// number of texture ids (TexMan.NumTextures())
 };

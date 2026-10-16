@@ -21,6 +21,12 @@
 ** the gl_seamless splits, and are fan-triangulated like the classic
 ** DT_TriangleFan draw.
 **
+** Polyobjects: every side of a polyobject that lies in one sector at bake
+** runs through HWWall::Process like a seg of HWDrawInfo::AddPolyobjs, on a
+** seg spanning the whole side. The walls are emitted at the spawn position,
+** then made polyobject-local (LocalizePolyobjects, after clustering) and
+** placed by a streamed affine transform (LevelMeshPolyobj).
+**
 ** Flats: every subsector of every sector section is triangulated by the
 ** classic CreateVerticesForSubsector, once per plane; 3D-floor planes reuse
 ** the target sector's triangulation.
@@ -38,6 +44,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cfloat>
 #include <cmath>
 #include <functional>
 #include <unordered_map>
@@ -58,6 +65,7 @@
 #include "flatvertices.h"
 #include "hwrenderer/scene/hw_drawinfo.h"
 #include "hwrenderer/scene/hw_fakeflat.h"
+#include "po_man.h"
 
 // EXTERNAL DATA DECLARATIONS ----------------------------------------------
 
@@ -83,6 +91,9 @@ CVAR(Bool, lm_light3d, true, CVAR_NOSAVE)
 // Debug: 3D-floor surfaces the levelmesh draws (read at level setup): 1
 // sides, 2 opaque planes, 4 light bands; the others stay on the classic path.
 CVAR(Int, lm_3dfloors, 7, CVAR_NOSAVE)
+// Debug: bake polyobjects (ticket 13; 0 leaves every polyobject on the
+// classic path). Read at level setup.
+CVAR(Bool, lm_polyobjs, true, CVAR_NOSAVE)
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -403,6 +414,7 @@ struct Baker
 	}
 
 	void ProcessSides();
+	void ProcessPolyobjects();
 	void BakeWall(HWWall &w);
 	bool BakeBands(HWWall &w, const LevelMeshSurface &surf, uint32_t firstv, int n, sector_t *lsec, float texz);
 	uint32_t WallVRef(HWWall &w, sector_t *rf, sector_t *rb);
@@ -504,6 +516,141 @@ void Baker::ProcessSides()
 		mh.portals.Clear();
 		mh.upper.Clear();
 		mh.lower.Clear();
+	}
+}
+
+//==========================================================================
+//
+// Polyobjects
+//
+// HWDrawInfo::AddPolyobjs draws a polyobject per seg of a subsector's
+// mini-BSP: HWWall::Process(seg, currentsector, seg->backsector ?
+// currentsector : nullptr), the seg's front / back sector being the side's
+// (FNodeBuilder::AddPolySegs: the origin container, from which two-sided
+// polyobject walls take their heights and texture alignment). The bake makes
+// the same call once per side, on a seg spanning the whole side at the
+// polyobject's position at bake; the classic's per-subsector cut only adds
+// vertices along the edges. Only polyobjects inside one sector are baked:
+// their walls' planes and light come from that sector. One that lies across
+// sectors, in a heightsec or 3D-floor sector, with portals, or with a wall
+// the mesh cannot draw stays classic.
+//
+//==========================================================================
+
+void Baker::ProcessPolyobjects()
+{
+	auto &polys = Level->Polyobjects;
+	unsigned npoly = polys.Size();
+	auto &st = Out->Stats;
+	st.polyobjs = npoly;
+	Out->SidePoly.Resize(Level->sides.Size());
+	for (auto &p : Out->SidePoly) p = -1;
+	Out->PolyBaked.Resize(npoly);
+	Out->PolyDeferred.Resize(npoly);
+	Out->PolySector.Resize(npoly);
+	Out->PolyOrigin.Resize(npoly);
+	for (unsigned i = 0; i < npoly; i++)
+	{
+		Out->PolyBaked[i] = 0;
+		Out->PolyDeferred[i] = 0;
+		Out->PolySector[i] = 0;
+		// A whole-unit origin keeps local = world - origin exact for the
+		// usual integral vertices, so the transform at rest reproduces them.
+		Out->PolyOrigin[i] = DVector2(floor(polys[i].StartSpot.pos.X), floor(polys[i].StartSpot.pos.Y));
+	}
+
+	HWMeshHelper mh;
+	HWWallDispatcher disp(Level, &mh, getRealLightmode(Level, true));
+	for (unsigned i = 0; i < npoly; i++)
+	{
+		FPolyObj &poly = polys[i];
+		for (side_t *side : poly.Sidedefs) Out->SidePoly[side->Index()] = int(i);
+
+		// The sector (HWDrawInfo::DoSubsector's) the classic draws it in.
+		if (poly.subsectorlinks == nullptr) poly.CreateSubsectorLinks();
+		subsector_t *sub = nullptr;
+		sector_t *sec = nullptr;
+		bool single = true;
+		for (FPolyNode *pn = poly.subsectorlinks; pn != nullptr; pn = pn->snext)
+		{
+			if (pn->subsector == nullptr || pn->subsector->sector == nullptr) continue;
+			sector_t *s = &Level->sectors[pn->subsector->sector->sectornum];
+			if (sec == nullptr)
+			{
+				sec = s;
+				sub = pn->subsector;
+			}
+			else if (s != sec) single = false;
+		}
+		if (!lm_polyobjs || sec == nullptr || !single || sec->GetHeightSec() || sec->e->XFloor.ffloors.Size() > 0 || sec->e->XFloor.lightlist.Size() > 0 ||
+			poly.bHasPortals || (sub->flags & SSECF_POLYORG))
+		{
+			st.polyClassicSectors++;
+			continue;
+		}
+
+		unsigned firstSurface = Out->Surfaces.Size();
+		bool ok = true;
+		for (side_t *side : poly.Sidedefs)
+		{
+			line_t *line = side->linedef;
+			if (line == nullptr) continue;
+			bool front = line->sidedef[0] == side;
+			vertex_t verts[2];
+			memset((void *)verts, 0, sizeof(verts));
+			verts[0].set((front ? line->v1 : line->v2)->fPos());
+			verts[1].set((front ? line->v2 : line->v1)->fPos());
+			seg_t seg;
+			memset((void *)&seg, 0, sizeof(seg));
+			seg.v1 = &verts[0];
+			seg.v2 = &verts[1];
+			seg.sidedef = side;
+			seg.linedef = line;
+			seg.frontsector = side->sector;
+			seg.backsector = line->frontsector == side->sector ? line->backsector : line->frontsector;
+			seg.Subsector = sub;
+			seg.sidefrac = 1.f;
+
+			HWWall wall;
+			wall.sub = sub;
+			wall.Process(&disp, &seg, sec, seg.backsector ? sec : nullptr, false);
+			for (auto &w : mh.list)
+			{
+				if (w.type == RENDERWALL_FOGBOUNDARY || w.type == RENDERWALL_COLOR || w.texture == nullptr)
+				{
+					ok = false;
+					continue;
+				}
+				// One seg per side: no splits at the side's other segs (those
+				// are the origin container's, which do not move).
+				w.flags |= HWWall::HWF_NOSPLIT;
+				BakeWall(w);
+			}
+			if (mh.translucent.Size() || mh.portals.Size()) ok = false;
+			mh.list.Clear();
+			mh.translucent.Clear();
+			mh.portals.Clear();
+			mh.upper.Clear();
+			mh.lower.Clear();
+		}
+		for (unsigned k = firstSurface; k < Out->Surfaces.Size(); k++)
+			if (Out->Surfaces[k].flags & LMSF_DEFERRED) ok = false;
+		if (!ok || firstSurface == Out->Surfaces.Size())
+		{
+			// The classic draws every wall of it (the surfaces stay deferred).
+			for (unsigned k = firstSurface; k < Out->Surfaces.Size(); k++) Out->Surfaces[k].flags |= LMSF_DEFERRED;
+			if (!ok) st.polyClassicWalls++;
+			continue;
+		}
+		for (unsigned k = firstSurface; k < Out->Surfaces.Size(); k++)
+		{
+			Out->Surfaces[k].flags |= LMSF_POLYOBJ;
+			Out->SurfaceLeaf[k] = -2 - int(i);
+		}
+		st.polySurfaces += Out->Surfaces.Size() - firstSurface;
+		st.polyobjsBaked++;
+		Out->PolyBaked[i] = 1;
+		Out->PolySector[i] = sec->Index();
 	}
 }
 
@@ -653,6 +800,15 @@ void Baker::BakeWall(HWWall &w)
 	sector_t *rb = RealSector(Level, w.backsector);
 	side_t *side = w.seg->sidedef;
 	bool is3d = w.type == RENDERWALL_FFBLOCK;
+	// Light comes from the sector the wall is drawn in; a two-sided
+	// polyobject wall takes its heights and texture alignment from its seg's
+	// sectors, the origin container (HWWall::Process).
+	sector_t *lightFront = rf;
+	if ((side->Flags & WALLF_POLYOBJ) && w.seg->backsector)
+	{
+		rf = RealSector(Level, w.seg->frontsector);
+		rb = RealSector(Level, w.seg->backsector);
+	}
 
 	// Vertices, exactly as HWWall::MakeVertices(false) would produce them.
 	bool split = gl_seamless && !(w.flags & HWWall::HWF_NOSPLIT);
@@ -928,7 +1084,7 @@ void Baker::BakeWall(HWWall &w)
 			tb.yOffset = surf.yOffsetBase;
 		}
 	}
-	surf.lightSector = rf->Index();
+	surf.lightSector = lightFront->Index();
 	surf.lightList = -1;
 	// HWWall::Process: a wall of a sector with 3D floors goes through
 	// SplitWall, which lights every piece with the light layer it lies in
@@ -1758,6 +1914,8 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);
 	Printf("LevelMeshBake %s: 3D lights %u, lit surfaces %u, banded walls %u (band surfaces %u, left classic %u, unmatched plane %u); edge-clamped tiers %u\n", mapname,
 		s.lights3D, s.light3DSurfaces, s.bandedWalls, s.bandSurfaces, s.bandsDeferred, s.bandPlaneUnmatched, s.edgeClamped);
+	Printf("LevelMeshBake %s: polyobjects %u, baked %u (%u wall surfaces); classic: by sector %u, by wall %u\n", mapname,
+		s.polyobjs, s.polyobjsBaked, s.polySurfaces, s.polyClassicSectors, s.polyClassicWalls);
 	Printf("LevelMeshBake %s: 3D-floor groups %u (deferred at bake %u), watches %u; opaque 3D planes never drawn %u\n", mapname, s.ffGroups, s.ffGroupsDeferred, s.ffWatches, s.ffFlatsNotPicked);
 	Printf("LevelMeshBake %s: round trip z mismatches %u, v mismatches %u (within 1 ulp: z %u, v %u); offset-anchored bottom %u top %u side %u flat %u; vScale inconsistent %u; planeRef overflow %u; 3D vRef heuristic %u; unbounded wall tops %u\n",
 		mapname, s.zMismatch, s.vMismatch, s.zInexact, s.vInexact, s.offsetAnchored[LMV_BOTTOM], s.offsetAnchored[LMV_TOP], s.offsetAnchored[LMV_SIDE], s.offsetAnchored[LMV_FLAT],
@@ -1795,6 +1953,64 @@ bool LevelMeshBake::ExportObj(FLevelLocals *Level, const char *filename) const
 	return true;
 }
 
+
+//==========================================================================
+//
+// LocalizePolyobjects
+//
+// After clustering (which needs the vertices where they are at load): the
+// baked polyobjects' vertices become polyobject-local, their clusters get a
+// local xy box, and PolyLocal keeps the polyobject's own vertices at bake
+// for the transform fit (LevelMesh_FillPolyobj).
+//
+//==========================================================================
+
+static void LocalizePolyobjects(FLevelLocals *Level, LevelMeshBake *bake)
+{
+	auto &polys = Level->Polyobjects;
+	unsigned npoly = polys.Size();
+	bake->PolyVertexStart.Resize(npoly + 1);
+	bake->PolyLocal.Clear();
+	for (unsigned i = 0; i < npoly; i++)
+	{
+		bake->PolyVertexStart[i] = bake->PolyLocal.Size();
+		if (!bake->PolyBaked[i]) continue;
+		for (vertex_t *v : polys[i].Vertices) bake->PolyLocal.Push(v->fPos() - bake->PolyOrigin[i]);
+	}
+	bake->PolyVertexStart[npoly] = bake->PolyLocal.Size();
+
+	for (auto &surf : bake->Surfaces)
+	{
+		if (!(surf.flags & LMSF_POLYOBJ)) continue;
+		int poly = bake->SidePoly[surf.sideRef / 3];
+		const DVector2 &o = bake->PolyOrigin[poly];
+		for (uint32_t k = 0; k < surf.numVertices; k++)
+		{
+			auto &v = bake->Vertices[surf.firstVertex + k];
+			v.x = float(double(v.x) - o.X);
+			v.y = float(double(v.y) - o.Y);
+		}
+	}
+
+	unsigned first = bake->PolyClusterStart.Size() ? bake->PolyClusterStart[0] : bake->Clusters.Size();
+	bake->PolyClusterBox.Resize((bake->Clusters.Size() - first) * 4);
+	for (unsigned c = first; c < bake->Clusters.Size(); c++)
+	{
+		auto &cl = bake->Clusters[c];
+		float *box = &bake->PolyClusterBox[(c - first) * 4];
+		box[0] = box[1] = FLT_MAX;
+		box[2] = box[3] = -FLT_MAX;
+		for (uint32_t k = cl.firstIndex; k < cl.firstIndex + cl.numIndices; k++)
+		{
+			auto &v = bake->Vertices[bake->Indices[k]];
+			box[0] = std::min(box[0], v.x);
+			box[1] = std::min(box[1], v.y);
+			box[2] = std::max(box[2], v.x);
+			box[3] = std::max(box[3], v.y);
+		}
+	}
+}
+
 //==========================================================================
 //
 // Entry point
@@ -1816,6 +2032,7 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 	b.Out = bake;
 
 	b.ProcessSides();
+	b.ProcessPolyobjects();
 	if (lm_bake_debug)
 	{
 		for (int i = 0; i < 16; i++)
@@ -1847,6 +2064,7 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 
 	LevelMeshClusters_Build(Level, bake, lm_cluster_budget);
 	bake->PrintClusterStats(Level->MapName.GetChars());
+	LocalizePolyobjects(Level, bake);
 
 	if ((*lm_bake_planeusers)[0] != 0)
 	{

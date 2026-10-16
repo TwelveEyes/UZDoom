@@ -63,9 +63,16 @@
 ** the group. Candidates: the groups watching a moved sector, a changed
 ** plane texture or a changed side tier, and a sweep.
 **
+** Polyobjects (ticket 13) are compared every update: the transform fitted
+** to each baked polyobject's current (interpolated) vertices
+** (LevelMesh_FillPolyobj), and whether it left the sector it was baked in.
+** A changed transform moves its clusters' xy boxes; a change of either
+** touches its side records, which carry the side's current fake contrast and
+** LMTS_DEFERRED while it is out of its sector (the classic draws it then).
+**
 ** Diagnostics: lm_statefull compares every record every frame, lm_clusterz 0
-** stops the cluster z refresh, lm_stateupdate 0 freezes the GPU state at the
-** load values.
+** stops the cluster z refresh, lm_polybox 0 the polyobject cluster boxes,
+** lm_stateupdate 0 freezes the GPU state at the load values.
 */
 
 // HEADER FILES ------------------------------------------------------------
@@ -82,6 +89,7 @@
 #include "c_cvars.h"
 #include "v_video.h"
 #include "texturemanager.h"
+#include "po_man.h"
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
@@ -94,6 +102,9 @@ CVAR(Bool, lm_statefull, false, CVAR_NOSAVE)
 // Debug: refresh the z-ranges of clusters anchored to moved planes (0 keeps
 // the load heights: the negative control for the culling-hole test).
 CVAR(Bool, lm_clusterz, true, CVAR_NOSAVE)
+// Debug: move the boxes of a moving polyobject's clusters with it (0 keeps
+// them where it was baked: the negative control of the polyobject cull test).
+CVAR(Bool, lm_polybox, true, CVAR_NOSAVE)
 // Debug: print every side tier / plane that switches between the levelmesh
 // and the classic path (LMTS_DEFERRED).
 CVAR(Bool, lm_statelog, false, CVAR_NOSAVE)
@@ -114,8 +125,8 @@ TArray<uint32_t> DirtySectors;
 TArray<LevelMeshSectorState> DirtyRecords;
 TArray<LevelMeshSectorState> PreviousRecords;	// parallel to DirtySectors
 TArray<uint32_t> DirtyClusters;
-TArray<LevelMeshClusterZ> ClusterUpdates;
-TArray<LevelMeshClusterZ> PreviousClusterZ;	// parallel to ClusterUpdates
+TArray<LevelMeshClusterBox> ClusterUpdates;
+TArray<LevelMeshClusterBox> PreviousClusterBoxes;	// parallel to ClusterUpdates
 TArray<uint32_t> Candidates;
 TArray<uint32_t> DirtySides;
 TArray<LevelMeshSideState> DirtySideRecords, PreviousSideRecords;
@@ -129,6 +140,9 @@ TArray<uint32_t> UploadSides;		// DirtySides, then the groups as side records
 TArray<LevelMeshSideState> UploadSideRecords;
 TArray<uint32_t> MovedSectors;		// dirty sectors whose planes moved
 TArray<uint32_t> LayoutChanged;		// sectors whose LayoutMoved flips with this update
+TArray<uint32_t> DirtyPolys;
+TArray<LevelMeshPolyobj> DirtyPolyRecords, PreviousPolyRecords;
+TArray<uint32_t> PolyFlipped;		// polyobjects whose PolyDeferred flips with this update
 
 // The level the change hooks report into (set once its records are resident).
 LevelMeshBake *HookBake;
@@ -208,6 +222,15 @@ void LevelMesh_FillSideState(const LevelMeshBake *bake, side_t &side, int tier, 
 	unsigned ref = side.Index() * 3 + tier;
 	if (ref < bake->TierBase.Size() && bake->TierBase[ref].valid && !SideStateExpressible(bake->TierBase[ref], side, tier, texid))
 		out.flags |= LMTS_DEFERRED;
+	unsigned s = side.Index();
+	int poly = s < bake->SidePoly.Size() ? bake->SidePoly[s] : -1;
+	if (poly >= 0 && unsigned(poly) < bake->PolyBaked.Size() && bake->PolyBaked[poly])
+	{
+		out.polyobj = uint32_t(poly);
+		// side_t::GetLightLevel: the fake contrast of the line's current direction.
+		out.fakeContrast = (uint16_t)side.GetFakeContrastRel(true) | (int32_t(side.GetFakeContrastRel(false)) << 16);
+		if (bake->PolyDeferred[poly]) out.flags |= LMTS_DEFERRED;
+	}
 }
 
 void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos, LevelMeshPlaneXform &out)
@@ -383,6 +406,134 @@ static void SetPlaneOwned(LevelMeshBake *bake, uint32_t ref)
 	bake->SectorPlaneOwned[ref] = owned;
 }
 
+
+//==========================================================================
+//
+// Polyobjects
+//
+//==========================================================================
+
+void LevelMesh_FillPolyobj(FLevelLocals *Level, const LevelMeshBake *bake, unsigned poly, LevelMeshPolyobj &out)
+{
+	out = {};
+	out.m[0] = out.m[3] = 1.f;
+	if (poly >= Level->Polyobjects.Size() || poly + 1 >= bake->PolyVertexStart.Size()) return;
+	const FPolyObj &po = Level->Polyobjects[poly];
+	uint32_t first = bake->PolyVertexStart[poly];
+	unsigned n = std::min<unsigned>(bake->PolyVertexStart[poly + 1] - first, po.Vertices.Size());
+	if (n == 0) return;
+	const DVector2 *local = &bake->PolyLocal[first];
+
+	// Least squares world = M local + t over the vertices (exact for the
+	// rigid moves and their linear interpolation).
+	DVector2 cl(0, 0), cw(0, 0);
+	for (unsigned k = 0; k < n; k++)
+	{
+		cl += local[k];
+		cw += po.Vertices[k]->fPos();
+	}
+	cl /= n;
+	cw /= n;
+	double sxx = 0, sxy = 0, syy = 0, a00 = 0, a01 = 0, a10 = 0, a11 = 0;
+	for (unsigned k = 0; k < n; k++)
+	{
+		DVector2 l = local[k] - cl, w = po.Vertices[k]->fPos() - cw;
+		sxx += l.X * l.X;
+		sxy += l.X * l.Y;
+		syy += l.Y * l.Y;
+		a00 += w.X * l.X;
+		a01 += w.X * l.Y;
+		a10 += w.Y * l.X;
+		a11 += w.Y * l.Y;
+	}
+	double m[4];
+	double det = sxx * syy - sxy * sxy;
+	if (det > 1e-9 * (sxx + syy) * (sxx + syy))
+	{
+		m[0] = (a00 * syy - a01 * sxy) / det;
+		m[1] = (a01 * sxx - a00 * sxy) / det;
+		m[2] = (a10 * syy - a11 * sxy) / det;
+		m[3] = (a11 * sxx - a10 * sxy) / det;
+	}
+	else
+	{
+		// Collinear vertices (a single line): the rotation of the longest
+		// offset from the centre.
+		unsigned best = 0;
+		double bestLen = -1;
+		for (unsigned k = 0; k < n; k++)
+		{
+			double len = (local[k] - cl).LengthSquared();
+			if (len > bestLen) { bestLen = len; best = k; }
+		}
+		DVector2 l = local[best] - cl, w = po.Vertices[best]->fPos() - cw;
+		double an = bestLen > 0 ? atan2(w.Y, w.X) - atan2(l.Y, l.X) : 0;
+		m[0] = cos(an); m[1] = -sin(an);
+		m[2] = sin(an); m[3] = cos(an);
+	}
+	// At rest the fit is the identity up to rounding: keep it exact, so the
+	// baked vertices are reproduced bit for bit.
+	if (fabs(m[0] - 1) < 1e-12 && fabs(m[1]) < 1e-12 && fabs(m[2]) < 1e-12 && fabs(m[3] - 1) < 1e-12)
+	{
+		m[0] = m[3] = 1;
+		m[1] = m[2] = 0;
+	}
+	// PolyLocal is relative to PolyOrigin, like the baked vertices: t
+	// includes the origin.
+	DVector2 t(cw.X - (m[0] * cl.X + m[1] * cl.Y), cw.Y - (m[2] * cl.X + m[3] * cl.Y));
+	for (int i = 0; i < 4; i++) out.m[i] = (float)m[i];
+	out.t[0] = (float)t.X;
+	out.t[1] = (float)t.Y;
+}
+
+bool LevelMesh_PolyobjLeftSector(FLevelLocals *Level, const LevelMeshBake *bake, unsigned poly)
+{
+	if (poly >= Level->Polyobjects.Size() || poly >= bake->PolySector.Size()) return false;
+	for (FPolyNode *pn = Level->Polyobjects[poly].subsectorlinks; pn != nullptr; pn = pn->snext)
+		if (pn->subsector && pn->subsector->sector && unsigned(pn->subsector->sector->sectornum) != bake->PolySector[poly]) return true;
+	return false;
+}
+
+void LevelMesh_PolyClusterBox(const LevelMeshBake *bake, unsigned cluster, const LevelMeshPolyobj &po, float bmin[2], float bmax[2])
+{
+	unsigned first = bake->PolyClusterStart.Size() ? bake->PolyClusterStart[0] : bake->Clusters.Size();
+	const float *box = &bake->PolyClusterBox[(cluster - first) * 4];
+	bmin[0] = bmin[1] = FLT_MAX;
+	bmax[0] = bmax[1] = -FLT_MAX;
+	for (int c = 0; c < 4; c++)
+	{
+		float x = box[(c & 1) ? 2 : 0], y = box[(c & 2) ? 3 : 1];
+		float wx = po.m[0] * x + po.m[1] * y + po.t[0];
+		float wy = po.m[2] * x + po.m[3] * y + po.t[1];
+		bmin[0] = std::min(bmin[0], wx);
+		bmin[1] = std::min(bmin[1], wy);
+		bmax[0] = std::max(bmax[0], wx);
+		bmax[1] = std::max(bmax[1], wy);
+	}
+	// The vertex stage rounds the same products per vertex.
+	for (int i = 0; i < 2; i++)
+	{
+		float pad = 1.f / 64 + std::max(fabsf(bmin[i]), fabsf(bmax[i])) * (1.f / (1 << 20));
+		bmin[i] -= pad;
+		bmax[i] += pad;
+	}
+}
+
+// The polyobject a cluster belongs to, -1 for the others.
+static int ClusterPoly(const LevelMeshBake *bake, uint32_t c)
+{
+	auto &start = bake->PolyClusterStart;
+	if (start.Size() < 2 || c < start[0] || c >= start.Last()) return -1;
+	unsigned lo = 0, hi = start.Size() - 1;
+	while (hi - lo > 1)
+	{
+		unsigned mid = (lo + hi) / 2;
+		if (start[mid] <= c) lo = mid;
+		else hi = mid;
+	}
+	return int(lo);
+}
+
 //==========================================================================
 //
 // LevelMesh_ResetState
@@ -395,9 +546,11 @@ LevelMeshBake::~LevelMeshBake()
 }
 
 void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors,
-	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms, const TArray<LevelMeshLight3D> &lights3D)
+	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms, const TArray<LevelMeshLight3D> &lights3D,
+	const TArray<LevelMeshPolyobj> &polyobjs)
 {
 	auto &st = bake->Stream;
+	st.Polyobjs = polyobjs;
 	// The side records: side tiers, then the 3D-floor groups.
 	unsigned ntiers = std::min(sides.Size(), Level->sides.Size() * 3);
 	TArray<LevelMeshSideState> tiers(ntiers, true), groups(sides.Size() - ntiers, true);
@@ -501,7 +654,7 @@ void LevelMesh_BeginFrame()
 //
 //==========================================================================
 
-static LevelMeshClusterZ ClusterZ(const LevelMeshBake *bake, uint32_t c)
+static LevelMeshClusterBox ClusterBox(const LevelMeshBake *bake, uint32_t c)
 {
 	const LevelMeshCluster &cl = bake->Clusters[c];
 	float zmin = FLT_MAX, zmax = -FLT_MAX;
@@ -527,7 +680,7 @@ static LevelMeshClusterZ ClusterZ(const LevelMeshBake *bake, uint32_t c)
 		zmin = std::min(zmin, lo + cp.minOffset);
 		zmax = std::max(zmax, hi + cp.maxOffset);
 	}
-	return { c, zmin, zmax, 0 };
+	return { c, { cl.bmin[0], cl.bmin[1], zmin }, { cl.bmax[0], cl.bmax[1], zmax }, 0 };
 }
 
 //==========================================================================
@@ -642,7 +795,8 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		bake->ClusterPlaneStart.Size() != (ncl ? ncl + 1 : 0) || bake->SectorClusterStart.Size() != nsec + 1 ||
 		st.Sides.Records.Size() != Level->sides.Size() * 3 || st.Xforms.Records.Size() != nsec * 2 ||
 		st.FFGroups.Records.Size() != bake->FFGroupBaked.Size() || bake->FFSectorDependStart.Size() != nsec + 1 ||
-		bake->FFSideDependStart.Size() != Level->sides.Size() + 1) return;
+		bake->FFSideDependStart.Size() != Level->sides.Size() + 1 || st.Polyobjs.Size() != bake->PolyBaked.Size() ||
+		bake->PolyBaked.Size() != Level->Polyobjects.Size() || bake->PolyClusterStart.Size() != bake->PolyBaked.Size() + 1) return;
 
 	LevelMeshStateTime.Clock();
 	if (st.Frame != StreamFrame)
@@ -677,7 +831,11 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	PreviousRecords.Clear();
 	DirtyClusters.Clear();
 	ClusterUpdates.Clear();
-	PreviousClusterZ.Clear();
+	PreviousClusterBoxes.Clear();
+	DirtyPolys.Clear();
+	DirtyPolyRecords.Clear();
+	PreviousPolyRecords.Clear();
+	PolyFlipped.Clear();
 	DirtySides.Clear();
 	DirtySideRecords.Clear();
 	PreviousSideRecords.Clear();
@@ -694,7 +852,43 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	LayoutChanged.Clear();
 	unsigned candidates = 0;
 
-	// Side tiers and plane textures first: a plane texture change can change
+	// Polyobjects first: a moved one touches its side records (fake
+	// contrast, LMTS_DEFERRED) and its clusters.
+	auto touchPolySides = [&](unsigned i)
+	{
+		for (side_t *side : Level->Polyobjects[i].Sidedefs)
+			for (int t = 0; t < 3; t++) st.Sides.Touch(side->Index() * 3 + t);
+	};
+	for (unsigned i = 0; i < bake->PolyBaked.Size(); i++)
+	{
+		if (!bake->PolyBaked[i]) continue;
+		candidates++;
+		uint8_t deferred = LevelMesh_PolyobjLeftSector(Level, bake, i);
+		if (deferred != bake->PolyDeferred[i])
+		{
+			bake->PolyDeferred[i] = deferred;
+			PolyFlipped.Push(i);
+			touchPolySides(i);
+			if (lm_statelog) Printf("Levelmesh state: polyobject %d -> %s\n", Level->Polyobjects[i].tag, deferred ? "classic (left its sector)" : "levelmesh");
+		}
+		LevelMeshPolyobj rec;
+		LevelMesh_FillPolyobj(Level, bake, i, rec);
+		if (memcmp(&rec, &st.Polyobjs[i], sizeof(rec)) == 0) continue;
+		PreviousPolyRecords.Push(st.Polyobjs[i]);
+		st.Polyobjs[i] = rec;
+		DirtyPolys.Push(i);
+		DirtyPolyRecords.Push(rec);
+		touchPolySides(i);
+		if (!lm_polybox) continue;
+		for (uint32_t c = bake->PolyClusterStart[i]; c < bake->PolyClusterStart[i + 1]; c++)
+		{
+			if (st.ClusterStamp[c] == stamp) continue;
+			st.ClusterStamp[c] = stamp;
+			DirtyClusters.Push(c);
+		}
+	}
+
+	// Side tiers and plane textures next: a plane texture change can change
 	// its sector's wall glow (FillStreamedPlane reports the sector).
 	unsigned recordSweep = (unsigned)std::max<int>(lm_statesweep, 0);
 	candidates += StreamRecords(st.Sides, stamp, lm_statefull, recordSweep,
@@ -808,15 +1002,19 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 	for (uint32_t c : DirtyClusters)
 	{
 		auto &cl = bake->Clusters[c];
-		PreviousClusterZ.Push({ c, cl.bmin[2], cl.bmax[2], 0 });
-		LevelMeshClusterZ z = ClusterZ(bake, c);
-		cl.bmin[2] = z.zmin;
-		cl.bmax[2] = z.zmax;
-		ClusterUpdates.Push(z);
+		PreviousClusterBoxes.Push({ c, { cl.bmin[0], cl.bmin[1], cl.bmin[2] }, { cl.bmax[0], cl.bmax[1], cl.bmax[2] }, 0 });
+		// A polyobject's cluster: the xy box where its transform puts it,
+		// before the z-range is taken over it.
+		int poly = ClusterPoly(bake, c);
+		if (poly >= 0) LevelMesh_PolyClusterBox(bake, c, st.Polyobjs[poly], cl.bmin, cl.bmax);
+		LevelMeshClusterBox box = ClusterBox(bake, c);
+		cl.bmin[2] = box.bmin[2];
+		cl.bmax[2] = box.bmax[2];
+		ClusterUpdates.Push(box);
 	}
 
 	size_t bytes = 0;
-	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size() || DirtyLights.Size() || DirtyGroups.Size())
+	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size() || DirtyLights.Size() || DirtyGroups.Size() || DirtyPolys.Size())
 	{
 		// The group records follow the side tiers in the side buffer.
 		UploadSides = DirtySides;
@@ -838,6 +1036,8 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		update.xforms = LM_Span(DirtyXformRecords);
 		update.light3DIndices = LM_Span(DirtyLights);
 		update.lights3D = LM_Span(DirtyLightRecords);
+		update.polyobjIndices = LM_Span(DirtyPolys);
+		update.polyobjs = LM_Span(DirtyPolyRecords);
 		bytes = screen->UpdateLevelMeshState(update);
 		if (bytes == 0)
 		{
@@ -858,12 +1058,19 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 			DirtyLights.Clear();
 			DirtyGroups.Clear();
 			LayoutChanged.Clear();
-			for (auto &z : PreviousClusterZ)
+			for (auto &b : PreviousClusterBoxes)
 			{
-				bake->Clusters[z.cluster].bmin[2] = z.zmin;
-				bake->Clusters[z.cluster].bmax[2] = z.zmax;
+				auto &cl = bake->Clusters[b.cluster];
+				for (int k = 0; k < 3; k++)
+				{
+					cl.bmin[k] = b.bmin[k];
+					cl.bmax[k] = b.bmax[k];
+				}
 			}
 			ClusterUpdates.Clear();
+			for (unsigned i = 0; i < DirtyPolys.Size(); i++) st.Polyobjs[DirtyPolys[i]] = PreviousPolyRecords[i];
+			for (uint32_t i : PolyFlipped) bake->PolyDeferred[i] = !bake->PolyDeferred[i];
+			DirtyPolys.Clear();
 		}
 	}
 	// Classic draw-list ownership follows LMTS_DEFERRED and the 3D-floor

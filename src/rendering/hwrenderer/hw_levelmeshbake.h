@@ -60,6 +60,9 @@ struct LevelMeshBakeStats
 	unsigned vertices = 0, triangles = 0;
 	unsigned sidesProcessed = 0, polySidesSkipped = 0, heightsecSurfaces = 0;
 	unsigned polyOriginSides = 0, polyOriginPartialSides = 0, polyOriginSubsectors = 0;
+	unsigned polyobjs = 0, polyobjsBaked = 0, polySurfaces = 0;	// polyobjects, of those in the mesh, their wall surfaces
+	unsigned polyClassicSectors = 0;			// left classic: not in one sector at bake, or a heightsec / 3D-floor / portal case
+	unsigned polyClassicWalls = 0;			// left classic: a wall the mesh cannot draw (translucent, portal, fog, deferred)
 	unsigned translucentWalls = 0, portalWalls = 0, fogWalls = 0, upperMissing = 0, lowerMissing = 0;
 	unsigned translucentFlats = 0, portalFlats = 0, untexturedFlats = 0;
 	unsigned zMismatch = 0, vMismatch = 0;		// round-trip failures beyond 1 ulp (must be 0)
@@ -207,6 +210,7 @@ struct LevelMeshStateStream
 	LevelMeshRecordStream<LevelMeshPlaneXform> Xforms;		// plane ref
 	LevelMeshRecordStream<LevelMeshLight3D> Lights3D;		// LevelMeshBake::Lights3D
 	LevelMeshRecordStream<LevelMeshSideState> FFGroups;		// 3D-floor groups (GPU side record numsides * 3 + group)
+	TArray<LevelMeshPolyobj> Polyobjs;		// per polyobject: the transform as last handed to the backend
 	TArray<uint8_t> LayoutMoved;			// per sector: its 3D-floor layout differs from the bake (LML3_DEFERRED)
 	TArray<uint32_t> LayoutRecheck;			// sectors whose layout must be compared again (an update that was not uploaded)
 };
@@ -292,6 +296,24 @@ public:
 	TArray<uint32_t> FFSectorDependStart, FFSectorDepend;	// sector -> groups watching its planes
 	TArray<uint32_t> FFSideDependStart, FFSideDepend;		// side -> groups watching its tiers
 
+	// Polyobjects (ticket 13). A baked polyobject's walls are emitted at its
+	// spawn position by the classic emitter, then their vertices are made
+	// polyobject-local (minus PolyOrigin) and the polyobject gets clusters of
+	// its own (PolyClusterStart). LevelMesh_FillPolyobj fits the affine map
+	// from PolyLocal (its vertices at bake, minus the origin) to its current
+	// vertices. While it overlaps a sector other than PolySector (the one the
+	// classic took its walls' planes and light from at bake), its side
+	// records are LMTS_DEFERRED and the classic draws it.
+	TArray<int32_t> SidePoly;			// per side: polyobject index (Level->Polyobjects), -1 = none
+	TArray<uint8_t> PolyBaked;			// per polyobject: its walls are in the mesh
+	TArray<uint8_t> PolyDeferred;		// per polyobject: drawn by the classic now (as last streamed)
+	TArray<uint32_t> PolySector;		// per polyobject: the sector it was baked in
+	TArray<DVector2> PolyOrigin;		// per polyobject: subtracted from its baked vertices
+	TArray<uint32_t> PolyVertexStart;	// per polyobject: its vertices in PolyLocal (CSR)
+	TArray<DVector2> PolyLocal;
+	TArray<uint32_t> PolyClusterStart;	// per polyobject: its clusters (contiguous; CSR over the cluster indices)
+	TArray<float> PolyClusterBox;		// per cluster (4 floats, polyobject clusters only): local xy box x0, y0, x1, y1
+
 	uint64_t Id = 0;				// unique per bake (backend residency)
 	bool GeometryReleased = false;	// Vertices / Indices freed after the upload
 
@@ -345,6 +367,15 @@ void LevelMesh_FillFFGroup(FLevelLocals *Level, const LevelMeshBake *bake, unsig
 	const TArray<LevelMeshSectorState> &sectors, LevelMeshSideState &out);
 // 'layoutMoved': the light's sector's 3D-floor layout differs from the bake.
 void LevelMesh_FillLight3D(FLevelLocals *Level, const LevelMeshLight3DSource &src, bool layoutMoved, LevelMeshLight3D &out);
+// A polyobject's transform: the affine map from its baked (local) vertices
+// to its current ones, interpolated positions included.
+void LevelMesh_FillPolyobj(FLevelLocals *Level, const LevelMeshBake *bake, unsigned poly, LevelMeshPolyobj &out);
+// Whether a baked polyobject now overlaps a sector other than the one it
+// was baked in (its subsector links: PO_LinkToSubsectors).
+bool LevelMesh_PolyobjLeftSector(FLevelLocals *Level, const LevelMeshBake *bake, unsigned poly);
+// The world xy box of a polyobject cluster under a transform (the image of
+// its local box's corners).
+void LevelMesh_PolyClusterBox(const LevelMeshBake *bake, unsigned cluster, const LevelMeshPolyobj &po, float bmin[2], float bmax[2]);
 
 // The levelmesh program (ELevelMeshProgram) of a texture's material shader,
 // -1 for material shaders the levelmesh cannot draw yet (classic path).
@@ -359,7 +390,8 @@ bool LevelMesh_HasPlaneColorEffects(sector_t *sec, int pos);
 // Resets the dirty state stream to the records just uploaded and attaches
 // the change hooks to the level.
 void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshSectorState> &sectors,
-	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms, const TArray<LevelMeshLight3D> &lights3D);
+	const TArray<LevelMeshSideState> &sides, const TArray<LevelMeshPlaneXform> &xforms, const TArray<LevelMeshLight3D> &lights3D,
+	const TArray<LevelMeshPolyobj> &polyobjs);
 
 // Frame boundary for the state stream (once per rendered frame, before any
 // viewpoint).

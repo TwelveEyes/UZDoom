@@ -110,6 +110,11 @@ void main()
 
 	LMVertex v = lmVertices[gl_VertexIndex];
 	LMSurface surf = lmSurfaces[v.surface];
+	// Polyobject walls: placed before the planes are evaluated, so their z
+	// follows the planes where the polyobject is now.
+	vec2 xy = LM_VertexXY(v, surf);
+	v.x = xy.x;
+	v.y = xy.y;
 	uint ref = v.anchor & LMV_REFMASK;
 	float z = LM_PlaneZ(lmSectors[ref >> 1].planes[ref & 1u], v.x, v.y) + v.zOffset;
 
@@ -217,7 +222,8 @@ void main()
 	}
 
 	// Surface normals are in map space (x, y, z); GL world space is (x, z, y).
-	vec3 normal = vec3(surf.normal[0], surf.normal[2], surf.normal[1]);
+	vec3 mapNormal = LM_SurfaceNormal(surf);
+	vec3 normal = vec3(mapNormal.x, mapNormal.z, mapNormal.y);
 	vWorldNormal = vec4(normalize((NormalModelMatrix * vec4(normal, 1.0)).xyz), 1.0);
 	vEyeNormal = vec4(normalize((NormalViewMatrix * vec4(normalize(vWorldNormal.xyz), 1.0)).xyz), 1.0);
 

@@ -281,7 +281,7 @@ are included.
 | 25 | Polyobject origin subsectors baked as map-wide flats (citadel z-fighting) | task | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–12 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–13 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -446,3 +446,12 @@ ticket file, and decisions that change this map are written back here, under Dec
   A/B fails: citadel MAP01 42 → 4, HEXEN_MAP10 12 → 0, HEXEN_MAP27 25 → 1, myhouse MAP01
   12 → 5 (ticket 24's ticks 420–480). Ticket 13 (polyobjects) inherits this rule: the
   polyobject's own geometry is a separate, moving surface set.
+- 2026-10-16: ticket 13 resolved → polyobject walls baked by `HWWall::Process` per side
+  (`Baker::ProcessPolyobjects`), polyobject-local, with clusters of their own.
+  - Transform: an affine `LevelMeshPolyobj` (2×3, fitted to the current interpolated
+    vertices; binding `LMBIND_POLYOBJS`), applied in the vertex stage before plane anchoring.
+    The polyobject index and the current fake contrast ride in the side record.
+  - Cluster updates carry whole boxes (`LevelMeshClusterBox`).
+  - A polyobject outside its bake sector (subsector links) is `LMTS_DEFERRED` and drawn
+    classic; so is one across sectors or in heightsec / 3D-floor sectors at bake.
+  - Test map `tools/abtest/make_polytest.py`. Debug cvars: `lm_polyobjs`, `lm_polybox`.

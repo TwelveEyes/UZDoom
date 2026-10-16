@@ -19,6 +19,10 @@
 ** contiguous index range. The index buffer is rewritten in cluster order and
 ** the surfaces' index ranges follow it.
 **
+** A baked polyobject's walls (SurfaceLeaf -2 - polyobject) are no BSP leaf's:
+** each polyobject gets clusters of its own after the BSP walk, so its
+** clusters' boxes can follow it (LevelMeshBake::PolyClusterStart).
+**
 ** The whole build is linear in the number of triangles plus BSP nodes.
 */
 
@@ -271,9 +275,32 @@ struct ClusterBuilder
 			}
 		}
 
+		// Polyobject walls: their own clusters, after the BSP walk.
+		unsigned npoly = Bake->PolyBaked.Size();
+		TArray<uint32_t> polyStart(npoly + 1, true), polySurfaces;
+		for (auto &v : polyStart) v = 0;
+		for (unsigned s = 0; s < nsurf; s++)
+		{
+			int leaf = Bake->SurfaceLeaf[s];
+			if (leaf <= -2 && unsigned(-2 - leaf) < npoly) polyStart[-2 - leaf + 1]++;
+		}
+		for (unsigned i = 0; i < npoly; i++) polyStart[i + 1] += polyStart[i];
+		polySurfaces.Resize(npoly ? polyStart[npoly] : 0);
+		{
+			TArray<uint32_t> fill(npoly, true);
+			for (unsigned i = 0; i < npoly; i++) fill[i] = polyStart[i];
+			for (unsigned s = 0; s < nsurf; s++)
+			{
+				int leaf = Bake->SurfaceLeaf[s];
+				if (leaf <= -2 && unsigned(-2 - leaf) < npoly) polySurfaces[fill[-2 - leaf]++] = s;
+			}
+		}
+		auto isPoly = [&](unsigned s) { int leaf = Bake->SurfaceLeaf[s]; return leaf <= -2 && unsigned(-2 - leaf) < npoly; };
+
 		// Surfaces without a reachable leaf: the BSP leaf at their centre.
 		for (unsigned s = 0; s < nsurf; s++)
 		{
+			if (isPoly(s)) continue;
 			int leaf = Bake->SurfaceLeaf[s];
 			if (leaf >= 0 && leaf < (int)nleaf && reachable[leaf]) continue;
 			if (leaf >= 0 && leaf < (int)nleaf) cs.orphanSurfaces++;
@@ -296,16 +323,18 @@ struct ClusterBuilder
 		for (auto &v : LeafTris) v = 0;
 		for (unsigned s = 0; s < nsurf; s++)
 		{
+			if (isPoly(s)) continue;
 			int leaf = Bake->SurfaceLeaf[s];
 			LeafStart[leaf + 1]++;
 			LeafTris[leaf] += surfaces[s].numIndices / 3;
 		}
 		for (unsigned i = 0; i < nleaf; i++) LeafStart[i + 1] += LeafStart[i];
-		LeafSurfaces.Resize(nsurf);
+		LeafSurfaces.Resize(LeafStart[nleaf]);
 		{
 			TArray<uint32_t> fill(nleaf, true);
 			for (unsigned i = 0; i < nleaf; i++) fill[i] = LeafStart[i];
-			for (unsigned s = 0; s < nsurf; s++) LeafSurfaces[fill[Bake->SurfaceLeaf[s]]++] = s;
+			for (unsigned s = 0; s < nsurf; s++)
+				if (!isPoly(s)) LeafSurfaces[fill[Bake->SurfaceLeaf[s]]++] = s;
 		}
 
 		// Vertex z at the load heights.
@@ -347,6 +376,20 @@ struct ClusterBuilder
 				EmitGroup(LeafTris[i] > Budget);
 			}
 		}
+		Bake->PolyClusterStart.Resize(npoly + 1);
+		for (unsigned i = 0; i < npoly; i++)
+		{
+			Bake->PolyClusterStart[i] = Bake->Clusters.Size();
+			Gather.Clear();
+			uint32_t tris = 0;
+			for (uint32_t k = polyStart[i]; k < polyStart[i + 1]; k++)
+			{
+				Gather.Push(polySurfaces[k]);
+				tris += surfaces[polySurfaces[k]].numIndices / 3;
+			}
+			EmitGroup(tris > Budget);
+		}
+		Bake->PolyClusterStart[npoly] = Bake->Clusters.Size();
 		if (NewIndices.Size() != Bake->Indices.Size())
 			Printf(TEXTCOLOR_RED "LevelMeshClusters: index count changed (%u -> %u)\n", Bake->Indices.Size(), NewIndices.Size());
 		assert(NewIndices.Size() == Bake->Indices.Size());
@@ -408,6 +451,7 @@ void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budge
 	bake->ClusterPlanes.Clear();
 	bake->ClusterPlaneStart.Clear();
 	bake->ClusterStats = {};
+	bake->PolyClusterStart.Clear();
 	bake->ClusterStats.budget = std::clamp(budget, 16, 65536);
 	if (bake->Surfaces.Size() > 0 && Level->subsectors.Size() > 0)
 	{
@@ -416,6 +460,11 @@ void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budge
 		b.Bake = bake;
 		b.Budget = bake->ClusterStats.budget;
 		b.Build();
+	}
+	if (bake->PolyClusterStart.Size() != bake->PolyBaked.Size() + 1)
+	{
+		bake->PolyClusterStart.Resize(bake->PolyBaked.Size() + 1);
+		for (auto &v : bake->PolyClusterStart) v = bake->Clusters.Size();
 	}
 	bake->SurfaceLeaf.Reset();
 	bake->Clusters.ShrinkToFit();

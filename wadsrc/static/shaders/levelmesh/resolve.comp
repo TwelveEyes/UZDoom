@@ -338,7 +338,9 @@ int SideLightLevel(LMSurface surf, bool foggy, int baselight, out int rel)
 		if ((f & LMSD_NOFAKECONTRAST) == 0u && sh.fakeContrast != 0)
 		{
 			bool smoothRel = (sh.flags & LMSH_SMOOTHLIGHTING) != 0u || (f & LMSD_SMOOTHLIGHTING) != 0u || sh.fakeContrast == 2;
-			rel = smoothRel ? LowShort(surf.fakeContrast) : HighShort(surf.fakeContrast);
+			// A polyobject side's contrast follows its current direction (side record).
+			int pair = (surf.flags & LMSF_POLYOBJ) != 0u ? lmSides[surf.sideRef].fakeContrast : surf.fakeContrast;
+			rel = smoothRel ? LowShort(pair) : HighShort(pair);
 		}
 	}
 	if ((f & (LMSD_ABSLIGHTING | LMSD_ABSLIGHTING_TIER)) == 0u && (!foggy || (f & LMSD_LIGHT_FOG) != 0u))
