@@ -37,3 +37,10 @@ The classic path builds a per-surface light list (`HWWall::SetupLights`, flats l
   varyings (`lm_frag.glsl` maps the `u*` names); `uLightIndex` stays -1 in
   `VkLevelMeshRenderer::DrawPhase`. Vertex output locations 10-15 are taken (generated
   varyings end at 9); a froxel lookup needs no new varyings.
+- 2026-10-15 (from 11): specular / PBR materials (normal + specular / metallic / roughness / AO
+  layers) still go to the classic path (`LevelMesh_MaterialProgram` returns -1). Add them as
+  levelmesh material programs here: they only differ from the default with dynamic lights.
+  The program index selects `defaultshaders[]` (`VkShaderManager::GetLevelMesh`); bucket =
+  program * 2 + masked (`LM_Bucket`), so new programs extend `ELevelMeshProgram` and
+  `LMB_DRAWN`.
+

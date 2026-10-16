@@ -3,7 +3,7 @@
 **Map:** `../map.md`: Transitional strategy, Frame model (end state), Perf bars.
 **Type:** task
 **Status:** ready-for-agent
-**Blocked by:** 11, 13, 16, 18, 19
+**Blocked by:** 11, 13, 16, 18, 19, 22
 
 ## What to build
 

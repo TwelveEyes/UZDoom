@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model (State buffers: side state, plane xform, translation table), Shaders.
 **Type:** task
-**Status:** claimed
+**Status:** resolved
 **Blocked by:** 10
 
 ## What to build
@@ -34,12 +34,14 @@
 
 ## Acceptance
 
-- [ ] DOOM2 MAP30 start view (scrolling wall): no residual diff beyond DC1 / DC2.
-- [ ] Scripted switch + floor-texture-change test (a demo or tick list that triggers them): A/B
+- [x] DOOM2 MAP30 start view (scrolling wall): no residual diff beyond DC1 / DC2.
+- [x] Scripted switch + floor-texture-change test (a demo or tick list that triggers them): A/B
       passes.
-- [ ] A WARP texture map and a brightmapped map render through their material variants and pass
+- [x] A WARP texture map and a brightmapped map render through their material variants and pass
       A/B.
-- [ ] A lightmapped map passes A/B.
+- [ ] ~~A lightmapped map passes A/B.~~ Moved to ticket 22 (user decision 2026-10-15: no
+      lightmapped test map exists; lightmaps are experimental, `-enablelightmaps` + a ZDRay
+      `LIGHTMAP` lump).
 
 ## Comments
 
@@ -118,3 +120,48 @@
   depended on load time). Pirates MAP49 with levelmesh warps 63 -> 3 fails (= with warps on
   the classic path), MAP43 48 -> 8 (reflective water was drawn opaque), every other set
   unchanged, determinism 87/87, vk_debug survey only the known VUIDs.
+- 2026-10-15: resolved (commits 7a73f37303, e1be6f0642, acc1b42ee9).
+  - **Animation.** The texture table follows `FTextureAnimator`: ids whose current frame
+    changed are re-queued and re-resolved at `BeginFrame`. Surfaces keep untranslated ids;
+    `LMTE_FULLBRIGHT` in the table entry replaces the baked fullbright-flat flag.
+  - **Side / plane state.** Side tier records (8 words) and plane xform records (12 words, now
+    with the plane texture) are dirty-only record streams beside the sector stream
+    (`LevelMeshRecordStream`): hooks in the `side_t` / `sector_t` texture, offset, scale and
+    color setters (scrollers and their interpolations included), previous-frame changes, a
+    round-robin sweep. One `scatter.comp` dispatch writes every kind. The vertex stage adds
+    the streamed offset delta to the baked u / v (mid textures wrap x like `DoMidTexture`)
+    and builds the flat texture matrix from the record.
+  - **Texture swaps.** Surfaces flagged `LMSF_STATETEXTURE` read their texture from the
+    streamed record, so switches, `SetTexture`, `ChangeFloor` / floor-change specials need no
+    re-bake. A swap to an id the level did not reference waits one frame for the backend to
+    resolve it (`LevelMeshTextureReady`); switch textures are preloaded.
+  - **Runtime classic fallback (`LMTS_DEFERRED`).** A state the baked surfaces cannot express
+    (another texture size or scale, no texture, sky, another material program, an unwrapped
+    mid texture's y offset, plane reflection, a portal change, side / plane colors or texture
+    manipulation) hides the levelmesh surfaces in the vertex stage and hands the tier / plane
+    back to the classic draw lists until it is expressible again. `lm_statelog 1` prints the
+    switches.
+  - **Material buckets.** Bucket = alpha class x program; programs are default, warp1 and
+    warp2 (levelmesh variants of the classic material shaders, compiled per level on demand;
+    shader speed per texture-table entry, timer as a push constant). Brightmap / glow / detail
+    layers ride the existing bindless layer flags. Specular / PBR (ticket 19), user shaders,
+    canvases and paletted materials stay classic (ticket 22). `lm_programs` bisects.
+  - **Verification.**
+    - `make_texturetest.py` + `ab_manifest_texturetest.json`: animated wall and flat, wall +
+      floor scrollers, a switch, a floor texture change, texture offset / scale specials, a
+      clipped mid texture's y offset, warp1 / warp2 and GLDEFS brightmaps. Every room passes
+      except DC2 texel speckle on the CEIL5_1 ceiling (as lighttest's, ticket 10).
+    - Demo A/B, full lighting (fail ticks before 11 -> after): DOOM2 MAP01 20 -> 3, MAP23
+      9 -> 3, MAP27 8 -> 2, movers MAP30 64 -> 19 (MAP30 static 30/30), Hexen MAP10 18 -> 12,
+      Heretic E1M2 9 -> 3, SOS MAP32 49 -> 7, SOS MAP46 55 -> 16, planisf MAP01 44 -> 15,
+      Pirates MAP43 12 -> 8, MAP49 -> 3 with warps on the levelmesh. Every remaining fail
+      also fails with the warp programs or the state stream off, and falls in another
+      ticket's class: sky (14), the black-region finding (23), sprite fuzz, DC2 specks.
+    - Determinism 87/87; `lm_bake_survey.py --vkdebug` on 28 maps shows only the known
+      VUIDs; vantage perf: state stream <= 0.08 ms p50, levelmesh GPU unchanged except
+      Pirates MAP54 +0.05 ms (its warp2 water moved from classic to the levelmesh).
+  - **Harness fixes found on the way.** The A/B capture now restamps `ShaderStartTime` on the
+    capture clock (the material timer base depended on load time, so a slower bake shifted
+    warps by whole tics). `ab_sheet.py` (sheet / summary / failsets) replaces the throwaway
+    /tmp scripts.
+

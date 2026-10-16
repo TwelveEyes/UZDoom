@@ -273,11 +273,13 @@ are included.
 | 17 | Visibility feedback + actor/decal gather | task | 15 |
 | 18 | Game-logic feedback: exposure, dither, OOB/ortho/radar | task | 17 |
 | 19 | Dynamic lights (clustered forward+), shadowmaps, SSAO normals | task | 10 |
-| 20 | Retire the BSP walk from the levelmesh frame | task | 11, 13, 16, 18, 19 |
+| 20 | Retire the BSP walk from the levelmesh frame | task | 11, 13, 16, 18, 19, 22 |
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
+| 22 | Remaining material paths: lightmaps, user shaders, canvases, colors | task | 11 |
+| 23 | Regions the classic leaves black where the levelmesh draws (triage) | research | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–10 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–11 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -404,3 +406,18 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Full-lighting A/B on a generated light-test map plus 10 tour maps and a 15-setting cvar
     sweep: no shading differences (only the geometry / animation classes that fullbright also
     shows). Resolve GPU time ≤ 0.017 ms (phase 1) and ≤ 0.004 ms (phase 2) on every vantage.
+- 2026-10-15: ticket 11 resolved → `hw_levelmeshstate.cpp` (side / plane record streams,
+  `LMTS_DEFERRED`), `levelmesh.vp` (`LM_SurfaceTexture`, wall / flat UV state), material programs
+  in `VkShaderManager::GetLevelMesh`.
+  - Texture animation through the texture table; side tiers and plane xforms (with the plane
+    texture) as dirty-only record streams; swaps need no re-bake.
+  - Any state the bake cannot express goes back to the classic draw lists at runtime
+    (`LMTS_DEFERRED`) instead of being re-baked.
+  - Buckets = alpha class x material program (default, warp1, warp2).
+  - User decisions: lightmaps split to new ticket 22 (no lightmapped test map); user shaders,
+    canvases, paletted and side / plane colors stay classic until 22; specular / PBR go to 19.
+    Ticket 20 is now also blocked by 22.
+  - New ticket 23 (needs-triage): regions the classic leaves black where the levelmesh draws.
+  - A/B capture fix: `ShaderStartTime` restamped on the capture clock (material timer base
+    depended on load time). New tool `tools/abtest/ab_sheet.py`.
+
