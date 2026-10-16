@@ -59,6 +59,7 @@ struct LevelMeshBakeStats
 	unsigned wallSurfaces = 0, flatSurfaces = 0, ffloorFlatSurfaces = 0;
 	unsigned vertices = 0, triangles = 0;
 	unsigned sidesProcessed = 0, polySidesSkipped = 0, heightsecSurfaces = 0;
+	unsigned polyOriginSides = 0, polyOriginPartialSides = 0, polyOriginSubsectors = 0;
 	unsigned translucentWalls = 0, portalWalls = 0, fogWalls = 0, upperMissing = 0, lowerMissing = 0;
 	unsigned translucentFlats = 0, portalFlats = 0, untexturedFlats = 0;
 	unsigned zMismatch = 0, vMismatch = 0;		// round-trip failures beyond 1 ulp (must be 0)

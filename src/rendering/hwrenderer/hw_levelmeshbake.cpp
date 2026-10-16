@@ -11,6 +11,10 @@
 **
 **---------------------------------------------------------------------------
 **
+** Polyobject origin subsectors (SSECF_POLYORG) are skipped like
+** HWDrawInfo::DoSubsector skips them: their polyobject's vertices moved to
+** the start spot, so their geometry no longer bounds them.
+**
 ** Walls: every non-polyobject side runs once through HWWall::Process in
 ** mesh-helper mode (HWWallDispatcher without a draw info). The captured
 ** HWWalls produce their vertices through HWWall::CreateVertices, including
@@ -440,6 +444,19 @@ void Baker::ProcessSides()
 			continue;
 		}
 		if (side.numsegs == 0 || side.segs == nullptr) continue;
+		// HWDrawInfo::DoSubsector never renders polyobject origin
+		// subsectors (their polyobject's vertices were moved to the start
+		// spot), so none of their segs is drawn. A side split between such
+		// a subsector and a rendered one is baked whole (counted).
+		int polyOrgSegs = 0;
+		for (int i = 0; i < side.numsegs; i++)
+			if (side.segs[i]->Subsector && (side.segs[i]->Subsector->flags & SSECF_POLYORG)) polyOrgSegs++;
+		if (polyOrgSegs == side.numsegs)
+		{
+			Out->Stats.polyOriginSides++;
+			continue;
+		}
+		if (polyOrgSegs > 0) Out->Stats.polyOriginPartialSides++;
 		seg_t *seg = side.segs[0];
 		if (seg->sidedef != &side || seg->linedef == nullptr) continue;
 
@@ -1441,6 +1458,13 @@ void Baker::ProcessFlats()
 		{
 			for (auto sub : section.subsectors)
 			{
+				// Never rendered by the classic (HWDrawInfo::DoSubsector):
+				// the polyobject moved its vertices, so the fan spans the map.
+				if (sub->flags & SSECF_POLYORG)
+				{
+					Out->Stats.polyOriginSubsectors++;
+					continue;
+				}
 				gen.vertices.Clear();
 				gen.vertexmap.Clear();
 				gen.indices.Clear();
@@ -1727,8 +1751,8 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 	auto &s = Stats;
 	Printf("LevelMeshBake %s: %u surfaces (%u walls, %u flats, %u 3D flats), %u vertices, %u triangles, %.1f ms (walls %.1f, flats %.1f)\n",
 		mapname, Surfaces.Size(), s.wallSurfaces, s.flatSurfaces, s.ffloorFlatSurfaces, s.vertices, s.triangles, s.totalMs, s.wallMs, s.flatMs);
-	Printf("LevelMeshBake %s: sides %u (poly skipped %u); side lists: translucent walls %u, portal walls %u, fog walls %u, upper missing %u, lower missing %u, translucent flats %u, portal/sky flats %u; untextured flats %u; heightsec surfaces %u\n",
-		mapname, s.sidesProcessed, s.polySidesSkipped, s.translucentWalls, s.portalWalls, s.fogWalls, s.upperMissing, s.lowerMissing,
+	Printf("LevelMeshBake %s: sides %u (poly skipped %u; poly origin: sides %u, partial sides %u, subsectors %u); side lists: translucent walls %u, portal walls %u, fog walls %u, upper missing %u, lower missing %u, translucent flats %u, portal/sky flats %u; untextured flats %u; heightsec surfaces %u\n",
+		mapname, s.sidesProcessed, s.polySidesSkipped, s.polyOriginSides, s.polyOriginPartialSides, s.polyOriginSubsectors, s.translucentWalls, s.portalWalls, s.fogWalls, s.upperMissing, s.lowerMissing,
 		s.translucentFlats, s.portalFlats, s.untexturedFlats, s.heightsecSurfaces);
 	Printf("LevelMeshBake %s: deferred to the classic path %u surfaces (%u by tier); walls not drawn with their side texture %u\n", mapname,
 		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);

@@ -24,6 +24,7 @@ is the WADs in `tools/abtest/wads/` below.
 | pirates | `Pirates!.wad` (BEHA + ZMAPINFO) | MAP50 MAP51 MAP57 (fog); MAP43 MAP49 MAP54 MAP58 (polyobjects + 3D floors) |
 | sos_boom | `SOS_Boom.wad` (user-provided; Summer of Slaughter by TH1RT3EN) | MAP32 (slaughter pin); MAP12 MAP45 MAP46 (secondary scale) |
 | planisf | `planisf2.wad` (user-provided; 1 map) | MAP01 (37,265 lines) |
+| citadel | `citadel.pk3` (user-provided Doom 2 mod, 120 MB; UDMF maps as nested WADs; own player class, ZScript, GLDEFS) | MAP01 (15,943 lines / 4,048 sectors, 48 polyobjects, 1,242 3D floors) |
 | strife (extra) | `STRIFE1.WAD` | not in the matrix — smoke/format coverage only |
 
 ## Fixed maps (locked by ticket 09)
@@ -33,6 +34,7 @@ is the WADs in `tools/abtest/wads/` below.
 - **myhouse**: MAP01, 20PAM
 - **Pirates!**: MAP50, MAP51, MAP57, MAP43, MAP49, MAP54, MAP58
 - **planisf2**: MAP01
+- **citadel**: MAP01 (added 2026-10-16, ticket 25: polyobject origin subsectors, floor / ceiling z-fighting)
 - **hexen**: MAP01 (1,770 lines / 400 sec; densest 80-teleports 80×42,
   polyobj 1×12), MAP10 (2,030 lines / 337 sec; mixed special family), MAP27
   (2,180 lines / 368 sec — largest of the three; 80×38, 62×9) — vanilla

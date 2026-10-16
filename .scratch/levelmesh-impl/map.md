@@ -278,6 +278,7 @@ are included.
 | 22 | Remaining material paths: lightmaps, user shaders, canvases, colors | task | 11 |
 | 23 | Regions the classic leaves black where the levelmesh draws (triage) | research | — |
 | 24 | myhouse MAP01 demo A/B: sky / portal regions differ (triage) | research | — |
+| 25 | Polyobject origin subsectors baked as map-wide flats (citadel z-fighting) | task | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
 Tickets 01–12 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
@@ -438,3 +439,10 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Test map `tools/abtest/make_3dfloortest.py`. Remaining A/B fails on the 3D maps are DC2
     edge specks or independent of 3D floors (`lm_3dfloors 0` identical): Pirates MAP58 far
     geometry vs sky (23), myhouse MAP01 sky / portal regions (new 24).
+- 2026-10-16: ticket 25 resolved → `hw_levelmeshbake.cpp` skips polyobject origin subsectors
+  (`SSECF_POLYORG`) and the sides whose segs all lie in them, as `HWDrawInfo::DoSubsector`
+  does. `PO_Init` moves the polyobjects' vertices, so those subsectors' fans spanned the map
+  and z-fought with real floors and ceilings (citadel.pk3 MAP01; new demo `CITADEL_MAP01`).
+  A/B fails: citadel MAP01 42 → 4, HEXEN_MAP10 12 → 0, HEXEN_MAP27 25 → 1, myhouse MAP01
+  12 → 5 (ticket 24's ticks 420–480). Ticket 13 (polyobjects) inherits this rule: the
+  polyobject's own geometry is a separate, moving surface set.

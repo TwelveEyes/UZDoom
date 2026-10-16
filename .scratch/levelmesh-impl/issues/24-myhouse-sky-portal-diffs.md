@@ -22,3 +22,10 @@ What the sheets show (`ab_sheet.py sheet 20261016T074457Z-ab MYHOUSE 420 930 960
 Which ticket owns each: sky (14), portals / multi-view (15), heightsecs and hack fills (16),
 or the classic leaving geometry out (23)? Start with `--gamestate` and `lm_cullmode 0` to
 separate visibility from drawing.
+
+## Comments
+
+- 2026-10-16: ticks 420 / 450 / 480, where a ceiling was drawn across the top of the view,
+  were polyobject origin subsectors baked as map-wide flats; fixed in ticket 25. With that
+  fix, the myhouse MAP01 A/B fails 5 of 87 (run `20261016T185931Z-ab`). 930 / 960 (sky, over
+  1M px) are still open; 1350 / 1440 / 1470 are small (4–642 px).
