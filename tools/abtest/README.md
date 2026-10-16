@@ -83,6 +83,15 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   brightmaps. `lm_programs N` (bit per program: 1 default, 2 warp, 4 warp2; read at level
   setup) sends the other material programs back to the classic path, to bisect a
   material-shader difference.
+- **3D floors (ticket 12):** `ab_manifest_3dfloortest.json` replays `demos/3dfloortest/` over
+  `wads/3dfloortest.wad`. `make_3dfloortest.py` writes both (copy the wad into the build's
+  `wads/` too). 13 rooms: solid boxes with the sector's and with another 3D light, whole-room
+  light layers (walls split per layer), a sloped light plane across the walls (banded walls),
+  stacked layers with `FF_DOUBLESHADOW`, a moving 3D floor, masked sides, light / color changes
+  on a control sector, translucent and fog 3D floors (classic, ticket 16), `ExtraFloor_LightOnly`,
+  `FF_UPPERTEXTURE` and an opaque swimmable floor the camera is inside. With every 3D surface
+  on the classic path, 24 of 101 ticks fail only on DC2 texel speckle along the far
+  `CEIL3_5` grid lines (max delta 6); compare later runs with `ab_sheet.py failsets`.
 - **Shader timer in captures:** `P_SetupLevel` stamps `ShaderStartTime` on the real clock, and
   `CheckTimer` restarts the material shader timer until the synthetic `FrameTime` passes it,
   so before 2026-10-15 the warp / shader timer base depended on load time (a slower levelmesh

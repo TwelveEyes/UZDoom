@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model, Shading resolve.
 **Type:** task
-**Status:** ready-for-agent
+**Status:** claimed
 **Blocked by:** 10
 
 ## What to build
