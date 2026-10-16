@@ -21,3 +21,9 @@ runtime texture state. Is it the classic clipper / visibility missing geometry (
 levelmesh need not reproduce: allowlist under DC5 or a new class), or the levelmesh drawing
 geometry the classic correctly hides (a levelmesh bug)? Inspect with `tools/abtest/ab_sheet.py
 sheet RUN COMBO TICK` and the game-state set-diff (`--gamestate`).
+- 2026-10-16 (from 12): Pirates MAP58 demo (run `20261016T071521Z-ab`): ticks 150 / 360 / 960 /
+  990 / 1050 / ... (10k-380k px, delta up to 202) show far islands / ships the levelmesh
+  draws where the classic shows only sky (`ab_sheet.py sheet 20261016T071521Z-ab
+  PIRATES_MAP58 150 960 360`). Identical with `lm_3dfloors 0`, so not 3D floors. Same
+  pattern as the regions above: the classic leaves geometry out (clipper / sky) and the
+  levelmesh draws it, or the reverse.

@@ -277,9 +277,10 @@ are included.
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
 | 22 | Remaining material paths: lightmaps, user shaders, canvases, colors | task | 11 |
 | 23 | Regions the classic leaves black where the levelmesh draws (triage) | research | — |
+| 24 | myhouse MAP01 demo A/B: sky / portal regions differ (triage) | research | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–11 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–12 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -420,4 +421,20 @@ ticket file, and decisions that change this map are written back here, under Dec
   - New ticket 23 (needs-triage): regions the classic leaves black where the levelmesh draws.
   - A/B capture fix: `ShaderStartTime` restamped on the capture clock (material timer base
     depended on load time). New tool `tools/abtest/ab_sheet.py`.
-
+- 2026-10-16: ticket 12 resolved → `hw_levelmeshbake.cpp` (3D-floor groups, plane picks,
+  `BakeBands`), `hw_levelmeshstate.cpp` (`LevelMesh_FillLight3D`, `LevelMesh_FillFFGroup`),
+  `HWDrawList::RemoveLevelMeshOwned`.
+  - 3D lights: one record per distinct lightlist entry, keyed by value (sector, light source
+    model / flags, light level, caster FADEWALLS), refreshed O(changed); surfaces carry the
+    index, `resolve.comp` applies it.
+  - 3D-floor sides of a side / opaque 3D planes of a sector are groups drawn by one path or
+    the other, streamed as side records after the tiers; a group whose planes, plane
+    textures or side tiers differ from the bake goes classic (moving 3D floors draw classic
+    away from their bake position).
+  - 3D planes are baked one-sided per drawn side (`HWFlat::ProcessSector`'s picks).
+  - Light bands: banded walls are cut into one surface per layer at bake, not drawn per band
+    with clip distances (the layout is fixed while drawn): no extra draws.
+  - Lift fix, not 3D-specific: upper / lower tier edge clamp (`edgeClamp`).
+  - Test map `tools/abtest/make_3dfloortest.py`. Remaining A/B fails on the 3D maps are DC2
+    edge specks or independent of 3D floors (`lm_3dfloors 0` identical): Pirates MAP58 far
+    geometry vs sky (23), myhouse MAP01 sky / portal regions (new 24).

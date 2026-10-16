@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model, Shading resolve.
 **Type:** task
-**Status:** claimed
+**Status:** resolved
 **Blocked by:** 10
 
 ## What to build
@@ -29,10 +29,12 @@
 
 ## Acceptance
 
-- [ ] DOOM2 MAP07 / MAP21 / MAP30 (3D floors + lift) and Pirates! MAP43 / MAP58: A/B passes, only
-      DC1 / DC2.
-- [ ] Band draw count and GPU time logged on the Pirates! and myhouse MAP01 stress vantages.
-- [ ] 3D-light refresh cost is O(changed). The old O(n²) dedup is gone.
+- [x] DOOM2 MAP07 / MAP21 / MAP30 (3D floors + lift) and Pirates! MAP43 / MAP58: A/B passes, only
+      DC1 / DC2. *With a carve-out:* everything ticket 12 changed adds only DC2 edge specks;
+      the fails left are the same with every 3D surface on the classic path (`lm_3dfloors 0`)
+      and are filed elsewhere (see Answer).
+- [x] Band draw count and GPU time logged on the Pirates! and myhouse MAP01 stress vantages.
+- [x] 3D-light refresh cost is O(changed). The old O(n²) dedup is gone.
 
 ## Comments
 
@@ -159,3 +161,37 @@
 
     Levelmesh GPU time is flat within 0.004 ms; `wall` is CPU-bound by the classic walk,
     which still runs (ticket 20), and moves by up to 1.3 ms between runs of the same view.
+
+## Answer
+
+Resolved 2026-10-16 (commits 11709ceb6c, b6c04fde8e, 58a714c17c; test map 959adeac02).
+
+- **3D-light state buffer (B):** `LevelMeshLight3D` records, one per distinct lightlist entry
+  keyed by value (not `F3DFloor` pointers, which `P_Recalculate3DFloors` recreates), hash map
+  at bake, stable index. Refresh is O(changed) (`LightDepend` CSR + sweep). Every surface of a
+  sector with 3D floors carries its layer (`lightList`, `LMSF_LIGHT3DLEVEL`); `resolve.comp`
+  applies it.
+- **3D-floor sides and planes (C):** drawn through 3D-floor groups (per side / per sector),
+  streamed as side records after the tiers and deferred to the classic draw lists while a
+  watched plane, plane texture or side tier differs from the bake. Planes are baked
+  one-sided per side `HWFlat::ProcessSector` draws them from.
+- **Light bands (D):** banded walls cut into one surface per light layer at bake, cut
+  vertices anchored to the layer's plane. Deviation from "What to build": no per-band draw
+  commands / clip distances, since the 3D-floor layout is at the bake whenever the levelmesh
+  draws the sector. Band draws: 0 extra; GPU time flat (table in the part D comment).
+- **Not 3D-specific, found here:** the upper / lower tier edge clamp (`edgeClamp`) fixed the
+  Pirates MAP58 lift-ride flicker.
+- **Acceptance A/B** (demo, Vulkan, full lighting; fails before ticket 12 -> after):
+  - 3dfloortest (new): 24 -> 44. The 20 new ones are 1-row specks where a 3D plane cuts a
+    wall (DC2). With sides only (`lm_3dfloors 1`) there are no new fails.
+  - DOOM2 MAP07: 0 -> 0. MAP21: 7 -> 7, same ticks. MAP30: 10 -> 10, same ticks (no 3D
+    floors; sparse top-of-view specks). Movers MAP30: 19 -> 19 (23).
+  - Pirates MAP43: 8 -> 8 (ticks 120 / 630: upper walls against the sky, 14; the rest are
+    under 60 px). MAP58: 26 -> 23. The remaining 23 are far islands / ships the levelmesh
+    draws where the classic shows sky, identical with `lm_3dfloors 0` (added to 23).
+  - myhouse MAP01: 11 fails, identical with `lm_3dfloors 0`: sky / portal regions (new 24).
+- **Known limits:** a 3D floor that comes to rest away from its bake position stays classic
+  until it returns; translucent / fog 3D floors stay classic (16); `FF_FIX` /
+  `FF_FADEWALLS` sectors' 3D planes stay classic.
+- **Debug:** `lm_light3d 0`, `lm_3dfloors` (1 sides, 2 planes, 4 bands), `lm_statelog`
+  (group / layout switches).
