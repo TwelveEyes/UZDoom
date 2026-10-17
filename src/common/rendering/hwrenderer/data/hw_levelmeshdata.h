@@ -83,13 +83,14 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	// 1 << 9 reserved: dither eligibility (ticket 18; WALLF_DITHERTRANS_* is per-frame state)
 	LMSF_SKEW = 1 << 10,		// sloped / skewed texture alignment
 	LMSF_LIGHTLIST = 1 << 11,	// banded wall: lit by lightSector's 3D lightlist per layer (classic split planes)
-	LMSF_SKY = 1 << 12,			// unused for mesh surfaces (sky goes to side lists); reserved
+	LMSF_SKY = 1 << 12,			// sky wall or sky cap: depth / stencil only, drawn by the sky portal of its sky (LMP_SKY, ticket 14)
 	LMSF_DEFERRED = 1 << 13,	// not drawn by the levelmesh yet: the classic path owns it (LMB_DEFERRED)
 	LMSF_TEXCLAMPY = 1 << 14,	// TEXF_ClampY texture mode (classic SetTextureClamp: clamped two-sided mid texture)
 	LMSF_STATETEXTURE = 1 << 15,	// the texture is the streamed one (side tier / plane), not textureId
 	LMSF_NOSECTORFOG = 1 << 16,	// walls: fog of light 255 without the sector colormap (RENDERWALL_M2SNF)
 	LMSF_LIGHT3DLEVEL = 1 << 17,	// the 3D light (lightList) replaces the light level (HWWall::Put3DWall, HWFlat::ProcessSector)
 	LMSF_EDGECLAMPMAX = 1 << 18,	// edgeClamp raises the bottom vertices (upper tier); otherwise it lowers the top vertices (lower tier)
+	LMSF_SKYCLOSED = 1 << 20,	// sky wall of a sky-sky line: shown only while the back sector (vRef's) is closed (HWWall::SkyTop / SkyBottom)
 	LMSF_POLYOBJ = 1 << 19,		// polyobject wall: x / y are polyobject-local, placed by its LevelMeshPolyobj (index in the side record)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
 	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..29
@@ -115,6 +116,9 @@ enum ELevelMeshSurfaceKind : uint32_t
 };
 
 // std430-compatible: 32 x 32 bit.
+// Sky surfaces (LMSF_SKY): sideRef is the sky source (LevelMeshBake::
+// SkySources), vRef the back sector's floor ref of an LMSF_SKYCLOSED wall;
+// the texture and light fields are unused.
 struct LevelMeshSurface
 {
 	uint32_t flags;			// LMSF_* | kind
@@ -199,6 +203,10 @@ enum ELevelMeshProgram : uint32_t
 	LMP_DEFAULT,
 	LMP_WARP1,
 	LMP_WARP2,
+	// Not a material: sky walls and caps (LMSF_SKY), drawn with the default
+	// program's shaders into depth / stencil / alpha only, by the sky
+	// portals (DFrameBuffer::DrawLevelMeshSky), never by the scene draw.
+	LMP_SKY,
 	LMP_COUNT,
 };
 
@@ -207,7 +215,9 @@ enum ELevelMeshProgram : uint32_t
 // classic draw lists (HWDrawInfo::AddWall / AddFlat): only two-sided mid
 // textures (and 3D-floor / portal planes) are alpha tested. LMB_DEFERRED
 // holds the surfaces the levelmesh does not draw yet (3D floors, heightsecs,
-// light bands, sky-hack mid textures); the classic path keeps drawing them
+// light bands, sky-hack mid textures); the classic path keeps drawing them.
+// The LMP_SKY buckets hold the sky walls and caps, drawn only by the sky
+// portals (never by the scene pass)
 // (LevelMeshBake::SideTierOwned / SectorPlaneOwned). A texture swap that
 // would change a surface's bucket defers its tier / plane at runtime
 // (LMTS_DEFERRED) instead.
@@ -226,7 +236,7 @@ inline uint32_t LM_Bucket(uint32_t program, bool masked)
 }
 
 // A spatial group of triangles: a BSP subtree cut at the triangle budget.
-// std430-compatible: 20 x 32 bit.
+// std430-compatible: 22 x 32 bit.
 struct LevelMeshCluster
 {
 	float bmin[3];			// xy AABB; z from the load heights, refreshed when an anchor plane moves (LevelMesh_UpdateState)
@@ -238,7 +248,7 @@ struct LevelMeshCluster
 	uint32_t firstSector, numSectors;	// into the cluster -> sector list (vertex anchor sectors)
 	uint32_t firstSurface, numSurfaces;	// into the cluster -> surface list
 };
-static_assert(sizeof(LevelMeshCluster) == 20 * 4, "LevelMeshCluster must stay std430-compatible");
+static_assert(sizeof(LevelMeshCluster) == 22 * 4, "LevelMeshCluster must stay std430-compatible");
 
 // Per-sector state. std430-compatible: 24 x 32 bit. Every field is
 // streamed dirty-only (LevelMesh_UpdateState compares the whole packed
@@ -400,6 +410,10 @@ enum ELevelMeshDrawMode : int
 enum ELevelMeshViewFlags : uint32_t
 {
 	LMVF_FULLBRIGHT = 1,	// debug: draw every surface with the render state's (fullbright) light instead of the resolve
+	// Sky draws: the sky configuration drawn (1-based, LevelMeshView::skySources)
+	// in bits 8..23; 0 hides every sky surface.
+	LMVF_SKYSHIFT = 8,
+	LMVF_SKYMASK = 0xffff << LMVF_SKYSHIFT,
 };
 
 struct LevelMeshView
@@ -410,6 +424,15 @@ struct LevelMeshView
 	uint32_t flags = 0;		// LMVF_*
 	float maskThreshold = 0.5f;	// alpha threshold of the masked bucket (gl_mask_threshold)
 	const LevelMeshShading *shading = nullptr;	// resolve inputs (valid during the call)
+	// Sky (ticket 14): per sky source (LevelMeshBake::SkySources), the sky
+	// configuration it belongs to this frame (1-based: the sky portal that
+	// draws it; 0 = hidden). 'firstSky': the configuration whose sky portal
+	// was drawn before the scene without a stencil (FPortalSceneState::
+	// RenderFirstSkyPortal): its surfaces go into the depth buffer ahead of
+	// the opaque buckets, as the portal's depth restore. Valid during the call.
+	const uint32_t *skySources = nullptr;
+	unsigned numSkySources = 0;
+	uint32_t firstSky = 0;
 };
 
 template<class T> struct LevelMeshSpan
@@ -477,6 +500,7 @@ struct LevelMeshUploadData
 	LevelMeshSpan<LevelMeshPlaneXform> planeXforms;
 	LevelMeshSpan<LevelMeshLight3D> lights3D;
 	LevelMeshSpan<LevelMeshPolyobj> polyobjs;
+	unsigned numSkySources = 0;			// LMBIND_SKYSOURCES entries (zero at upload: every sky surface hidden)
 	LevelMeshSpan<int> textureIds;		// ids resolved into the translation table
 	unsigned translationTableSize = 0;	// number of texture ids (TexMan.NumTextures())
 };

@@ -270,6 +270,13 @@ public:
 	void CreateScene(bool drawpsprites);
 	void RenderScene(FRenderState &state);
 	bool DrawLevelMesh(FRenderState &state);
+	void PrepareLevelMeshSky(FRenderState &state);
+	// Levelmesh sky (ticket 14): set between PrepareLevelMeshSky and the
+	// levelmesh draw; the sky configuration of the portal drawn before the
+	// scene; per sky source its configuration this frame.
+	bool lmSkyPending = false;
+	uint32_t lmFirstSky = 0;
+	TArray<uint32_t> lmSkySources;
 	void RenderTranslucent(FRenderState &state);
 	void RenderPortal(HWPortal *p, FRenderState &state, bool usestencil);
 	void EndDrawScene(sector_t * viewsector, FRenderState &state);

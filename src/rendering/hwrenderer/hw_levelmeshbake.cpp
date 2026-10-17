@@ -47,6 +47,7 @@
 #include <cfloat>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <unordered_map>
 
 #include "hw_levelmeshbake.h"
@@ -413,6 +414,24 @@ struct Baker
 		return Level->sides.Size() * 3 + g;
 	}
 
+	// Sky (ticket 14)
+	std::map<LevelMeshSkySource, uint32_t> skySourceIndex;
+	uint32_t SkySource(sector_t *sec, int plane, sector_t *colorSec)
+	{
+		LevelMeshSkySource k = { uint32_t(sec->Index()), uint32_t(plane), uint32_t(colorSec->Index()) };
+		auto it = skySourceIndex.find(k);
+		if (it != skySourceIndex.end()) return it->second;
+		uint32_t index = Out->SkySources.Size();
+		Out->SkySources.Push(k);
+		skySourceIndex.emplace(k, index);
+		return index;
+	}
+	bool SideSkyClassic(seg_t *seg, sector_t *rf, sector_t *rb);
+	void BakeSkyQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4], const float zb[2], const float zt[2], uint32_t source, sector_t *closedBack);
+	void BakeSkyWall(const HWWall &w, sector_t *rf, sector_t *rb);
+	void BakeSkyClosedWalls(seg_t *seg, sector_t *rf, sector_t *rb);
+	void BakeSkyCap(subsector_t *sub, sector_t *sec, int h);
+
 	void ProcessSides();
 	void ProcessPolyobjects();
 	void BakeWall(HWWall &w);
@@ -425,6 +444,208 @@ struct Baker
 	void BuildFFTables();
 	void BuildLight3DTables();
 };
+
+
+//==========================================================================
+//
+// Sky walls and caps (ticket 14)
+//
+// The classic sky is the background: the sky walls (HWWall::SkyNormal /
+// SkyTop / SkyBottom: from a sky plane to z +-32768) of every visible sky
+// configuration register an HWSkyPortal, which writes them (and caps at
+// z +-32767 over their bounding box) into depth and stencil and draws the
+// dome there. The bake keeps those walls as LMSF_SKY surfaces (LMP_SKY
+// bucket), and caps every sky plane at +-32767 with its triangulation; the
+// HWSkyPortal of the surface's sky draws them in place of its own lines.
+//
+// The sky walls of a sky-sky line depend on the back sector being closed
+// (a door): the bake makes them for every such line, flagged
+// LMSF_SKYCLOSED (the vertex stage shows them while the back sector is
+// closed), and drops the copies the classic emitted for the doors closed
+// at bake. Sides whose sky depends on the view (heightsecs, the Vrack2b
+// lower-sky rule, horizon lines) or on texture-offset hacks (the Icarus
+// MAP14 rule) keep the classic's sky walls (SideSkyOwned 0).
+//
+//==========================================================================
+
+static bool NoSkyWalls(seg_t *seg, sector_t *bs)
+{
+	return bs->special == GLSector_NoSkyDraw || (bs->MoreFlags & SECMF_NOSKYWALLS) != 0 || (seg->linedef->flags & ML_NOSKYWALLS) != 0;
+}
+
+static bool ValidTexture(side_t *side, int tier)
+{
+	auto tex = TexMan.GetGameTexture(side->GetTexture(tier), true);
+	return tex && tex->isValid();
+}
+
+// The upper / lower sky of a sky-sky line (HWWall::SkyTop / SkyBottom: the
+// closed-back-sector case).
+static bool SkySkyUpper(seg_t *seg, sector_t *rf, sector_t *rb)
+{
+	return rb && rf->GetTexture(sector_t::ceiling) == skyflatnum && rb->GetTexture(sector_t::ceiling) == skyflatnum && !NoSkyWalls(seg, rb) && !rb->transdoor;
+}
+
+static bool SkySkyLower(seg_t *seg, sector_t *rf, sector_t *rb)
+{
+	return rb && rf->GetTexture(sector_t::floor) == skyflatnum && rb->GetTexture(sector_t::floor) == skyflatnum && !NoSkyWalls(seg, rb) &&
+		!ValidTexture(seg->sidedef, side_t::bottom);
+}
+
+bool Baker::SideSkyClassic(seg_t *seg, sector_t *rf, sector_t *rb)
+{
+	if (rf->GetHeightSec() || (rb && rb->GetHeightSec())) return true;
+	// HWWall::DoHorizon: the sky of a horizon line starts at the viewer's z.
+	if (seg->linedef->special == Line_Horizon) return true;
+	if (rb == nullptr) return false;
+	// SkyTop: the transparent door hack of a sky-sky line (Icarus MAP14).
+	if (SkySkyUpper(seg, rf, rb) && !rb->floorplane.isSlope() && !rf->floorplane.isSlope() &&
+		rb->GetPlaneTexZ(sector_t::floor) == rf->GetPlaneTexZ(sector_t::floor) + 1.) return true;
+	// SkyBottom: a view-dependent lower sky (Vrack2b).
+	if (rf->GetTexture(sector_t::floor) == skyflatnum && !NoSkyWalls(seg, rb) && !ValidTexture(seg->sidedef, side_t::bottom) &&
+		rb->GetTexture(sector_t::floor) != skyflatnum) return true;
+	return false;
+}
+
+// One sky quad, as HWWall::CreateVertices orders a wall's corners: (x1, y1)
+// bottom, top, then (x2, y2) top, bottom. A finite edge is anchored to the
+// side's plane it lies on; an edge at +-32768 to its end's finite vertex's
+// plane with an offset.
+void Baker::BakeSkyQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4], const float zb[2], const float zt[2], uint32_t source, sector_t *closedBack)
+{
+	CandidateList list;
+	list.Add(rf, sector_t::ceiling); list.Add(rf, sector_t::floor);
+	list.Add(rb, sector_t::ceiling); list.Add(rb, sector_t::floor);
+	LevelMeshSurface surf = {};
+	uint32_t sindex = BeginSurface(surf);
+	uint32_t firstv = Out->Vertices.Size();
+	const float corner[4][3] = {
+		{ xy[0], xy[1], zb[0] }, { xy[0], xy[1], zt[0] }, { xy[2], xy[3], zt[1] }, { xy[2], xy[3], zb[1] },
+	};
+	for (int end = 0; end < 2; end++)
+	{
+		const float *lo = corner[end == 0 ? 0 : 3], *hi = corner[end == 0 ? 1 : 2];
+		bool hiInf = hi[2] >= 32768.f, loInf = lo[2] <= -32768.f;
+		LevelMeshVertex v[2] = {};
+		for (int k = 0; k < 2; k++)
+		{
+			v[k].x = (k ? hi : lo)[0];
+			v[k].y = (k ? hi : lo)[1];
+			v[k].surface = sindex;
+		}
+		// The finite vertex first, then the infinite one on its plane.
+		int fin = hiInf ? 0 : 1;
+		const float *fc = fin ? hi : lo;
+		AnchorZ(v[fin], fc[2], list, LM_NOPLANE, fin ? LMV_TOP : LMV_BOTTOM);
+		int inf = 1 - fin;
+		if ((inf == 1 && hiInf) || (inf == 0 && loInf))
+		{
+			uint32_t ref = v[fin].anchor & LMV_REFMASK;
+			float base = LM_PlaneZ(Plane(ref), v[inf].x, v[inf].y);
+			SolveOffset(base, (inf ? hi : lo)[2], v[inf].zOffset);
+			v[inf].anchor = ref | (uint32_t(inf ? LMV_TOP : LMV_BOTTOM) << LMV_ROLESHIFT);
+		}
+		else AnchorZ(v[inf], (inf ? hi : lo)[2], list, LM_NOPLANE, inf ? LMV_TOP : LMV_BOTTOM);
+		if (end == 0) { Out->Vertices.Push(v[0]); Out->Vertices.Push(v[1]); }
+		else { Out->Vertices.Push(v[1]); Out->Vertices.Push(v[0]); }
+	}
+	for (int i = 1; i + 1 < 4; i++)
+	{
+		Out->Indices.Push(firstv);
+		Out->Indices.Push(firstv + i);
+		Out->Indices.Push(firstv + i + 1);
+	}
+	bool overflow = false;
+	for (int i = 0; i < 4; i++) AddPlaneRef(surf, Out->Vertices[firstv + i].anchor & LMV_REFMASK, overflow);
+	surf.flags = LMSK_WALL | LMSF_SKY | (uint32_t(LMP_SKY) << LMSF_PROGRAMSHIFT);
+	if (closedBack)
+	{
+		surf.flags |= LMSF_SKYCLOSED;
+		surf.vRef = LM_PlaneRef(closedBack->Index(), sector_t::floor);
+		Out->Stats.skyClosedWalls++;
+	}
+	surf.sideRef = source;
+	surf.lightSector = rf->Index();
+	surf.lightList = -1;
+	surf.lightmapPage = -1;
+	float dx = xy[2] - xy[0], dy = xy[3] - xy[1];
+	float len = sqrtf(dx * dx + dy * dy);
+	if (len > 0)
+	{
+		surf.normal[0] = dy / len;
+		surf.normal[1] = -dx / len;
+	}
+	Out->SkySurfaceSide.Push(seg->sidedef ? seg->sidedef->Index() : -1);
+	Out->SkySurfaceIndex.Push(sindex);
+	EndSurface(surf, seg->Subsector);
+	Out->Stats.skyWalls++;
+}
+
+// A sky wall the classic emitter produced (HWWall::PutPortal, mesh mode).
+void Baker::BakeSkyWall(const HWWall &w, sector_t *rf, sector_t *rb)
+{
+	int plane = w.portaltype == PORTALTYPE_SKY ? sector_t::ceiling : w.portalplane;
+	float xy[4] = { w.glseg.x1, w.glseg.y1, w.glseg.x2, w.glseg.y2 };
+	BakeSkyQuad(w.seg, rf, rb, xy, w.zbottom, w.ztop, SkySource(rf, plane, RealSector(Level, w.frontsector)), nullptr);
+}
+
+// The sky walls of a sky-sky line that exist while the back sector is closed.
+void Baker::BakeSkyClosedWalls(seg_t *seg, sector_t *rf, sector_t *rb)
+{
+	line_t *line = seg->linedef;
+	vertex_t *v1 = seg->sidedef == line->sidedef[0] ? line->v1 : line->v2;
+	vertex_t *v2 = seg->sidedef == line->sidedef[0] ? line->v2 : line->v1;
+	float xy[4] = { (float)v1->fX(), (float)v1->fY(), (float)v2->fX(), (float)v2->fY() };
+	if (SkySkyUpper(seg, rf, rb))
+	{
+		float zb[2] = { (float)rb->ceilingplane.ZatPoint(v1), (float)rb->ceilingplane.ZatPoint(v2) };
+		float zt[2] = { 32768.f, 32768.f };
+		BakeSkyQuad(seg, rf, rb, xy, zb, zt, SkySource(rf, sector_t::ceiling, rf), rb);
+	}
+	if (SkySkyLower(seg, rf, rb))
+	{
+		float zb[2] = { -32768.f, -32768.f };
+		float zt[2] = { (float)rb->floorplane.ZatPoint(v1), (float)rb->floorplane.ZatPoint(v2) };
+		BakeSkyQuad(seg, rf, rb, xy, zb, zt, SkySource(rf, sector_t::floor, rf), rb);
+	}
+}
+
+// A sky plane's cap: its triangulation at z +-32767 (the HWPortal caps).
+void Baker::BakeSkyCap(subsector_t *sub, sector_t *sec, int h)
+{
+	uint32_t ref = LM_PlaneRef(sec->Index(), h);
+	LevelMeshPlane plane = Plane(ref);
+	float capz = h == sector_t::ceiling ? 32767.f : -32767.f;
+	LevelMeshSurface surf = {};
+	uint32_t sindex = BeginSurface(surf);
+	uint32_t firstv = Out->Vertices.Size();
+	for (auto &qv : gen.vertices)
+	{
+		LevelMeshVertex v = {};
+		v.x = (float)qv.vertex->fX();
+		v.y = (float)qv.vertex->fY();
+		v.surface = sindex;
+		SolveOffset(LM_PlaneZ(plane, v.x, v.y), capz, v.zOffset);
+		v.anchor = ref | (LMV_FLAT << LMV_ROLESHIFT);
+		Out->Vertices.Push(v);
+	}
+	bool flip = h == sector_t::ceiling;
+	for (unsigned i = 0; i + 2 < gen.indices.Size(); i += 3)
+	{
+		Out->Indices.Push(firstv + gen.indices[i]);
+		Out->Indices.Push(firstv + gen.indices[flip ? i + 2 : i + 1]);
+		Out->Indices.Push(firstv + gen.indices[flip ? i + 1 : i + 2]);
+	}
+	surf.planeRefs[0] = ref;
+	surf.flags = (h == sector_t::ceiling ? LMSK_CEILING : LMSK_FLOOR) | LMSF_SKY | (uint32_t(LMP_SKY) << LMSF_PROGRAMSHIFT);
+	surf.sideRef = SkySource(sec, h, sec);
+	surf.lightSector = sec->Index();
+	surf.lightList = -1;
+	surf.lightmapPage = -1;
+	surf.normal[2] = h == sector_t::ceiling ? -1.f : 1.f;
+	EndSurface(surf, sub);
+	Out->Stats.skyCaps++;
+}
 
 //==========================================================================
 //
@@ -447,6 +668,8 @@ void Baker::ProcessSides()
 	for (auto &g : Out->SideFFGroup) g = ~0u;
 	Out->SectorFFGroup.Resize(Level->sectors.Size());
 	for (auto &g : Out->SectorFFGroup) g = ~0u;
+	Out->SideSkyOwned.Resize(Level->sides.Size());
+	for (auto &o : Out->SideSkyOwned) o = 0;
 
 	for (auto &side : Level->sides)
 	{
@@ -508,7 +731,36 @@ void Baker::ProcessSides()
 				BakeWall(w);
 		}
 		for (auto &w : mh.translucent) Out->TranslucentWalls.Push(w);
-		for (auto &w : mh.portals) Out->PortalWalls.Push(w);
+		// Sky walls (ticket 14): the levelmesh's, unless the side's sky
+		// depends on the view. Mesh mode leaves a sky plane's portal type
+		// unset (-1, HWWall::SkyPlane); SkyLine sets PORTALTYPE_SKY.
+		sector_t *rf = RealSector(Level, front), *rb = RealSector(Level, back);
+		bool skyClassic = SideSkyClassic(seg, rf, rb);
+		bool hasSky = false;
+		for (auto &w : mh.portals)
+		{
+			bool isSky = w.portaltype == PORTALTYPE_SKY ||
+				(w.portaltype == -1 && rf->GetTexture(w.portalplane) == skyflatnum && rf->ValidatePortal(w.portalplane) == nullptr);
+			if (!isSky || skyClassic)
+			{
+				Out->PortalWalls.Push(w);
+				hasSky |= isSky;
+				continue;
+			}
+			// The sky-sky door walls closed at bake: baked below, for any state.
+			int plane = w.portaltype == PORTALTYPE_SKY ? sector_t::ceiling : w.portalplane;
+			if (plane == sector_t::ceiling ? SkySkyUpper(seg, rf, rb) : SkySkyLower(seg, rf, rb)) continue;
+			BakeSkyWall(w, rf, rb);
+		}
+		if (skyClassic)
+		{
+			if (hasSky) Out->Stats.skyClassicSides++;
+		}
+		else
+		{
+			BakeSkyClosedWalls(seg, rf, rb);
+			Out->SideSkyOwned[side.Index()] = 1;
+		}
 		for (auto &m : mh.upper) Out->UpperMissing.Push(m);
 		for (auto &m : mh.lower) Out->LowerMissing.Push(m);
 		mh.list.Clear();
@@ -1636,6 +1888,7 @@ void Baker::ProcessFlats()
 					float alpha = portal ? (float)sec.GetAlpha(h) : 1.f - sec.GetReflect(h);
 					if (sky || portal || sec.GetReflect(h) > 0)
 						Out->PortalFlats.Push({ sub, &sec, nullptr, h });
+					if (sky && !portal && !sec.GetHeightSec()) BakeSkyCap(sub, &sec, h);
 					if (sky || alpha == 0.f) continue;
 					auto tex = TexMan.GetGameTexture(texid, true);
 					if (!tex || !tex->isValid())
@@ -1707,6 +1960,7 @@ void Baker::ComputeOwnership()
 
 	for (auto &surf : Out->Surfaces)
 	{
+		if (surf.flags & LMSF_SKY) continue;	// owned per side (SideSkyOwned), drawn by the sky portals
 		uint8_t bit = (surf.flags & LMSF_DEFERRED) ? HAS_DEFERRED : HAS_MESH;
 		if (surf.flags & LMSF_3DFLOOR) groups[surf.sideRef - groupBase] |= bit;
 		else if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL) tiers[surf.sideRef] |= bit;
@@ -1714,6 +1968,7 @@ void Baker::ComputeOwnership()
 	}
 	for (auto &surf : Out->Surfaces)
 	{
+		if (surf.flags & LMSF_SKY) continue;
 		if (surf.flags & LMSF_DEFERRED)
 		{
 			Out->Stats.deferredSurfaces++;
@@ -1914,6 +2169,8 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);
 	Printf("LevelMeshBake %s: 3D lights %u, lit surfaces %u, banded walls %u (band surfaces %u, left classic %u, unmatched plane %u); edge-clamped tiers %u\n", mapname,
 		s.lights3D, s.light3DSurfaces, s.bandedWalls, s.bandSurfaces, s.bandsDeferred, s.bandPlaneUnmatched, s.edgeClamped);
+	Printf("LevelMeshBake %s: sky: %u walls (%u sky-sky door walls), %u caps, %u sources; %u sides left classic\n", mapname,
+		s.skyWalls, s.skyClosedWalls, s.skyCaps, SkySources.Size(), s.skyClassicSides);
 	Printf("LevelMeshBake %s: polyobjects %u, baked %u (%u wall surfaces); classic: by sector %u, by wall %u\n", mapname,
 		s.polyobjs, s.polyobjsBaked, s.polySurfaces, s.polyClassicSectors, s.polyClassicWalls);
 	Printf("LevelMeshBake %s: 3D-floor groups %u (deferred at bake %u), watches %u; opaque 3D planes never drawn %u\n", mapname, s.ffGroups, s.ffGroupsDeferred, s.ffWatches, s.ffFlatsNotPicked);
@@ -2094,6 +2351,35 @@ CCMD(lm_bakestats)
 		return;
 	}
 	primaryLevel->levelMeshBake->PrintStats(primaryLevel->MapName.GetChars());
+}
+
+// Debug: the sky wall surfaces the bake made for a side, with their z now.
+CCMD(lm_skyside)
+{
+	auto bake = primaryLevel ? primaryLevel->levelMeshBake : nullptr;
+	if (bake == nullptr || argv.argc() < 2) return;
+	int side = atoi(argv[1]);
+	Printf("side %d: sky owned %d\n", side, side >= 0 && unsigned(side) < bake->SideSkyOwned.Size() ? bake->SideSkyOwned[side] : -1);
+	if (side >= 0 && unsigned(side) < primaryLevel->sides.Size())
+	{
+		line_t *line = primaryLevel->sides[side].linedef;
+		Printf(" tiers owned %d %d %d; line %d portaltransferred %u (portal %s)\n", bake->SideTierOwned[side * 3], bake->SideTierOwned[side * 3 + 1],
+			bake->SideTierOwned[side * 3 + 2], line->Index(), line->portaltransferred, line->GetTransferredPortal() ? "yes" : "no");
+	}
+	for (unsigned i = 0; i < bake->SkySurfaceSide.Size(); i++)
+	{
+		if (bake->SkySurfaceSide[i] != side) continue;
+		auto &surf = bake->Surfaces[bake->SkySurfaceIndex[i]];
+		auto &src = bake->SkySources[surf.sideRef];
+		Printf(" surface %u flags %x source %u (sector %u plane %u color %u) vRef %x", bake->SkySurfaceIndex[i], surf.flags, surf.sideRef, src.sector, src.plane, src.colorSector, surf.vRef);
+		if (!bake->GeometryReleased)
+			for (uint32_t k = 0; k < surf.numVertices; k++)
+			{
+				auto &v = bake->Vertices[surf.firstVertex + k];
+				Printf(" (%g %g %g)", v.x, v.y, bake->VertexZ(primaryLevel, v));
+			}
+		Printf("\n");
+	}
 }
 
 CCMD(lm_dumpobj)

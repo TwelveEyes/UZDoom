@@ -19,6 +19,10 @@
 ** contiguous index range. The index buffer is rewritten in cluster order and
 ** the surfaces' index ranges follow it.
 **
+** Sky surfaces (LMSF_SKY) reach z +-32768: in a cluster with other surfaces
+** they would keep its box from ever being occluded. They are clustered on
+** their own after the BSP walk, in BSP leaf order.
+**
 ** A baked polyobject's walls (SurfaceLeaf -2 - polyobject) are no BSP leaf's:
 ** each polyobject gets clusters of its own after the BSP walk, so its
 ** clusters' boxes can follow it (LevelMeshBake::PolyClusterStart).
@@ -43,6 +47,7 @@ namespace
 
 uint32_t SurfaceBucket(const LevelMeshSurface &surf)
 {
+	if (surf.flags & LMSF_SKY) return LM_Bucket(LMP_SKY, false);
 	if (surf.flags & LMSF_DEFERRED) return LMB_DEFERRED;
 	return LM_Bucket((surf.flags & LMSF_PROGRAMMASK) >> LMSF_PROGRAMSHIFT, (surf.flags & LMSF_MASKED) != 0);
 }
@@ -296,6 +301,7 @@ struct ClusterBuilder
 			}
 		}
 		auto isPoly = [&](unsigned s) { int leaf = Bake->SurfaceLeaf[s]; return leaf <= -2 && unsigned(-2 - leaf) < npoly; };
+		auto isSky = [&](unsigned s) { return (surfaces[s].flags & LMSF_SKY) != 0; };
 
 		// Surfaces without a reachable leaf: the BSP leaf at their centre.
 		for (unsigned s = 0; s < nsurf; s++)
@@ -323,7 +329,7 @@ struct ClusterBuilder
 		for (auto &v : LeafTris) v = 0;
 		for (unsigned s = 0; s < nsurf; s++)
 		{
-			if (isPoly(s)) continue;
+			if (isPoly(s) || isSky(s)) continue;
 			int leaf = Bake->SurfaceLeaf[s];
 			LeafStart[leaf + 1]++;
 			LeafTris[leaf] += surfaces[s].numIndices / 3;
@@ -334,7 +340,20 @@ struct ClusterBuilder
 			TArray<uint32_t> fill(nleaf, true);
 			for (unsigned i = 0; i < nleaf; i++) fill[i] = LeafStart[i];
 			for (unsigned s = 0; s < nsurf; s++)
-				if (!isPoly(s)) LeafSurfaces[fill[Bake->SurfaceLeaf[s]]++] = s;
+				if (!isPoly(s) && !isSky(s)) LeafSurfaces[fill[Bake->SurfaceLeaf[s]]++] = s;
+		}
+		// Sky surfaces per leaf (CSR), in surface order.
+		TArray<uint32_t> skyStart(nleaf + 1, true), skySurfaces;
+		for (auto &v : skyStart) v = 0;
+		for (unsigned s = 0; s < nsurf; s++)
+			if (isSky(s)) skyStart[Bake->SurfaceLeaf[s] + 1]++;
+		for (unsigned i = 0; i < nleaf; i++) skyStart[i + 1] += skyStart[i];
+		skySurfaces.Resize(skyStart[nleaf]);
+		{
+			TArray<uint32_t> fill(nleaf, true);
+			for (unsigned i = 0; i < nleaf; i++) fill[i] = skyStart[i];
+			for (unsigned s = 0; s < nsurf; s++)
+				if (isSky(s)) skySurfaces[fill[Bake->SurfaceLeaf[s]]++] = s;
 		}
 
 		// Vertex z at the load heights.
@@ -376,6 +395,55 @@ struct ClusterBuilder
 				EmitGroup(LeafTris[i] > Budget);
 			}
 		}
+		// Sky: leaves in BSP order (the tree's leaf order, then any leaf
+		// outside it), cut into budget-sized clusters.
+		{
+			TArray<uint32_t> order;
+			TArray<uint8_t> seen(nleaf, true);
+			memset(seen.Data(), 0, nleaf);
+			if (Level->nodes.Size() > 0)
+			{
+				TArray<void *> stack;
+				stack.Push(Level->HeadNode());
+				while (stack.Size())
+				{
+					void *child = stack.Last();
+					stack.Pop();
+					if (IsLeaf(child))
+					{
+						int leaf = Leaf(child)->Index();
+						if (!seen[leaf]) { seen[leaf] = 1; order.Push(leaf); }
+					}
+					else
+					{
+						stack.Push(Node(child)->children[1]);
+						stack.Push(Node(child)->children[0]);
+					}
+				}
+			}
+			for (unsigned i = 0; i < nleaf; i++)
+				if (!seen[i]) order.Push(i);
+			Gather.Clear();
+			uint32_t tris = 0;
+			for (uint32_t leaf : order)
+			{
+				for (uint32_t k = skyStart[leaf]; k < skyStart[leaf + 1]; k++)
+				{
+					uint32_t s = skySurfaces[k];
+					uint32_t n = surfaces[s].numIndices / 3;
+					if (Gather.Size() && tris + n > Budget)
+					{
+						EmitGroup(false);
+						Gather.Clear();
+						tris = 0;
+					}
+					Gather.Push(s);
+					tris += n;
+				}
+			}
+			EmitGroup(tris > Budget);
+		}
+
 		Bake->PolyClusterStart.Resize(npoly + 1);
 		for (unsigned i = 0; i < npoly; i++)
 		{

@@ -505,7 +505,7 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername
 VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passType, int program)
 {
 	static_assert(int(LMP_DEFAULT) == int(SHADER_Default) && int(LMP_WARP1) == int(SHADER_Warp1) && int(LMP_WARP2) == int(SHADER_Warp2), "levelmesh programs are shader indices");
-	if (program < 0 || program >= int(LMP_COUNT)) program = LMP_DEFAULT;
+	if (program < 0 || program >= int(LMP_COUNT) || program == int(LMP_SKY)) program = LMP_DEFAULT;	// sky: depth / stencil only
 	auto &prog = mLevelMeshShaders[program][alphatest ? 1 : 0][passType];
 	if (!prog.frag)
 	{

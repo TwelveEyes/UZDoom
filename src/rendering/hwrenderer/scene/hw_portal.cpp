@@ -32,6 +32,10 @@
 
 void SetPlaneTextureRotation(FRenderState& state, HWSectorPlane* plane, FGameTexture* texture);
 
+// Debug: 0 skips the levelmesh sky surfaces in the sky portals while their
+// classic lines stay skipped (the negative control of the sky A/B).
+CVAR(Bool, lm_skydraw, true, CVAR_NOSAVE)
+
 //-----------------------------------------------------------------------------
 //
 // StartFrame
@@ -217,11 +221,29 @@ void HWPortal::DrawPortalStencil(FRenderState &state, int pass)
 
 	}
 
+	// Levelmesh sky: its surfaces of this sky, plus the lines it does not own.
+	bool lmSky = lmSkyConfig != 0 && lmDrawInfo != nullptr;
+	bool classicLeft = !lmSky;
+	bool first = true;
 	for (unsigned int i = 0; i < mPrimIndices.Size(); i += 2)
 	{
-		state.Draw(DT_TriangleFan, mPrimIndices[i], mPrimIndices[i + 1], i == 0);
+		if (lmSky && i / 2 < lmSkip.Size() && lmSkip[i / 2]) continue;
+		state.Draw(DT_TriangleFan, mPrimIndices[i], mPrimIndices[i + 1], first);
+		first = false;
+		classicLeft = true;
 	}
-	if (NeedCap() && lines.Size() > 1)
+	if (lmSky && lm_skydraw)
+	{
+		// Before the scene (RenderFirstSkyPortal without a stencil) the
+		// levelmesh has not culled yet: it draws this pass ahead of its
+		// opaque buckets (LevelMeshView::firstSky).
+		if (lmDrawInfo->lmSkyPending)
+		{
+			if (pass == STP_DepthRestore) lmDrawInfo->lmFirstSky = lmSkyConfig;
+		}
+		else screen->DrawLevelMeshSky(lmSkyConfig, state);
+	}
+	if (NeedCap() && lines.Size() > 1 && classicLeft)
 	{
 		// The cap's depth handling needs special treatment so that it won't block further portal caps.
 		if (pass == STP_DepthRestore) state.SetDepthRange(1, 1);

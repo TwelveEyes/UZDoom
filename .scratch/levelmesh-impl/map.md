@@ -281,7 +281,7 @@ are included.
 | 25 | Polyobject origin subsectors baked as map-wide flats (citadel z-fighting) | task | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–13 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–14 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -455,3 +455,14 @@ ticket file, and decisions that change this map are written back here, under Dec
   - A polyobject outside its bake sector (subsector links) is `LMTS_DEFERRED` and drawn
     classic; so is one across sectors or in heightsec / 3D-floor sectors at bake.
   - Test map `tools/abtest/make_polytest.py`. Debug cvars: `lm_polyobjs`, `lm_polybox`.
+- 2026-10-17: ticket 14 resolved → sky walls and caps are levelmesh surfaces (`LMSF_SKY`,
+  `LMP_SKY` bucket, clusters of their own, always culled in phase 1).
+  - Sky-sky door walls are baked conditionally (`LMSF_SKYCLOSED`).
+  - The classic `HWSkyPortal`s still pick the visible skies and their order; each draws the
+    levelmesh sky surfaces of its configuration (`DFrameBuffer::DrawLevelMeshSky`;
+    `LMBIND_SKYSOURCES` maps sky sources to configurations each frame) instead of its lines.
+    The portal before the scene defers its depth pass into the levelmesh draw
+    (`LevelMeshView::firstSky`).
+  - Horizon, heightsec and skybox-wall sides keep the classic sky.
+  - Test map `tools/abtest/make_skytest.py`; `make_demo.py` `pitch:` steps.
+  - Debug cvars: `lm_sky`, `lm_skydraw`, `lm_skylog`, `lm_skyside`.

@@ -99,6 +99,7 @@ public:
 	bool LevelMeshTextureReady(int id) override;
 	void PrintLevelMeshStats() override;
 	bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) override;
+	bool DrawLevelMeshSky(uint32_t config, FRenderState &state) override;
 	bool GetLevelMeshStats(LevelMeshPerfStats &stats) override;
 	void UpdateShadowMap() override;
 	void SetSaveBuffers(bool yes) override;

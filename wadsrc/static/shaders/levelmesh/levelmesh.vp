@@ -234,6 +234,21 @@ void main()
 	// The classic path draws this surface for now (LMTS_DEFERRED): every
 	// vertex outside the clip volume, so its triangles are clipped away.
 	if (LM_StateDeferred(surf)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+	// Sky walls and caps: only in the draw of their sky configuration
+	// (DrawLevelMeshSky / the first sky portal's depth pass); a sky-sky door
+	// wall only while the back sector is closed (HWWall::SkyTop: ceiling
+	// at or below the floor).
+	if ((surf.flags & LMSF_SKY) != 0u)
+	{
+		uint skyConfig = (uint(uLevelMeshFlags) >> LMVF_SKYSHIFT) & 0xffffu;
+		bool show = skyConfig != 0u && lmSkySources[surf.sideRef] == skyConfig;
+		if (show && (surf.flags & LMSF_SKYCLOSED) != 0u)
+		{
+			LMSectorState back = lmSectors[surf.vRef >> 1];
+			show = LM_PlaneZ(back.planes[1], v.x, v.y) <= LM_PlaneZ(back.planes[0], v.x, v.y);
+		}
+		if (!show) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+	}
 
 	if (uClipHeightDirection != 0.0) // clip planes used for reflective flats
 	{

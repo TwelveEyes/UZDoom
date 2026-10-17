@@ -167,6 +167,11 @@ void main()
 	if (gl_LocalInvocationIndex == 0u)
 	{
 		uint prev = visibility[ci];
+		// Sky clusters (only sky surfaces, LMP_SKY) always go in the first
+		// phase: the sky portal drawn before the scene puts them into depth
+		// ahead of every opaque bucket, as the classic writes its sky walls
+		// before the scene.
+		if (c.bucketMask == (1u << LMB_SKY)) prev = 1u;
 		bool draw = false;
 		if (phase == LMPHASE_FIRST)
 		{

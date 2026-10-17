@@ -94,6 +94,13 @@ public:
 	int planesused = 0;
 	float zshift = 1.0f;	// HWPlaneMirrorPortal::DrawPortalStencil() z-fights with flats even at a distance of 32000 map units unless zshift >= 1.0
 	HWFlat flat;
+	// Levelmesh sky (ticket 14; HWSkyPortal only): the sky configuration
+	// whose levelmesh sky surfaces are this portal's stencil geometry
+	// (0 = none), the lines the levelmesh draws instead (skipped here), and
+	// the draw info that collects the configuration drawn before the scene.
+	uint32_t lmSkyConfig = 0;
+	TArray<uint8_t> lmSkip;
+	HWDrawInfo *lmDrawInfo = nullptr;
 
 	HWPortal(FPortalSceneState *s, bool local = false) : mState(s), boundingBox(false)
 	{

@@ -146,7 +146,16 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   --set-b 'r_skymode 1'` for the other mode.
 
   Before ticket 14 (the classic draws the sky on both sides): MAP01 / MAP02 / MAP03 pass, 0 /
-  0 / 0 of 173 ticks failing (run `20261016T223301Z-ab`).
+  0 / 0 of 173 ticks failing (run `20261016T223301Z-ab`). With ticket 14: 0 / 1 / 0 (MAP02's is a
+  4-px speck; run `20261017T001759Z-ab`).
+  - isolate the sky change: `--set-a 'gl_uselevelmesh 1' --set-a 'lm_sky 0'` (the classic sky
+    walls) against the default. Negative control: `--set-b 'lm_skydraw 0'` (the levelmesh skips
+    its sky surfaces but the classic copies stay skipped) fails 149 of 173 ticks on MAP01.
+  - stencil path: add `gl_no_skyclear 1` to both sides (every sky portal through the stencil;
+    the default draws the main sky before the scene without one).
+  - `lm_skylog 1` prints each main view's sky portals, skipped lines and sky sources (`2` also
+    the classic lines); `lm_skyside N` lists the bake's sky walls of side N (with
+    `lm_keepgeometry 1`: their vertices).
 - **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
   with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
   normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped

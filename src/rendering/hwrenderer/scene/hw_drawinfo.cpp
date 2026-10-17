@@ -67,6 +67,11 @@ CVAR(Int, lm_drawmode, LMDRAW_COMPACT, CVAR_NOSAVE)
 // Debug: 0 draws every levelmesh surface with the fullbright render state
 // instead of its resolved shading.
 CVAR(Bool, lm_shading, true, CVAR_NOSAVE)
+// Debug: the levelmesh draws the sky portals' stencil geometry (ticket 14; 0
+// keeps the classic sky walls).
+CVAR(Bool, lm_sky, true, CVAR_NOSAVE)
+// Debug: print the levelmesh sky mapping of every main view.
+CVAR(Int, lm_skylog, 0, CVAR_NOSAVE)
 CVAR(Float, gl_mask_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Float, gl_mask_sprite_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
@@ -632,7 +637,11 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 {
 	auto bake = Level->levelMeshBake;
-	if (!lm_draw || bake == nullptr || outer != nullptr || !gl_texture || !screen->LevelMeshResident(bake->Id)) return false;
+	if (!lm_draw || bake == nullptr || outer != nullptr || !gl_texture || !screen->LevelMeshResident(bake->Id))
+	{
+		lmSkyPending = false;
+		return false;
+	}
 
 	LevelMeshView view;
 	VSMatrix viewProj = VPUniforms.ProjectionMatrix;
@@ -645,6 +654,12 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	LevelMeshShading shading;
 	LevelMesh_FillShading(this, shading);
 	view.shading = &shading;
+	if (lmSkyPending)
+	{
+		view.skySources = lmSkySources.Data();
+		view.numSkySources = lmSkySources.Size();
+		view.firstSky = lmFirstSky;
+	}
 
 	FColormap cm;
 	cm.Clear();
@@ -663,11 +678,134 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	state.SetEffect(EFF_NONE);
 	state.SetLightIndex(-1);
 
-	if (!screen->DrawLevelMesh(view, state)) return false;
+	bool drawn = screen->DrawLevelMesh(view, state);
+	if (lmSkyPending)
+	{
+		lmSkyPending = false;
+		// Not drawn: the sky portals still to come draw their classic lines.
+		if (!drawn)
+			for (auto p : Portals) p->lmSkyConfig = 0;
+	}
+	if (!drawn) return false;
 	rendered_levelmesh++;
 	for (int list : { GLDL_PLAINWALLS, GLDL_PLAINFLATS, GLDL_MASKEDWALLS, GLDL_MASKEDFLATS, GLDL_MASKEDWALLSOFS })
 		drawlists[list].RemoveLevelMeshOwned(bake);
 	return true;
+}
+
+//-----------------------------------------------------------------------------
+//
+// PrepareLevelMeshSky
+//
+// Ticket 14. The classic walk still decides which skies are visible: every
+// HWSkyPortal it built is one sky configuration. Each sky source of the bake
+// gets the configuration whose HWSkyInfo it produces now (HWWall::SkyPlane:
+// its sector plane, the sector's sky transfer, the wall's fade color), so
+// the portal draws the levelmesh sky surfaces of its sky as its stencil
+// geometry, and skips its own lines of the sides the bake owns. A sky the
+// classic did not see this frame stays hidden in the levelmesh too.
+//
+//-----------------------------------------------------------------------------
+
+void HWDrawInfo::PrepareLevelMeshSky(FRenderState &state)
+{
+	lmSkyPending = false;
+	lmFirstSky = 0;
+	auto bake = Level->levelMeshBake;
+	// The main view only (the levelmesh draws no other); a stencil before
+	// the scene (out-of-body views) would need the levelmesh's cull first.
+	if (!lm_sky || !lm_draw || bake == nullptr || outer != nullptr || !gl_texture || Viewpoint.bDoOob ||
+		!screen->LevelMeshResident(bake->Id) || bake->SkySources.Size() == 0) return;
+
+	TArray<HWSkyPortal *> skies;
+	for (auto p : Portals)
+	{
+		auto sky = dynamic_cast<HWSkyPortal *>(p);
+		if (sky == nullptr || sky->GetHWPortalType() != HWP_SKY || sky->origin == nullptr) continue;
+		skies.Push(sky);
+		p->lmSkyConfig = skies.Size();
+		p->lmDrawInfo = this;
+		p->lmSkip.Resize(p->lines.Size());
+		for (unsigned i = 0; i < p->lines.Size(); i++)
+		{
+			seg_t *seg = p->lines[i].seg;
+			unsigned s = seg && seg->sidedef ? seg->sidedef->Index() : ~0u;
+			p->lmSkip[i] = s < bake->SideSkyOwned.Size() && bake->SideSkyOwned[s];
+		}
+	}
+
+	// Sources with the same inputs share the HWSkyInfo.
+	struct Key
+	{
+		int tex0, tex1, transfer;
+		uint32_t fade;
+		uint32_t config;
+	};
+	TArray<Key> cache;
+	lmSkySources.Resize(bake->SkySources.Size());
+	for (unsigned i = 0; i < bake->SkySources.Size(); i++)
+	{
+		auto &src = bake->SkySources[i];
+		sector_t *sec = &Level->sectors[src.sector];
+		PalEntry fade = Level->sectors[src.colorSector].Colormap.FadeColor;
+		Key k = { sec->planes[src.plane].skytexture[0].GetIndex(), sec->planes[src.plane].skytexture[1].GetIndex(), sec->skytransfer, uint32_t(fade), 0 };
+		uint32_t config = ~0u;
+		for (auto &c : cache)
+		{
+			if (c.tex0 == k.tex0 && c.tex1 == k.tex1 && c.transfer == k.transfer && c.fade == k.fade)
+			{
+				config = c.config;
+				break;
+			}
+		}
+		if (config == ~0u)
+		{
+			HWSkyInfo info;
+			info.init(this, sec, src.plane, sec->skytransfer, fade);
+			config = 0;
+			for (unsigned j = 0; j < skies.Size(); j++)
+			{
+				if (*skies[j]->origin == info)
+				{
+					config = j + 1;
+					break;
+				}
+			}
+			k.config = config;
+			cache.Push(k);
+		}
+		lmSkySources[i] = config;
+	}
+	lmSkyPending = true;
+	if (lm_skylog)
+	{
+		FString msg;
+		for (unsigned j = 0; j < skies.Size(); j++)
+		{
+			unsigned skipped = 0, sources = 0;
+			for (auto k : skies[j]->lmSkip) skipped += k;
+			for (auto c : lmSkySources) sources += c == j + 1;
+			msg.AppendFormat(" [%u: lines %u skipped %u sources %u tex %s]", j + 1, skies[j]->lines.Size(), skipped, sources,
+				skies[j]->origin->texture[0] ? skies[j]->origin->texture[0]->GetName().GetChars() : "-");
+		}
+		unsigned unmapped = 0;
+		for (auto c : lmSkySources) unmapped += c == 0;
+		Printf("LMSKY portals %u%s; unmapped sources %u of %u\n", skies.Size(), msg.GetChars(), unmapped, lmSkySources.Size());
+		if (lm_skylog > 1)
+		{
+			for (auto sky : skies)
+			{
+				for (auto &l : sky->lines)
+				{
+					seg_t *seg = l.seg;
+					Printf("LMSKY  line side %d linedef %d front %d back %d z %.1f..%.1f / %.1f..%.1f xy %.0f,%.0f-%.0f,%.0f flags %x\n",
+						seg && seg->sidedef ? seg->sidedef->Index() : -1, seg && seg->linedef ? seg->linedef->Index() : -1,
+						l.frontsector ? l.frontsector->sectornum : -1, l.backsector ? l.backsector->sectornum : -1,
+						l.zbottom[0], l.ztop[0], l.zbottom[1], l.ztop[1], l.glseg.x1, l.glseg.y1, l.glseg.x2, l.glseg.y2, l.flags);
+				}
+			}
+		}
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -1127,6 +1265,7 @@ void HWDrawInfo::DrawScene(int drawmode)
 	auto& RenderState = *screen->RenderState();
 
 	RenderState.SetDepthMask(true);
+	PrepareLevelMeshSky(RenderState);
 	if (!gl_no_skyclear) portalState.RenderFirstSkyPortal(recursion, this, RenderState);
 
 	RenderScene(RenderState);

@@ -152,6 +152,8 @@ layout(set = LM_SET, binding = LMBIND_PLANEXFORM, std430) buffer readonly LMPlan
 layout(set = LM_SET, binding = LMBIND_TEXTURETABLE, std430) buffer readonly LMTextureBuffer { LMTextureEntry lmTextures[]; };
 layout(set = LM_SET, binding = LMBIND_LIGHTS3D, std430) buffer readonly LMLight3DBuffer { LMLight3D lmLights3D[]; };
 layout(set = LM_SET, binding = LMBIND_POLYOBJS, std430) buffer readonly LMPolyobjBuffer { LMPolyobj lmPolyobjs[]; };
+// Per sky source: the sky configuration it belongs to this frame (LevelMeshView::skySources).
+layout(set = LM_SET, binding = LMBIND_SKYSOURCES, std430) buffer readonly LMSkySourceBuffer { uint lmSkySources[]; };
 #ifndef LM_RESOLVE_WRITER
 layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolvedBuffer { LMResolved lmResolved[]; };
 #endif

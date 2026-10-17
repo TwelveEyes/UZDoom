@@ -27,3 +27,8 @@ sheet RUN COMBO TICK` and the game-state set-diff (`--gamestate`).
   PIRATES_MAP58 150 960 360`). Identical with `lm_3dfloors 0`, so not 3D floors. Same
   pattern as the regions above: the classic leaves geometry out (clipper / sky) and the
   levelmesh draws it, or the reverse.
+- 2026-10-17 (from 14): with the levelmesh drawing the sky portals' geometry, the remaining
+  sky-region diffs on DOOM2 MAP01 (ticks 2010–2190, camera outside the map), SOS MAP12 (ticks
+  1410–1500) and Pirates MAP43 tick 120 (dark blocks above the cliffs) show geometry the classic
+  leaves out where its sky shows. No sky wall covers them, so it is this ticket's pattern, not a
+  sky rule.

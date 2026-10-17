@@ -64,7 +64,7 @@ constexpr size_t MIN_RING_SIZE = 256 * 1024;
 const char *BufferName(int b)
 {
 	static const char *names[] = { "vertices", "indices", "surfaces", "clusters", "cluster sectors", "cluster surfaces", "sector state", "side state", "plane xform", "texture table",
-		"resolved", "shading", "3D lights", "polyobjects" };
+		"resolved", "shading", "3D lights", "polyobjects", "sky sources" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "buffer names out of sync");
 	return names[b];
 }
@@ -168,11 +168,11 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LM_SET %d\n#define LM_TEXTURE_SET %d\n", lmSet, textureSet);
 	d << "#define LM_MATERIAL_LOCATION 15\n";	// past the generated varyings
 	static const char *names[] = { "VERTICES", "INDICES", "SURFACES", "CLUSTERS", "CLUSTERSECTORS", "CLUSTERSURFACES",
-		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING", "LIGHTS3D", "POLYOBJS" };
+		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING", "LIGHTS3D", "POLYOBJS", "SKYSOURCES" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "binding names out of sync");
 	for (int b = 0; b < LMBIND_NUMBUFFERS; b++) d.AppendFormat("#define LMBIND_%s %d\n", names[b], b);
 	d.AppendFormat("#define LMBIND_SAMPLERS %d\n#define NUMSAMPLERS %d\n", (int)LMBIND_SAMPLERS, (int)NUMSAMPLERS);
-	d.AppendFormat("#define LMB_COUNT %d\n#define LMB_DRAWN %uu\n", (int)LMB_COUNT, (unsigned)LMB_DRAWN);
+	d.AppendFormat("#define LMB_COUNT %d\n#define LMB_DRAWN %uu\n#define LMB_SKY %uu\n", (int)LMB_COUNT, (unsigned)LMB_DRAWN, (unsigned)LM_Bucket(LMP_SKY, false));
 	d.AppendFormat("#define LM_NOPLANE 0x%xu\n#define LMV_REFMASK 0x%xu\n", LM_NOPLANE, (unsigned)LMV_REFMASK);
 	d.AppendFormat("#define LMV_ROLESHIFT %uu\n#define LMV_TOP %uu\n", (unsigned)LMV_ROLESHIFT, (unsigned)LMV_TOP);
 	d.AppendFormat("#define LMSF_KINDMASK %uu\n#define LMSK_WALL %uu\n", (unsigned)LMSF_KINDMASK, (unsigned)LMSK_WALL);
@@ -189,6 +189,7 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d.AppendFormat("#define LMTE_TEXFMASK 0x%xu\n#define LMTE_FULLBRIGHT 0x%xu\n", (unsigned)LMTE_TEXFMASK, (unsigned)LMTE_FULLBRIGHT);
 	d.AppendFormat("#define LMSF_STATETEXTURE %uu\n#define LMTS_DEFERRED %uu\n", (unsigned)LMSF_STATETEXTURE, (unsigned)LMTS_DEFERRED);
 	d.AppendFormat("#define LMSF_3DFLOOR %uu\n#define LMSF_POLYOBJ %uu\n", (unsigned)LMSF_3DFLOOR, (unsigned)LMSF_POLYOBJ);
+	d.AppendFormat("#define LMSF_SKY %uu\n#define LMSF_SKYCLOSED %uu\n#define LMVF_SKYSHIFT %u\n", (unsigned)LMSF_SKY, (unsigned)LMSF_SKYCLOSED, (unsigned)LMVF_SKYSHIFT);
 	d.AppendFormat("#define LMSF_PROGRAMMASK 0x%xu\n#define LMSF_PROGRAMSHIFT %uu\n#define LMP_DEFAULT %uu\n",
 		(unsigned)LMSF_PROGRAMMASK, (unsigned)LMSF_PROGRAMSHIFT, (unsigned)LMP_DEFAULT);
 	d.AppendFormat("#define LMSD_ABSLIGHTING %uu\n#define LMSD_ABSLIGHTING_TIER %uu\n#define LMSD_NOFAKECONTRAST %uu\n",
@@ -308,6 +309,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		{ nullptr, sizeof(LevelMeshShading), 1, 0 },
 		{ data->lights3D.data, data->lights3D.size * sizeof(LevelMeshLight3D), data->lights3D.size, 0 },
 		{ data->polyobjs.data, data->polyobjs.size * sizeof(LevelMeshPolyobj), data->polyobjs.size, 0 },
+		{ nullptr, data->numSkySources * sizeof(uint32_t), data->numSkySources, 0 },
 	};
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();
@@ -853,7 +855,7 @@ void VkLevelMesh::PrintStats()
 		if (e.layers & TEXF_Brightmap) brightmapped++;
 	}
 	FString buckets;
-	static const char *programs[] = { "default", "warp1", "warp2" };
+	static const char *programs[] = { "default", "warp1", "warp2", "sky" };
 	static_assert(sizeof(programs) / sizeof(programs[0]) == LMP_COUNT, "program names");
 	for (int b = 0; b < (int)LMB_COUNT; b++)
 	{

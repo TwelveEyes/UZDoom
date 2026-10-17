@@ -471,9 +471,8 @@ void VkLevelMeshRenderer::BuildHiZ(VulkanCommandBuffer *cmd)
 //
 //==========================================================================
 
-VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program)
+VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &t)
 {
-	const auto &t = mTarget;
 	bool cull = lm_backfacecull != 0;
 	uint64_t bits = (uint64_t)masked | ((uint64_t)t.drawBuffers << 1) | ((uint64_t)t.samples << 4) | ((uint64_t)t.depthTest << 12) |
 		((uint64_t)t.depthWrite << 13) | ((uint64_t)t.depthClamp << 14) | ((uint64_t)t.stencilTest << 15) | ((uint64_t)t.depthFunc << 16) |
@@ -593,6 +592,18 @@ void VkLevelMeshRenderer::UploadShading(VkLevelMesh *lm, VulkanCommandBuffer *cm
 
 void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, int phaseSlot)
 {
+	if (view.firstSky)
+	{
+		// HWPortal::RemoveStencil without a stencil: the portal's geometry
+		// into depth (LEqual) and alpha, ahead of the scene.
+		VkRenderState::ExternalTarget sky = mTarget;
+		sky.depthTest = true;
+		sky.depthWrite = true;
+		sky.depthFunc = 1;	// DF_LEqual
+		sky.stencilOp = 0;
+		sky.colorMask = 8;	// alpha
+		DrawSkyBucket(lm, phaseSlot, view.firstSky, sky);
+	}
 	auto state = fb->GetRenderState();
 	auto layout = lm->GetPipelineLayout();
 	PushConstants pc;
@@ -611,9 +622,9 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
 	for (int b = 0; b < (int)LMB_DRAWN; b++)
 	{
-		if (mBucketCount[b] == 0) continue;
+		if (mBucketCount[b] == 0 || (b >> 1) == (int)LMP_SKY) continue;
 		bool masked = (b & 1) != 0;
-		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(masked, b >> 1));
+		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(masked, b >> 1, mTarget));
 		// As HWDrawInfo::RenderScene: AlphaFunc(Alpha_GEqual, gl_mask_threshold).
 		pc.uAlphaThreshold = masked ? view.maskThreshold - 0.001f : -0.001f;
 		cmd->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
@@ -630,6 +641,85 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 		}
 	}
 	state->EndExternalDraw();
+}
+
+//==========================================================================
+//
+// Sky (ticket 14)
+//
+// The sky surfaces are culled with the rest but only drawn for a sky
+// configuration: by its HWSkyPortal's stencil passes (DrawSky, with the
+// render state the portal set up), or, for the configuration whose portal
+// went before the scene without a stencil, ahead of the opaque buckets of
+// each phase in the state of HWPortal::RemoveStencil's depth restore
+// (depth LEqual, written; color mask alpha only).
+//
+//==========================================================================
+
+void VkLevelMeshRenderer::UploadSkySources(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshView &view)
+{
+	VulkanBuffer *buffer = lm->GetBuffer(LMBIND_SKYSOURCES);
+	unsigned n = std::min<unsigned>(view.numSkySources, lm->GetSkySourceCount());
+	if (n == 0) return;
+	if (mSkySourceBuffer == buffer && mSkySources.size() == n && memcmp(mSkySources.data(), view.skySources, n * sizeof(uint32_t)) == 0) return;
+	mSkySources.assign(view.skySources, view.skySources + n);
+	mSkySourceBuffer = buffer;
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+	const size_t chunk = 65536 / sizeof(uint32_t);	// vkCmdUpdateBuffer limit
+	for (size_t i = 0; i < n; i += chunk)
+	{
+		size_t count = std::min<size_t>(chunk, n - i);
+		cmd->updateBuffer(buffer->buffer, i * sizeof(uint32_t), count * sizeof(uint32_t), view.skySources + i);
+	}
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
+}
+
+void VkLevelMeshRenderer::DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t config, const VkRenderState::ExternalTarget &target)
+{
+	const int b = (int)LM_Bucket(LMP_SKY, false);
+	if (mBucketCount[b] == 0 || config == 0) return;
+	auto state = fb->GetRenderState();
+	auto layout = lm->GetPipelineLayout();
+	PushConstants pc;
+	auto cmd = state->BeginExternalDraw(layout, pc);
+	pc.uTextureMode &= 0xffff;
+	pc.uLightIndex = -1;
+	pc.uLevelMeshFlags = (int)(LMVF_FULLBRIGHT | (config << LMVF_SKYSHIFT));
+	pc.uAlphaThreshold = -0.001f;
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
+	bool compact = mDrawDrawMode == LMDRAW_COMPACT;
+	cmd->bindIndexBuffer(compact ? mCompact->buffer : lm->GetIndexBuffer()->buffer, 0, VK_INDEX_TYPE_UINT32);
+	cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(false, LMP_SKY, target));
+	cmd->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
+	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
+	uint32_t slot = phaseSlot * LMB_DRAWN + b;
+	if (compact)
+	{
+		cmd->drawIndexedIndirect(mDrawArgs->buffer, slot * stride, 1, stride);
+	}
+	else
+	{
+		VkDeviceSize offset = (2 * LMB_DRAWN + (VkDeviceSize)slot * mNumClusters) * stride;
+		vkCmdDrawIndexedIndirectCountKHR(cmd->buffer, mDrawArgs->buffer, offset, mCounters->buffer, (LMC_COMMANDS + slot) * sizeof(uint32_t),
+			std::max(mNumClusters, 1u), stride);
+	}
+	state->EndExternalDraw();
+}
+
+bool VkLevelMeshRenderer::DrawSky(uint32_t config)
+{
+	auto lm = fb->GetLevelMesh();
+	if (!lm || lm->GetId() == 0 || lm->GetId() != mLevelId || mDrawFrame != mFrame || !mCompact) return false;
+	auto ext = fb->GetRenderState()->GetExternalTarget();
+	if (!ext.depthStencil || ext.depthStencilView != fb->GetBuffers()->SceneDepthStencil.View.get()) return false;
+	DrawSkyBucket(lm, 0, config, ext);
+	if (mDrawCullMode == LMCULL_HIZ) DrawSkyBucket(lm, 1, config, ext);
+	return true;
 }
 
 void VkLevelMeshRenderer::Timestamp(VulkanCommandBuffer *cmd, int point)
@@ -681,6 +771,10 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 
 	bool resolve = view.shading != nullptr && !(view.flags & LMVF_FULLBRIGHT);
 	if (resolve) UploadShading(lm, cmd, *view.shading);
+	UploadSkySources(lm, cmd, view);
+	mDrawFrame = mFrame;
+	mDrawCullMode = view.cullMode;
+	mDrawDrawMode = view.drawMode;
 
 	// The previous draws' indirect / index reads, and the previous resolve's
 	// reads of drawn[], must finish before they are rewritten.

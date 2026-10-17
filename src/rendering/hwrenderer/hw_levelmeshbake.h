@@ -20,8 +20,9 @@
 ** re-baked when planes move.
 **
 ** View-dependent emitter output (translucent walls, portals, fog boundaries,
-** missing-texture fills, sky / portal / translucent flats) is kept in side
-** lists, not in the mesh.
+** missing-texture fills, portal / translucent flats) is kept in side lists,
+** not in the mesh. Sky walls and caps are in the mesh as depth / stencil-only
+** LMSF_SKY surfaces, drawn by the sky portals (ticket 14).
 */
 
 #pragma once
@@ -62,7 +63,9 @@ struct LevelMeshBakeStats
 	unsigned polyOriginSides = 0, polyOriginPartialSides = 0, polyOriginSubsectors = 0;
 	unsigned polyobjs = 0, polyobjsBaked = 0, polySurfaces = 0;	// polyobjects, of those in the mesh, their wall surfaces
 	unsigned polyClassicSectors = 0;			// left classic: not in one sector at bake, or a heightsec / 3D-floor / portal case
-	unsigned polyClassicWalls = 0;			// left classic: a wall the mesh cannot draw (translucent, portal, fog, deferred)
+	unsigned polyClassicWalls = 0;
+	unsigned skyWalls = 0, skyClosedWalls = 0, skyCaps = 0;	// sky surfaces (ticket 14): walls, of those sky-sky door walls, caps
+	unsigned skyClassicSides = 0;				// sides whose sky walls the classic keeps (heightsec, view-dependent rules)			// left classic: a wall the mesh cannot draw (translucent, portal, fog, deferred)
 	unsigned translucentWalls = 0, portalWalls = 0, fogWalls = 0, upperMissing = 0, lowerMissing = 0;
 	unsigned translucentFlats = 0, portalFlats = 0, untexturedFlats = 0;
 	unsigned zMismatch = 0, vMismatch = 0;		// round-trip failures beyond 1 ulp (must be 0)
@@ -86,6 +89,20 @@ struct LevelMeshBakeStats
 	unsigned ffWatches = 0;
 	unsigned ffFlatsNotPicked = 0;				// opaque 3D-floor planes the classic never draws (ProcessSector's range checks)
 	double wallMs = 0, flatMs = 0, totalMs = 0;
+};
+
+// Where a sky surface's sky comes from: the sector plane and the sector
+// whose colormap fades it (HWWall::SkyPlane: HWSkyInfo::init(sector, plane,
+// sector->skytransfer, wall colormap's fade)).
+struct LevelMeshSkySource
+{
+	uint32_t sector;
+	uint32_t plane;
+	uint32_t colorSector;
+	bool operator<(const LevelMeshSkySource &o) const
+	{
+		return sector != o.sector ? sector < o.sector : plane != o.plane ? plane < o.plane : colorSector < o.colorSector;
+	}
 };
 
 // The vertices of a cluster anchored to one plane: their z is
@@ -313,6 +330,14 @@ public:
 	TArray<DVector2> PolyLocal;
 	TArray<uint32_t> PolyClusterStart;	// per polyobject: its clusters (contiguous; CSR over the cluster indices)
 	TArray<float> PolyClusterBox;		// per cluster (4 floats, polyobject clusters only): local xy box x0, y0, x1, y1
+
+	// Sky (ticket 14): the sky sources of the sky surfaces (LMSF_SKY;
+	// LevelMeshSurface::sideRef), and per side whether the levelmesh owns
+	// its sky walls (the classic HWSkyPortal skips its own copies of them).
+	TArray<LevelMeshSkySource> SkySources;
+	TArray<uint8_t> SideSkyOwned;
+	TArray<int32_t> SkySurfaceSide;		// per sky wall surface (in order): its side (debug: lm_skyside)
+	TArray<uint32_t> SkySurfaceIndex;
 
 	uint64_t Id = 0;				// unique per bake (backend residency)
 	bool GeometryReleased = false;	// Vertices / Indices freed after the upload

@@ -55,6 +55,7 @@ enum ELevelMeshBinding
 	LMBIND_SHADING,			// LevelMeshShading of the current view
 	LMBIND_LIGHTS3D,		// LevelMeshLight3D
 	LMBIND_POLYOBJS,		// LevelMeshPolyobj
+	LMBIND_SKYSOURCES,		// per sky source: its sky configuration this frame (uint)
 	LMBIND_NUMBUFFERS,
 	LMBIND_SAMPLERS = LMBIND_NUMBUFFERS,	// sampler[NUMSAMPLERS], indexed by clamp mode
 };
@@ -112,6 +113,7 @@ public:
 	VulkanDescriptorSet *GetTextureSet() { return mTextureSet.get(); }
 	VulkanPipelineLayout *GetPipelineLayout() { return mPipelineLayout.get(); }
 	unsigned GetClusterCount() const { return mCounts[LMBIND_CLUSTERS]; }
+	unsigned GetSkySourceCount() const { return mCounts[LMBIND_SKYSOURCES]; }
 	unsigned GetIndexCount() const { return mCounts[LMBIND_INDICES]; }
 	unsigned GetBucketIndexCount(int bucket) const { return mBucketIndices[bucket]; }
 	uint64_t GetId() const { return mResident ? mId : 0; }

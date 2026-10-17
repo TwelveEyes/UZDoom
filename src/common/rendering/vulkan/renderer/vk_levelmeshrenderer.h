@@ -48,6 +48,12 @@ public:
 	// pass. False if nothing was drawn (the caller keeps the classic lists).
 	bool Draw(const LevelMeshView &view);
 
+	// Draws the sky surfaces of a sky configuration (LevelMeshView::
+	// skySources) that the last Draw's culls found visible, with the render
+	// state's current depth / stencil / color mask (an HWSkyPortal's stencil
+	// geometry). False if there is no Draw of this frame to take them from.
+	bool DrawSky(uint32_t config);
+
 	// Frame boundary: the device has waited for every earlier submit.
 	void BeginFrame() { mFrame++; }
 
@@ -86,7 +92,9 @@ private:
 	bool PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd);
 	bool PrepareHiZ(int width, int height, VkSampleCountFlagBits samples);
 	void UpdateCullSet();
-	VulkanPipeline *GetDrawPipeline(bool masked, int program);
+	VulkanPipeline *GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &target);
+	void DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t config, const VkRenderState::ExternalTarget &target);
+	void UploadSkySources(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshView &view);
 	void Cull(VulkanCommandBuffer *cmd, CullConstants &pc, uint32_t phase);
 	void Resolve(VulkanCommandBuffer *cmd);
 	void UploadShading(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshShading &shading);
@@ -126,6 +134,11 @@ private:
 	std::unique_ptr<VulkanDescriptorSet> mCullSet;
 	std::unique_ptr<LevelMeshShading> mShading;	// last uploaded shading block (null = none for this level)
 	VulkanBuffer *mShadingBuffer = nullptr;		// the LMBIND_SHADING buffer it went into
+	std::vector<uint32_t> mSkySources;			// last uploaded LMBIND_SKYSOURCES contents
+	VulkanBuffer *mSkySourceBuffer = nullptr;
+	// The last Draw: its frame and modes (DrawSky reuses its draw arguments).
+	uint64_t mDrawFrame = ~0ull;
+	int mDrawCullMode = 0, mDrawDrawMode = 0;
 
 	// Hi-Z
 	VulkanImageView *mDepthView = nullptr;	// scene depth the sets were written for

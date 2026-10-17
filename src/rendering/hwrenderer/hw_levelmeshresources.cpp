@@ -120,6 +120,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	data.planeXforms = LM_Span(xforms);
 	data.lights3D = LM_Span(lights3D);
 	data.polyobjs = LM_Span(polyobjs);
+	data.numSkySources = bake->SkySources.Size();
 	data.textureIds = LM_Span(textureIds);
 	data.translationTableSize = ntex;
 	screen->SetLevelMeshData(&data);

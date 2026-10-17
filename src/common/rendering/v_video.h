@@ -194,6 +194,10 @@ public:
 	// Draws the levelmesh for the current view into the scene (opaque and
 	// masked buckets). False = nothing drawn: the classic lists draw everything.
 	virtual bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) { return false; }
+	// Draws the sky surfaces of a sky configuration (LevelMeshView::
+	// skySources) the last DrawLevelMesh of this frame culled, with the render
+	// state's current depth / stencil / color mask. False = not drawn.
+	virtual bool DrawLevelMeshSky(uint32_t config, FRenderState &state) { return false; }
 	virtual bool GetLevelMeshStats(LevelMeshPerfStats &stats) { return false; }
 	bool allowSSBO() const
 	{

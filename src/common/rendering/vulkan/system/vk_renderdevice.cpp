@@ -578,6 +578,12 @@ bool VulkanRenderDevice::DrawLevelMesh(const LevelMeshView &view, FRenderState &
 	return mLevelMeshRenderer->Draw(view);
 }
 
+bool VulkanRenderDevice::DrawLevelMeshSky(uint32_t config, FRenderState &state)
+{
+	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get() || &state != mRenderState.get()) return false;
+	return mLevelMeshRenderer->DrawSky(config);
+}
+
 bool VulkanRenderDevice::GetLevelMeshStats(LevelMeshPerfStats &stats)
 {
 	if (!mLevelMeshRenderer || mLevelMeshRenderer->GetStats().serial == 0) return false;
