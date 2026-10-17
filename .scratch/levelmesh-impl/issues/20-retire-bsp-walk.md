@@ -42,3 +42,9 @@ Afterwards, the levelmesh render-CPU window must be independent of level size.
 - [ ] A/B regression sweep over the DOOM2 / HEXEN / HERETIC sets: no new unclassified diffs.
 
 ## Comments
+- 2026-10-17 (from 15): levelmesh portal views each end the scene render pass for their compute
+  cull, and the classic path restarts it. On myhouse MAP01 V2 (two portal views) that costs
+  ~0.8 ms `wall` p50 while the views' own GPU work is 0.15 ms. An experiment where each portal
+  view only ended the render pass reproduced the cost. With portal views known before the scene
+  (GPU discovery, the candidate list), cull them all in one compute batch ahead of the render
+  pass, and draw each from its own buffers (`VkLevelMeshRenderer::ViewBuffers`).

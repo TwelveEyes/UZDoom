@@ -281,7 +281,7 @@ are included.
 | 25 | Polyobject origin subsectors baked as map-wide flats (citadel z-fighting) | task | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–14 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–15 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -466,3 +466,15 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Horizon, heightsec and skybox-wall sides keep the classic sky.
   - Test map `tools/abtest/make_skytest.py`; `make_demo.py` `pitch:` steps.
   - Debug cvars: `lm_sky`, `lm_skydraw`, `lm_skylog`, `lm_skyside`.
+- 2026-10-17: ticket 15 resolved (transitional) → the classic portal state machine keeps
+  discovery, view setup, stencil and recursion; the levelmesh draws the scene inside each portal
+  view.
+  - Per-view buffers (`VkLevelMeshRenderer::ViewBuffers`, up to 64 portal views per frame),
+    one frustum phase per portal view, a mirrored pipeline bit.
+  - The cull is narrowed to the window's screen rectangle (`HWDrawInfo::PortalCullRect`).
+  - Portal views drawn without a stencil (`RenderFirstSkyPortal`) stay classic: sector-stack
+    coverage.
+  - GPU discovery, conditional rendering and batched portal-view culls (the render-pass-break
+    cost, ~0.8 ms on myhouse MAP01 V2) move to ticket 20.
+  - Test map `tools/abtest/make_portaltest.py`; perflog v7 `lmpv` / `lmpgpu`.
+  - Debug cvars: `lm_portals`, `lm_portaldraw`, `lm_portalrect`, `lm_portallog`.

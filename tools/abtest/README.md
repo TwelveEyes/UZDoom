@@ -156,6 +156,37 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   - `lm_skylog 1` prints each main view's sky portals, skipped lines and sky sources (`2` also
     the classic lines); `lm_skyside N` lists the bake's sky walls of side N (with
     `lm_keepgeometry 1`: their vertices).
+- **Portals (ticket 15):** `ab_manifest_portaltest.json` replays `demos/portaltest/` over
+  `wads/portaltest.wad`. `make_portaltest.py` writes both (copy the wad into the build's
+  `wads/` too). 12 separate rooms, each with one portal type and, where the portal leads
+  somewhere, its destination area north of it:
+  - a visual line portal;
+  - a rotated visual portal with floor alignment (two-sided: the classic never draws a
+    one-sided portal line with floor / ceiling alignment);
+  - linked line portals, both ways;
+  - a mirror, and two facing mirrors (recursion);
+  - stacked sectors seen from above (floor portal) and from below (ceiling portal);
+  - a skybox (the default `SkyViewpoint`);
+  - a horizon line, and an Eternity horizon portal (`Sector_SetPortal` 4: the classic shows
+    black there, it never queues that portal);
+  - a plane mirror (`floor_reflect`);
+  - a visual portal into a room with a mirror (nested).
+
+  MAP01 is plain, MAP02 has fog on every sector.
+
+  Classic against levelmesh, both maps fail many ticks with scattered single-shade specks on
+  the main view's ceilings and floors. They predate ticket 15: the same ticks fail with the
+  portal views on the classic path. Isolate the portal views instead:
+  - `--set-a 'gl_uselevelmesh 1' --set-a 'lm_portals 0'` (portal views classic) against the
+    default: MAP01 / MAP02 fail 4 / 1 of 217, specks and a delta-5 band in the plane-mirror
+    room (run `20261017T130234Z-ab`).
+  - Negative control: `--set-b 'lm_portaldraw 0'` (the levelmesh skips portal views while the
+    classic lists still drop what it owns) fails 115 of 217 on MAP01.
+  - `lm_portalrect 0` culls portal views against the whole screen instead of the window's
+    rectangle. `lm_portallog 1` prints every portal view the levelmesh draws (type, depth, cull
+    rectangle, drawn).
+  - Perflog `v7` adds `lmpv` (portal views the levelmesh drew in the frame) and `lmpgpu`
+    (their GPU ms), lagged like `lmgpu`.
 - **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
   with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
   normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped

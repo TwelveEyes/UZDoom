@@ -53,6 +53,8 @@ struct LevelMeshPerfStats
 	unsigned clusters[2] = {}, triangles[2] = {};	// drawn per phase
 	unsigned frustumCulled = 0, occluded = 0;	// clusters
 	double cullMs[2] = {}, resolveMs[2] = {}, drawMs[2] = {}, hizMs = 0, totalMs = 0;	// GPU time
+	unsigned portalViews = 0;	// portal views the levelmesh drew in that frame (ticket 15)
+	double portalMs = 0;		// their GPU time (cull + resolve + draw, summed)
 };
 extern int rendered_levelmesh;	// levelmesh draws this frame
 

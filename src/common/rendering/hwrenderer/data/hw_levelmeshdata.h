@@ -433,6 +433,15 @@ struct LevelMeshView
 	const uint32_t *skySources = nullptr;
 	unsigned numSkySources = 0;
 	uint32_t firstSky = 0;
+	// Portal views (ticket 15): a view inside a portal's stencil (line
+	// portal, mirror, sector stack, skybox), drawn after the main view of the
+	// frame with buffers of its own, frustum-culled in one phase. 'mirrored':
+	// an odd number of mirrors (the opposite front face).
+	bool portal = false;
+	bool mirrored = false;
+	// Portal views: the portal window's screen rectangle (NDC x0, y0, x1, y1)
+	// the cull narrows its frustum to; x0 > x1 = the whole screen.
+	float cullRect[4] = { 1.f, 1.f, -1.f, -1.f };
 };
 
 template<class T> struct LevelMeshSpan

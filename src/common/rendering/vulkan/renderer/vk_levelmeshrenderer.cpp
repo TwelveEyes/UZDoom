@@ -214,8 +214,8 @@ bool VkLevelMeshRenderer::CreateObjects()
 	// Sets are replaced on level / size changes (old ones go to the delete
 	// list), so the pool holds a few generations.
 	mPool = DescriptorPoolBuilder()
-		.MaxSets(256)
-		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64)
+		.MaxSets(512)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * (MaxPortalViews + 4))
 		.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 256)
 		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 256)
 		.DebugName("VkLevelMeshRenderer.Pool")
@@ -234,6 +234,9 @@ bool VkLevelMeshRenderer::CreateObjects()
 	{
 		mQueries = QueryPoolBuilder()
 			.QueryType(VK_QUERY_TYPE_TIMESTAMP, NumSlots * NumPoints)
+			.Create(dev);
+		mPortalQueries = QueryPoolBuilder()
+			.QueryType(VK_QUERY_TYPE_TIMESTAMP, NumSlots * 2 * MaxPortalViews)
 			.Create(dev);
 	}
 	mReadback = BufferBuilder()
@@ -254,16 +257,22 @@ bool VkLevelMeshRenderer::CreateObjects()
 
 bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd)
 {
-	if (mLevelId == lm->GetId() && mCullSet) return true;
+	if (mLevelId == lm->GetId() && mMain.cullSet) return true;
 
 	auto dev = fb->device.get();
 	auto deleteList = fb->GetCommands()->DrawDeleteList.get();
-	deleteList->Add(std::move(mVisibility));
-	deleteList->Add(std::move(mCounters));
-	deleteList->Add(std::move(mDrawArgs));
-	deleteList->Add(std::move(mCompact));
-	deleteList->Add(std::move(mDrawn));
-	deleteList->Add(std::move(mCullSet));
+	auto release = [&](ViewBuffers &v)
+	{
+		deleteList->Add(std::move(v.visibility));
+		deleteList->Add(std::move(v.counters));
+		deleteList->Add(std::move(v.drawArgs));
+		deleteList->Add(std::move(v.compact));
+		deleteList->Add(std::move(v.drawn));
+		deleteList->Add(std::move(v.cullSet));
+	};
+	release(mMain);
+	for (auto &v : mPortals) release(*v);
+	mPortals.clear();
 	mShading.reset();
 
 	// The material programs this level draws (warp variants on demand).
@@ -295,58 +304,95 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 	}
 	compactCount = std::max<size_t>(compactCount, 4);
 
-	mVisibility = BufferBuilder()
+	mMain.visibility = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
 		.Size(std::max(mNumClusters, 1u) * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.Visibility")
 		.Create(dev);
-	mCounters = BufferBuilder()
+	mMain.counters = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
 		.Size(LMC_TOTAL * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.Counters")
 		.Create(dev);
 	// 2 * LMB_DRAWN compaction draws, then 2 * LMB_DRAWN regions of per-cluster commands.
-	mDrawArgs = BufferBuilder()
+	mMain.drawArgs = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
 		.Size((2 * LMB_DRAWN + 2 * LMB_DRAWN * (size_t)std::max(mNumClusters, 1u)) * sizeof(VkDrawIndexedIndirectCommand))
 		.DebugName("VkLevelMeshRenderer.DrawArgs")
 		.Create(dev);
-	mDrawn = BufferBuilder()
+	mMain.drawn = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
 		.Size(std::max(mNumClusters, 1u) * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.Drawn")
 		.Create(dev);
-	mCompact = BufferBuilder()
+	mMain.compact = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
 		.Size(compactCount * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.CompactIndices")
 		.Create(dev);
 
 	// Nothing was visible "last frame": the first frame draws everything in phase 2.
-	cmd->fillBuffer(mVisibility->buffer, 0, VK_WHOLE_SIZE, 0);
-	cmd->updateBuffer(mCounters->buffer, LMC_BASE * sizeof(uint32_t), sizeof(mBucketBase), mBucketBase);
+	cmd->fillBuffer(mMain.visibility->buffer, 0, VK_WHOLE_SIZE, 0);
+	cmd->updateBuffer(mMain.counters->buffer, LMC_BASE * sizeof(uint32_t), sizeof(mBucketBase), mBucketBase);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-	UpdateCullSet();
+	UpdateCullSet(mMain);
 	return true;
 }
 
-void VkLevelMeshRenderer::UpdateCullSet()
+void VkLevelMeshRenderer::UpdateCullSet(ViewBuffers &v)
 {
-	if (!mVisibility || !mHiZView) return;
-	fb->GetCommands()->DrawDeleteList->Add(std::move(mCullSet));
-	mCullSet = mPool->allocate(mCullSetLayout.get());
-	mCullSet->SetDebugName("VkLevelMeshRenderer.CullSet");
+	if (!v.visibility || !mHiZView || !mMain.compact) return;
+	fb->GetCommands()->DrawDeleteList->Add(std::move(v.cullSet));
+	v.cullSet = mPool->allocate(mCullSetLayout.get());
+	v.cullSet->SetDebugName("VkLevelMeshRenderer.CullSet");
+	// A portal view's set binds the main view's compacted indices (unused:
+	// per-cluster commands) and Hi-Z (unused: one frustum phase).
 	WriteDescriptors()
-		.AddBuffer(mCullSet.get(), 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mVisibility.get())
-		.AddBuffer(mCullSet.get(), 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mCounters.get())
-		.AddBuffer(mCullSet.get(), 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mDrawArgs.get())
-		.AddBuffer(mCullSet.get(), 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mCompact.get())
-		.AddCombinedImageSampler(mCullSet.get(), 4, mHiZView.get(), mPointSampler.get(), VK_IMAGE_LAYOUT_GENERAL)
-		.AddBuffer(mCullSet.get(), 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mDrawn.get())
+		.AddBuffer(v.cullSet.get(), 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, v.visibility.get())
+		.AddBuffer(v.cullSet.get(), 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, v.counters.get())
+		.AddBuffer(v.cullSet.get(), 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, v.drawArgs.get())
+		.AddBuffer(v.cullSet.get(), 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (v.compact ? v.compact : mMain.compact).get())
+		.AddCombinedImageSampler(v.cullSet.get(), 4, mHiZView.get(), mPointSampler.get(), VK_IMAGE_LAYOUT_GENERAL)
+		.AddBuffer(v.cullSet.get(), 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, v.drawn.get())
 		.Execute(fb->device.get());
+}
+
+// The buffers of the next portal view of this frame (null past MaxPortalViews).
+VkLevelMeshRenderer::ViewBuffers *VkLevelMeshRenderer::PortalBuffers(VulkanCommandBuffer *cmd)
+{
+	if (mPortalViews >= MaxPortalViews) return nullptr;
+	unsigned index = mPortalViews++;
+	if (index < mPortals.size()) return mPortals[index].get();
+	auto dev = fb->device.get();
+	auto v = std::make_unique<ViewBuffers>();
+	size_t clusters = std::max(mNumClusters, 1u);
+	v->visibility = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+		.Size(clusters * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.PortalVisibility")
+		.Create(dev);
+	v->counters = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
+		.Size(LMC_TOTAL * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.PortalCounters")
+		.Create(dev);
+	// One phase: the per-cluster command regions of phase slot 0 only.
+	v->drawArgs = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
+		.Size((2 * LMB_DRAWN + LMB_DRAWN * clusters) * sizeof(VkDrawIndexedIndirectCommand))
+		.DebugName("VkLevelMeshRenderer.PortalDrawArgs")
+		.Create(dev);
+	v->drawn = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+		.Size(clusters * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.PortalDrawn")
+		.Create(dev);
+	UpdateCullSet(*v);
+	mPortals.push_back(std::move(v));
+	return mPortals.back().get();
 }
 
 //==========================================================================
@@ -414,7 +460,8 @@ bool VkLevelMeshRenderer::PrepareHiZ(int width, int height, VkSampleCountFlagBit
 		mHiZSets.push_back(std::move(set));
 	}
 	write.Execute(dev);
-	UpdateCullSet();
+	UpdateCullSet(mMain);
+	for (auto &v : mPortals) UpdateCullSet(*v);
 	return true;
 }
 
@@ -476,7 +523,7 @@ VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, c
 	bool cull = lm_backfacecull != 0;
 	uint64_t bits = (uint64_t)masked | ((uint64_t)t.drawBuffers << 1) | ((uint64_t)t.samples << 4) | ((uint64_t)t.depthTest << 12) |
 		((uint64_t)t.depthWrite << 13) | ((uint64_t)t.depthClamp << 14) | ((uint64_t)t.stencilTest << 15) | ((uint64_t)t.depthFunc << 16) |
-		((uint64_t)t.stencilOp << 20) | ((uint64_t)t.colorMask << 24) | ((uint64_t)cull << 28) | ((uint64_t)program << 32);
+		((uint64_t)t.stencilOp << 20) | ((uint64_t)t.colorMask << 24) | ((uint64_t)cull << 28) | ((uint64_t)mMirrored << 29) | ((uint64_t)program << 32);
 	PipelineKey key = { t.renderPass, bits };
 	auto &pipeline = mPipelines[key];
 	if (pipeline) return pipeline.get();
@@ -507,7 +554,8 @@ VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, c
 	// The bake keeps the classic winding (floors as the flat triangulation,
 	// ceilings reversed, walls as the classic fan): visible faces are
 	// counter-clockwise on screen (verified against lm_backfacecull 0).
-	builder.Cull(cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+	// A mirrored view (portalState.isMirrored()) flips the screen winding.
+	builder.Cull(cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, mMirrored ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
 	builder.Stencil(VK_STENCIL_OP_KEEP, op2vk[t.stencilOp], VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 0xffffffff, 0xffffffff, 0);
 	ColorBlendAttachmentBuilder blend;
 	blend.ColorWriteMask((VkColorComponentFlags)t.colorMask);
@@ -532,7 +580,7 @@ void VkLevelMeshRenderer::Cull(VulkanCommandBuffer *cmd, CullConstants &pc, uint
 	pc.phase = phase;
 	cmd->bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, mCullPipeline.get());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mCullLayout.get(), 0, fb->GetLevelMesh()->GetSet());
-	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mCullLayout.get(), 1, mCullSet.get());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mCullLayout.get(), 1, mView->cullSet.get());
 	cmd->pushConstants(mCullLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CullConstants), &pc);
 	uint32_t groups = std::max(mNumClusters, 1u);
 	uint32_t gx = std::min(groups, 65535u);
@@ -563,7 +611,7 @@ void VkLevelMeshRenderer::Resolve(VulkanCommandBuffer *cmd)
 	pc.numClusters = mNumClusters;
 	cmd->bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, mResolvePipeline.get());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mResolveLayout.get(), 0, fb->GetLevelMesh()->GetSet());
-	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mResolveLayout.get(), 1, mCullSet.get());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mResolveLayout.get(), 1, mView->cullSet.get());
 	cmd->pushConstants(mResolveLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ResolveConstants), &pc);
 	uint32_t groups = std::max(mNumClusters, 1u);
 	uint32_t gx = std::min(groups, 65535u);
@@ -617,7 +665,7 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
 	bool compact = view.drawMode == LMDRAW_COMPACT;
-	cmd->bindIndexBuffer(compact ? mCompact->buffer : lm->GetIndexBuffer()->buffer, 0, VK_INDEX_TYPE_UINT32);
+	cmd->bindIndexBuffer(compact ? mView->compact->buffer : lm->GetIndexBuffer()->buffer, 0, VK_INDEX_TYPE_UINT32);
 
 	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
 	for (int b = 0; b < (int)LMB_DRAWN; b++)
@@ -631,12 +679,12 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 		uint32_t slot = phaseSlot * LMB_DRAWN + b;
 		if (compact)
 		{
-			cmd->drawIndexedIndirect(mDrawArgs->buffer, slot * stride, 1, stride);
+			cmd->drawIndexedIndirect(mView->drawArgs->buffer, slot * stride, 1, stride);
 		}
 		else
 		{
 			VkDeviceSize offset = (2 * LMB_DRAWN + (VkDeviceSize)slot * mNumClusters) * stride;
-			vkCmdDrawIndexedIndirectCountKHR(cmd->buffer, mDrawArgs->buffer, offset, mCounters->buffer, (LMC_COMMANDS + slot) * sizeof(uint32_t),
+			vkCmdDrawIndexedIndirectCountKHR(cmd->buffer, mView->drawArgs->buffer, offset, mView->counters->buffer, (LMC_COMMANDS + slot) * sizeof(uint32_t),
 				std::max(mNumClusters, 1u), stride);
 		}
 	}
@@ -693,19 +741,19 @@ void VkLevelMeshRenderer::DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
 	bool compact = mDrawDrawMode == LMDRAW_COMPACT;
-	cmd->bindIndexBuffer(compact ? mCompact->buffer : lm->GetIndexBuffer()->buffer, 0, VK_INDEX_TYPE_UINT32);
+	cmd->bindIndexBuffer(compact ? mView->compact->buffer : lm->GetIndexBuffer()->buffer, 0, VK_INDEX_TYPE_UINT32);
 	cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(false, LMP_SKY, target));
 	cmd->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
 	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
 	uint32_t slot = phaseSlot * LMB_DRAWN + b;
 	if (compact)
 	{
-		cmd->drawIndexedIndirect(mDrawArgs->buffer, slot * stride, 1, stride);
+		cmd->drawIndexedIndirect(mView->drawArgs->buffer, slot * stride, 1, stride);
 	}
 	else
 	{
 		VkDeviceSize offset = (2 * LMB_DRAWN + (VkDeviceSize)slot * mNumClusters) * stride;
-		vkCmdDrawIndexedIndirectCountKHR(cmd->buffer, mDrawArgs->buffer, offset, mCounters->buffer, (LMC_COMMANDS + slot) * sizeof(uint32_t),
+		vkCmdDrawIndexedIndirectCountKHR(cmd->buffer, mView->drawArgs->buffer, offset, mView->counters->buffer, (LMC_COMMANDS + slot) * sizeof(uint32_t),
 			std::max(mNumClusters, 1u), stride);
 	}
 	state->EndExternalDraw();
@@ -714,9 +762,12 @@ void VkLevelMeshRenderer::DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t
 bool VkLevelMeshRenderer::DrawSky(uint32_t config)
 {
 	auto lm = fb->GetLevelMesh();
-	if (!lm || lm->GetId() == 0 || lm->GetId() != mLevelId || mDrawFrame != mFrame || !mCompact) return false;
+	if (!lm || lm->GetId() == 0 || lm->GetId() != mLevelId || mDrawFrame != mFrame || !mMain.compact) return false;
 	auto ext = fb->GetRenderState()->GetExternalTarget();
 	if (!ext.depthStencil || ext.depthStencilView != fb->GetBuffers()->SceneDepthStencil.View.get()) return false;
+	// The main view's culls (portal views never draw sky surfaces).
+	mView = &mMain;
+	mMirrored = false;
 	DrawSkyBucket(lm, 0, config, ext);
 	if (mDrawCullMode == LMCULL_HIZ) DrawSkyBucket(lm, 1, config, ext);
 	return true;
@@ -729,21 +780,108 @@ void VkLevelMeshRenderer::Timestamp(VulkanCommandBuffer *cmd, int point)
 	mSlots[mSlot].points |= 1u << point;
 }
 
-bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
+//==========================================================================
+//
+// Portal views (ticket 15): drawn inside the portal's stencil after the
+// main view of the frame, frustum-culled in one phase into buffers of their
+// own, with per-cluster commands. The main view's Hi-Z, visibility and draw
+// arguments (DrawSky) stay untouched.
+//
+//==========================================================================
+
+bool VkLevelMeshRenderer::DrawPortalView(const LevelMeshView &view)
 {
 	auto lm = fb->GetLevelMesh();
 	if (!lm || lm->GetId() == 0 || lm->GetClusterCount() == 0) return false;
+	if (mPortalViews >= MaxPortalViews) return false;
 	auto state = fb->GetRenderState();
 	auto ext = state->GetExternalTarget();
-	// The main scene only: the Hi-Z and the visibility are per view.
 	if (!ext.depthStencil || ext.depthStencilView != fb->GetBuffers()->SceneDepthStencil.View.get()) return false;
-	if (!CreateObjects()) return false;
-
 	mTarget = ext;
+	if (!BeginFrameSetup(lm, ext)) return false;
 
+	state->EndRenderPass();
+	auto cmd = fb->GetCommands()->GetDrawCommands();
+	ViewBuffers *v = PortalBuffers(cmd);
+	if (!v) return false;
+	mView = v;
+	mMirrored = view.mirrored;
+
+	bool resolve = view.shading != nullptr && !(view.flags & LMVF_FULLBRIGHT);
+	if (resolve) UploadShading(lm, cmd, *view.shading);
+	// Timed in the main view's slot of this frame.
+	auto &slot = mSlots[mSlot];
+	uint32_t query = mSlot * 2 * MaxPortalViews + 2 * slot.portalViews;
+	bool timed = mPortalQueries && slot.frame == mFrame && slot.portalViews < MaxPortalViews;
+	if (timed) cmd->writeTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mPortalQueries.get(), query);
+
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+	cmd->fillBuffer(v->counters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+	LevelMeshView pv = view;
+	pv.cullMode = view.cullMode == LMCULL_NONE ? LMCULL_NONE : LMCULL_FRUSTUM;
+	pv.drawMode = LMDRAW_CLUSTERS;
+	pv.firstSky = 0;
+	CullConstants pc = {};
+	memcpy(pc.viewProj, view.viewProj, sizeof(pc.viewProj));
+	if (view.cullRect[0] < view.cullRect[2] && view.cullRect[1] < view.cullRect[3])
+	{
+		// Clip space scaled so the window's rectangle becomes [-1, 1]: x' =
+		// sx x + tx w (column-major, rows 0 / 1 combined with row 3). The cull
+		// tests x / y against w only, so this narrows its frustum.
+		float sx = 2.f / (view.cullRect[2] - view.cullRect[0]), tx = -(view.cullRect[2] + view.cullRect[0]) / (view.cullRect[2] - view.cullRect[0]);
+		float sy = 2.f / (view.cullRect[3] - view.cullRect[1]), ty = -(view.cullRect[3] + view.cullRect[1]) / (view.cullRect[3] - view.cullRect[1]);
+		for (int c = 0; c < 4; c++)
+		{
+			float *col = pc.viewProj + c * 4;
+			col[0] = sx * col[0] + tx * col[3];
+			col[1] = sy * col[1] + ty * col[3];
+		}
+	}
+	pc.viewport[0] = (float)ext.x;
+	pc.viewport[1] = (float)ext.y;
+	pc.viewport[2] = (float)ext.width;
+	pc.viewport[3] = (float)ext.height;
+	pc.cullMode = (uint32_t)pv.cullMode;
+	pc.drawMode = (uint32_t)pv.drawMode;
+	pc.numClusters = mNumClusters;
+	pc.hizLevels = (uint32_t)mHiZLevels;
+	Cull(cmd, pc, LMPHASE_SINGLE);
+	if (resolve) Resolve(cmd);
+	DrawPhase(lm, pv, 0);
+	if (timed)
+	{
+		cmd->writeTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mPortalQueries.get(), query + 1);
+		slot.portalViews++;
+	}
+
+	mView = &mMain;
+	mMirrored = false;
+	return true;
+}
+
+//==========================================================================
+//
+// Once per frame, by the first levelmesh view (the main view, or a portal
+// drawn before the main scene: RenderFirstSkyPortal): harvest completed
+// frames, the scene-sized Hi-Z, the level's per-view resources, and this
+// frame's timing slot.
+//
+//==========================================================================
+
+bool VkLevelMeshRenderer::BeginFrameSetup(VkLevelMesh *lm, const VkRenderState::ExternalTarget &ext)
+{
+	if (mSetupFrame == mFrame && mLevelId == lm->GetId() && mMain.cullSet) return true;
+	if (!CreateObjects()) return false;
 	Harvest();
 
-	// Compute runs outside the render pass.
+	auto state = fb->GetRenderState();
 	state->EndRenderPass();
 	auto cmd = fb->GetCommands()->GetDrawCommands();
 	if (!PrepareHiZ(ext.width, ext.height, ext.samples)) return false;
@@ -762,11 +900,37 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 	auto &slot = mSlots[mSlot];
 	slot.pending = true;
 	slot.serial = ++mSerial;
-	slot.cullMode = view.cullMode;
-	slot.drawMode = view.drawMode;
+	slot.cullMode = -1;
+	slot.drawMode = -1;
 	slot.points = 0;
 	slot.frame = mFrame;
 	if (mQueries) cmd->resetQueryPool(mQueries.get(), mSlot * NumPoints, NumPoints);
+	if (mPortalQueries) cmd->resetQueryPool(mPortalQueries.get(), mSlot * 2 * MaxPortalViews, 2 * MaxPortalViews);
+	slot.portalViews = 0;
+	mSetupFrame = mFrame;
+	return true;
+}
+
+bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
+{
+	if (view.portal) return DrawPortalView(view);
+	mView = &mMain;
+	mMirrored = false;
+	auto lm = fb->GetLevelMesh();
+	if (!lm || lm->GetId() == 0 || lm->GetClusterCount() == 0) return false;
+	auto state = fb->GetRenderState();
+	auto ext = state->GetExternalTarget();
+	// The main scene only: the Hi-Z and the visibility are per view.
+	if (!ext.depthStencil || ext.depthStencilView != fb->GetBuffers()->SceneDepthStencil.View.get()) return false;
+	mTarget = ext;
+	if (!BeginFrameSetup(lm, ext)) return false;
+
+	// Compute runs outside the render pass.
+	state->EndRenderPass();
+	auto cmd = fb->GetCommands()->GetDrawCommands();
+	auto &slot = mSlots[mSlot];
+	slot.cullMode = view.cullMode;
+	slot.drawMode = view.drawMode;
 	Timestamp(cmd, TS_START);
 
 	bool resolve = view.shading != nullptr && !(view.flags & LMVF_FULLBRIGHT);
@@ -782,7 +946,7 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-	cmd->fillBuffer(mCounters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
+	cmd->fillBuffer(mView->counters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -800,7 +964,7 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 
 	auto copyCounters = [&]()
 	{
-		cmd->copyBuffer(mCounters.get(), mReadback.get(), 0, (VkDeviceSize)mSlot * NumCounters * sizeof(uint32_t), NumCounters * sizeof(uint32_t));
+		cmd->copyBuffer(mView->counters.get(), mReadback.get(), 0, (VkDeviceSize)mSlot * NumCounters * sizeof(uint32_t), NumCounters * sizeof(uint32_t));
 		PipelineBarrier()
 			.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)
 			.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
@@ -867,6 +1031,15 @@ void VkLevelMeshRenderer::Harvest()
 					ready = mQueries->getResults(i * NumPoints + p, 1, sizeof(uint64_t), &ts[p], sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
 			}
 		}
+		double portalMs = 0;
+		for (unsigned v = 0; v < slot.portalViews && ready && mPortalQueries; v++)
+		{
+			uint64_t pts[2] = {};
+			uint32_t q = i * 2 * MaxPortalViews + 2 * v;
+			ready = mPortalQueries->getResults(q, 1, sizeof(uint64_t), &pts[0], sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) &&
+				mPortalQueries->getResults(q + 1, 1, sizeof(uint64_t), &pts[1], sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+			if (ready && pts[1] > pts[0]) portalMs += (pts[1] - pts[0]) * period / 1e6;
+		}
 		if (!ready) continue;
 		slot.pending = false;
 		if (slot.serial <= mHarvestedSerial) continue;
@@ -895,5 +1068,7 @@ void VkLevelMeshRenderer::Harvest()
 		s.resolveMs[1] = ms(TS_CULL2, TS_RES2);
 		s.drawMs[1] = ms(TS_RES2, TS_DRAW2);
 		s.totalMs = ms(TS_START, slot.cullMode == LMCULL_HIZ ? TS_DRAW2 : TS_DRAW1);
+		s.portalViews = slot.portalViews;
+		s.portalMs = portalMs;
 	}
 }

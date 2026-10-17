@@ -252,7 +252,7 @@ static uint64_t PerfLogNowNS()
 
 static void PerfLogHeader(FILE *f)
 {
-	fprintf(f, "# r_perflog v6\n");
+	fprintf(f, "# r_perflog v7\n");
 	fprintf(f, "# F <frame> tic=<gametic> total=<D_Display ms> r=<RenderView window ms> "
 		"bsp=<traversal ms, incl clip> clip=<wall clip ms> wr=<wall render ms> ws=<wall setup ms> "
 		"fr=<flat render ms> fs=<flat setup ms> sr=<sprite render ms> ss=<sprite setup ms> "
@@ -267,7 +267,7 @@ static void PerfLogHeader(FILE *f)
 		"the frames in flight): lmcm=<cull mode: 0 none, 1 frustum, 2 Hi-Z> lmdm=<draw mode: 0 compact, "
 		"1 per cluster> lmcl1/lmcl2=<clusters drawn, phase 1 / Hi-Z phase 2> lmtri1/lmtri2=<triangles> "
 		"lmfc=<clusters frustum-culled> lmocc=<clusters Hi-Z-occluded> lmc1/lmr1/lmd1=<phase 1 cull / shading resolve / draw GPU ms> "
-		"lmhz=<Hi-Z build GPU ms> lmc2/lmr2/lmd2=<phase 2 cull / shading resolve / draw GPU ms> lmgpu=<levelmesh total GPU ms>]\n");
+		"lmhz=<Hi-Z build GPU ms> lmc2/lmr2/lmd2=<phase 2 cull / shading resolve / draw GPU ms> lmgpu=<levelmesh total GPU ms> lmpv=<portal views drawn by the levelmesh> lmpgpu=<their GPU ms>]\n");
 	fprintf(f, "# L map=<name> sectors=<n> lines=<n> subsectors=<n> sprites=<n> polyobjs=<n> "
 		"lineportals=<n> portalgroups=<n> ffloors=<n>\n");
 }
@@ -366,10 +366,10 @@ void PerfLogUpdate()
 		if (lmStats)
 		{
 			fprintf(PerfLogFile, " lmcm=%d lmdm=%d lmcl1=%u lmcl2=%u lmtri1=%u lmtri2=%u lmfc=%u lmocc=%u "
-				"lmc1=%.3f lmr1=%.3f lmd1=%.3f lmhz=%.3f lmc2=%.3f lmr2=%.3f lmd2=%.3f lmgpu=%.3f",
+				"lmc1=%.3f lmr1=%.3f lmd1=%.3f lmhz=%.3f lmc2=%.3f lmr2=%.3f lmd2=%.3f lmgpu=%.3f lmpv=%u lmpgpu=%.3f",
 				lm.cullMode, lm.drawMode, lm.clusters[0], lm.clusters[1], lm.triangles[0], lm.triangles[1],
 				lm.frustumCulled, lm.occluded, lm.cullMs[0], lm.resolveMs[0], lm.drawMs[0], lm.hizMs, lm.cullMs[1], lm.resolveMs[1],
-				lm.drawMs[1], lm.totalMs);
+				lm.drawMs[1], lm.totalMs, lm.portalViews, lm.portalMs);
 		}
 	}
 	fprintf(PerfLogFile, "\n");

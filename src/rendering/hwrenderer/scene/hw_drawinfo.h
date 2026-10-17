@@ -161,6 +161,7 @@ struct HWDrawInfo
 	std::atomic<int> spriteindex;
 	HWPortal *mClipPortal;
 	HWPortal *mCurrentPortal;
+	bool mPortalStencil = true;	// this portal view is drawn inside its portal's stencil (RenderPortal's usestencil)
 	//FRotator mAngles;
 	Clipper *mClipper;
 	Clipper *vClipper; // Vertical clipper
@@ -271,6 +272,7 @@ public:
 	void RenderScene(FRenderState &state);
 	bool DrawLevelMesh(FRenderState &state);
 	void PrepareLevelMeshSky(FRenderState &state);
+	void PortalCullRect(float rect[4]);
 	// Levelmesh sky (ticket 14): set between PrepareLevelMeshSky and the
 	// levelmesh draw; the sky configuration of the portal drawn before the
 	// scene; per sky source its configuration this frame.

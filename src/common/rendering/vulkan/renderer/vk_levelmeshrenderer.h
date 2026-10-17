@@ -55,7 +55,7 @@ public:
 	bool DrawSky(uint32_t config);
 
 	// Frame boundary: the device has waited for every earlier submit.
-	void BeginFrame() { mFrame++; }
+	void BeginFrame() { mFrame++; mPortalViews = 0; }
 
 	// Latest completed GPU timings and counters (lagged by the frames in flight).
 	const LevelMeshPerfStats &GetStats() const { return mStats; }
@@ -90,8 +90,12 @@ private:
 
 	bool CreateObjects();
 	bool PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd);
+	bool DrawPortalView(const LevelMeshView &view);
+	bool BeginFrameSetup(VkLevelMesh *lm, const VkRenderState::ExternalTarget &ext);
 	bool PrepareHiZ(int width, int height, VkSampleCountFlagBits samples);
-	void UpdateCullSet();
+	struct ViewBuffers;
+	void UpdateCullSet(ViewBuffers &v);
+	ViewBuffers *PortalBuffers(VulkanCommandBuffer *cmd);
 	VulkanPipeline *GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &target);
 	void DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t config, const VkRenderState::ExternalTarget &target);
 	void UploadSkySources(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshView &view);
@@ -129,15 +133,27 @@ private:
 	unsigned mNumClusters = 0;
 	uint32_t mBucketBase[LMB_DRAWN] = {};	// compacted index region per drawn bucket
 	uint32_t mBucketCount[LMB_DRAWN] = {};	// indices per drawn bucket over all clusters (0 = not drawn)
-	std::unique_ptr<VulkanBuffer> mVisibility, mCounters, mDrawArgs, mCompact;
-	std::unique_ptr<VulkanBuffer> mDrawn;	// per cluster: drawn by the last cull phase (resolve.comp input)
-	std::unique_ptr<VulkanDescriptorSet> mCullSet;
+	// Per view: the main view's (mMain), and one set per portal view of a
+	// frame (ticket 15; created on demand, per level). Portal views draw
+	// with per-cluster commands, so they have no compacted index buffer.
+	struct ViewBuffers
+	{
+		std::unique_ptr<VulkanBuffer> visibility, counters, drawArgs, compact;
+		std::unique_ptr<VulkanBuffer> drawn;	// per cluster: drawn by the last cull phase (resolve.comp input)
+		std::unique_ptr<VulkanDescriptorSet> cullSet;
+	};
+	ViewBuffers mMain;
+	std::vector<std::unique_ptr<ViewBuffers>> mPortals;
+	ViewBuffers *mView = &mMain;	// the view of the current Draw
+	unsigned mPortalViews = 0;		// portal views drawn this frame
+	bool mMirrored = false;			// the current Draw's view is mirrored
 	std::unique_ptr<LevelMeshShading> mShading;	// last uploaded shading block (null = none for this level)
 	VulkanBuffer *mShadingBuffer = nullptr;		// the LMBIND_SHADING buffer it went into
 	std::vector<uint32_t> mSkySources;			// last uploaded LMBIND_SKYSOURCES contents
 	VulkanBuffer *mSkySourceBuffer = nullptr;
 	// The last Draw: its frame and modes (DrawSky reuses its draw arguments).
 	uint64_t mDrawFrame = ~0ull;
+	uint64_t mSetupFrame = ~0ull;	// BeginFrameSetup ran in this frame
 	int mDrawCullMode = 0, mDrawDrawMode = 0;
 
 	// Hi-Z
@@ -152,6 +168,7 @@ private:
 
 	// Timings + counter readback: a ring of query / readback slots, one per Draw.
 	enum { NumSlots = 8, NumPoints = 8, NumCounters = 6 * LMB_DRAWN + 4 };	// LMC_COUNT
+	enum { MaxPortalViews = 64 };	// per frame; further portal views stay classic
 	std::unique_ptr<VulkanQueryPool> mQueries;
 	std::unique_ptr<VulkanBuffer> mReadback;
 	uint32_t *mReadbackData = nullptr;
@@ -162,7 +179,9 @@ private:
 		int cullMode = 0, drawMode = 0;
 		uint32_t points = 0;	// written timestamp points (bit mask)
 		uint64_t frame = 0;		// mFrame when written
+		unsigned portalViews = 0;	// portal views timed in mPortalQueries
 	} mSlots[NumSlots];
+	std::unique_ptr<VulkanQueryPool> mPortalQueries;	// per slot: start / end per portal view
 	uint64_t mFrame = 0;
 	int mSlot = 0;
 	uint64_t mSerial = 0, mHarvestedSerial = 0;

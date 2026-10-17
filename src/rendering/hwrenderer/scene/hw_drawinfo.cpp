@@ -72,6 +72,17 @@ CVAR(Bool, lm_shading, true, CVAR_NOSAVE)
 CVAR(Bool, lm_sky, true, CVAR_NOSAVE)
 // Debug: print the levelmesh sky mapping of every main view.
 CVAR(Int, lm_skylog, 0, CVAR_NOSAVE)
+// Debug: the levelmesh draws the scenes inside portals (ticket 15; 0 keeps
+// the classic lists drawing every portal view).
+CVAR(Bool, lm_portals, true, CVAR_NOSAVE)
+// Debug: 0 skips the levelmesh draw of portal views while the classic lists
+// still drop what it owns (the negative control of the portal A/B).
+CVAR(Bool, lm_portaldraw, true, CVAR_NOSAVE)
+// Debug: 0 culls portal views against the whole screen instead of the
+// portal window's rectangle.
+CVAR(Bool, lm_portalrect, true, CVAR_NOSAVE)
+// Debug: print every portal view the levelmesh draws (type, depth, cull rectangle).
+CVAR(Bool, lm_portallog, false, CVAR_NOSAVE)
 CVAR(Float, gl_mask_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Float, gl_mask_sprite_threshold, 0.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
@@ -637,7 +648,11 @@ void HWDrawInfo::RenderScene(FRenderState &state)
 bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 {
 	auto bake = Level->levelMeshBake;
-	if (!lm_draw || bake == nullptr || outer != nullptr || !gl_texture || !screen->LevelMeshResident(bake->Id))
+	// A portal view without a stencil (RenderFirstSkyPortal) is bounded only
+	// by what the classic scene draws in it (sector stack coverage,
+	// HWSectorStackPortal::SetupCoverage); the levelmesh would draw the
+	// whole frustum there, so the classic keeps it.
+	if (!lm_draw || bake == nullptr || (outer != nullptr && (!lm_portals || !mPortalStencil)) || !gl_texture || !screen->LevelMeshResident(bake->Id))
 	{
 		lmSkyPending = false;
 		return false;
@@ -651,6 +666,10 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	view.drawMode = clamp<int>(lm_drawmode, LMDRAW_COMPACT, LMDRAW_CLUSTERS);
 	view.flags = lm_shading ? 0u : (uint32_t)LMVF_FULLBRIGHT;
 	view.maskThreshold = gl_mask_threshold;
+	// A portal view (HWDrawInfo::RenderPortal's child drawinfo).
+	view.portal = outer != nullptr;
+	view.mirrored = portalState.isMirrored();
+	if (view.portal && lm_portalrect) PortalCullRect(view.cullRect);
 	LevelMeshShading shading;
 	LevelMesh_FillShading(this, shading);
 	view.shading = &shading;
@@ -678,7 +697,14 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	state.SetEffect(EFF_NONE);
 	state.SetLightIndex(-1);
 
-	bool drawn = screen->DrawLevelMesh(view, state);
+	bool drawn = (view.portal && !lm_portaldraw) ? true : screen->DrawLevelMesh(view, state);
+	if (!view.portal && lm_portallog) Printf("LMPORTAL main view frame %d drawn %d\n", screen->FrameTime, drawn);
+	if (view.portal && lm_portallog)
+	{
+		Printf("LMPORTAL %s depth %d lines %u mirrored %d rect %.3f %.3f %.3f %.3f drawn %d\n", mCurrentPortal ? mCurrentPortal->GetName() : "?",
+			portalState.renderdepth, mCurrentPortal ? mCurrentPortal->lines.Size() : 0, view.mirrored, view.cullRect[0], view.cullRect[1],
+			view.cullRect[2], view.cullRect[3], drawn);
+	}
 	if (lmSkyPending)
 	{
 		lmSkyPending = false;
@@ -691,6 +717,66 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	for (int list : { GLDL_PLAINWALLS, GLDL_PLAINFLATS, GLDL_MASKEDWALLS, GLDL_MASKEDFLATS, GLDL_MASKEDWALLSOFS })
 		drawlists[list].RemoveLevelMeshOwned(bake);
 	return true;
+}
+
+//-----------------------------------------------------------------------------
+//
+// PortalCullRect
+//
+// Ticket 15. A portal view is only visible inside its window, and the
+// window is the portal's stencil geometry (HWPortal::DrawPortalStencil):
+// its lines, plus caps at z +-32767 over its bounding box when it needs
+// them. Projected with the outer view, that geometry's screen rectangle
+// bounds the view. A portal drawn before the scene without a stencil
+// (RenderFirstSkyPortal) is covered outside its window by the main scene.
+// Any corner behind the outer eye, or a sector stack drawing its stencil
+// from flats (out-of-body views), keeps the whole screen. The rectangle is
+// padded by a pixel.
+//
+//-----------------------------------------------------------------------------
+
+void HWDrawInfo::PortalCullRect(float rect[4])
+{
+	auto portal = mCurrentPortal;
+	if (portal == nullptr || outer == nullptr || portal->lines.Size() == 0) return;
+	if (portal->GetHWPortalType() == HWP_SECTORSTACK && portalState.vpIsAllowedOoB) return;
+	VSMatrix vp = outer->VPUniforms.ProjectionMatrix;
+	vp.multMatrix(outer->VPUniforms.ViewMatrix);
+	const float *m = vp.get();
+	float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+	// A map-space point; false if it is behind the outer eye.
+	auto add = [&](float x, float y, float z)
+	{
+		// GL world space: (x, z, y).
+		float cx = m[0] * x + m[4] * z + m[8] * y + m[12];
+		float cy = m[1] * x + m[5] * z + m[9] * y + m[13];
+		float cw = m[3] * x + m[7] * z + m[11] * y + m[15];
+		if (cw <= 1e-3f) return false;
+		x0 = min(x0, cx / cw); x1 = max(x1, cx / cw);
+		y0 = min(y0, cy / cw); y1 = max(y1, cy / cw);
+		return true;
+	};
+	for (auto &l : portal->lines)
+	{
+		if (!add(l.glseg.x1, l.glseg.y1, l.zbottom[0]) || !add(l.glseg.x1, l.glseg.y1, l.ztop[0]) ||
+			!add(l.glseg.x2, l.glseg.y2, l.zbottom[1]) || !add(l.glseg.x2, l.glseg.y2, l.ztop[1])) return;
+	}
+	if (portal->NeedCap() && portal->lines.Size() > 1)
+	{
+		auto &bb = portal->boundingBox;
+		for (int plane : { sector_t::floor, sector_t::ceiling })
+		{
+			if (!(portal->planesused & (1 << plane))) continue;
+			float z = plane == sector_t::ceiling ? 32767.f : -32767.f;
+			if (!add((float)bb.left, (float)bb.top, z) || !add((float)bb.right, (float)bb.top, z) ||
+				!add((float)bb.left, (float)bb.bottom, z) || !add((float)bb.right, (float)bb.bottom, z)) return;
+		}
+	}
+	float px = 2.f / max(1, screen->mSceneViewport.width), py = 2.f / max(1, screen->mSceneViewport.height);
+	x0 = max(x0 - px, -1.f); y0 = max(y0 - py, -1.f);
+	x1 = min(x1 + px, 1.f); y1 = min(y1 + py, 1.f);
+	if (x0 >= x1 || y0 >= y1) return;
+	rect[0] = x0; rect[1] = y0; rect[2] = x1; rect[3] = y1;
 }
 
 //-----------------------------------------------------------------------------
@@ -849,6 +935,7 @@ void HWDrawInfo::RenderPortal(HWPortal *p, FRenderState &state, bool usestencil)
 	gp->SetupStencil(this, state, usestencil);
 	auto new_di = StartDrawInfo(this->Level, this, Viewpoint, &VPUniforms);
 	new_di->mCurrentPortal = gp;
+	new_di->mPortalStencil = usestencil;
 	state.SetLightIndex(-1);
 	gp->DrawContents(new_di, state);
 	new_di->EndDrawInfo();
