@@ -187,6 +187,29 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
     rectangle, drawn).
   - Perflog `v7` adds `lmpv` (portal views the levelmesh drew in the frame) and `lmpgpu`
     (their GPU ms), lagged like `lmgpu`.
+- **Translucency, fog boundaries, hack fills (ticket 16):** `ab_manifest_transtest.json` replays
+  `demos/transtest/` over `wads/transtest.wad`. `make_transtest.py` writes both (copy the wad
+  into the build's `wads/` too). It has 9 rooms:
+  - translucent and additive mid textures with sprites between them;
+  - fog boundaries (with a translucent mid beside one);
+  - fake planes from missing textures: an enclosed pit, a raised ceiling and an invisible
+    bridge (`HandleMissingTextures`);
+  - a translucent stacked-sector floor (portal alpha 128);
+  - `TranslucentLine` at run time;
+  - translucent mids on a lift and on a lowering ceiling;
+  - a stack of eight translucent lines;
+  - flood-filled gaps (`PrepareLowerGap` / `PrepareUpperGap`);
+  - self-referencing deep water (`render_sector`).
+
+  MAP01 uses the default lightmode, MAP02 lightmode 2. Translucent and `FF_FOG` 3D floors are
+  in the 3D-floor manifest.
+  - The fills only happen under the classic's conditions: an enclosure of two-sided lines for
+    the fake planes, and the eye above (floor) or below (ceiling) the filled plane for the
+    floods. The pillars in the pit and the pool, and the barrel on the bridge, show that each
+    one fired.
+  - Classic against levelmesh, MAP01 / MAP02 fail 12 / 15 of 171 ticks: specks (≤ 182 px)
+    in rooms 2, 3 and 8 (run `20261017T171549Z-ab`). Before the run-time translucency fix,
+    room 4 failed with up to 640k px.
 - **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
   with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
   normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped

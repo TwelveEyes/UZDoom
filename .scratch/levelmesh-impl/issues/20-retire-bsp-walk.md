@@ -48,3 +48,10 @@ Afterwards, the levelmesh render-CPU window must be independent of level size.
   view only ended the render pass reproduced the cost. With portal views known before the scene
   (GPU discovery, the candidate list), cull them all in one compute batch ahead of the render
   pass, and draw each from its own buffers (`VkLevelMeshRenderer::ViewBuffers`).
+- 2026-10-17 (from 16, scope moved here by user decision): produce the translucent walls /
+  flats, fog boundaries and missing-texture fills without the walk. Today the walk emits them
+  and the levelmesh leaves them in the lists. Findings, the recommended approach, the fill
+  kinds and bake counts are in ticket 16's Answer. The test kit is `make_transtest.py`
+  (`ab_manifest_transtest.json`); its fill rooms only show when the classic's conditions hold,
+  so A/B them after the change. Log the translucent set's CPU time per frame on the stress
+  vantages (ticket 16's second acceptance item).

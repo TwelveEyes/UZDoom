@@ -281,7 +281,7 @@ are included.
 | 25 | Polyobject origin subsectors baked as map-wide flats (citadel z-fighting) | task | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–15 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–16 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -478,3 +478,10 @@ ticket file, and decisions that change this map are written back here, under Dec
     cost, ~0.8 ms on myhouse MAP01 V2) move to ticket 20.
   - Test map `tools/abtest/make_portaltest.py`; perflog v7 `lmpv` / `lmpgpu`.
   - Debug cvars: `lm_portals`, `lm_portaldraw`, `lm_portalrect`, `lm_portallog`.
+- 2026-10-17: ticket 16 resolved with its main scope moved to ticket 20 (user decision).
+  - Bake-driven translucent / fog-boundary sets and the hack fills only matter once the walk
+    is gone.
+  - Delivered: `tools/abtest/make_transtest.py` (fake planes, flood gaps, deep water,
+    translucency incl. run-time changes) and a fix: mid textures made translucent at run time
+    go back to the classic (tier base records line alpha / `ML_ADDTRANS`; `TranslucentLine`
+    hook).
