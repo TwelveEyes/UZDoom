@@ -1334,6 +1334,8 @@ void Baker::BakeWall(HWWall &w)
 			bool wrap = (w.seg->linedef->flags & ML_WRAP_MIDTEX) || (side->Flags & WALLF_WRAP_MIDTEX);
 			tb.midClip = mid2 && !wrap;
 			tb.yOffset = surf.yOffsetBase;
+			tb.lineAlpha = (float)w.seg->linedef->alpha;
+			tb.additive = (w.seg->linedef->flags & ML_ADDTRANS) != 0;
 		}
 	}
 	surf.lightSector = lightFront->Index();

@@ -3147,6 +3147,9 @@ FUNC(LS_TranslucentLine)
 		{
 			Printf ("Unknown translucency type used with TranslucentLine\n");
 		}
+		// The levelmesh draws opaque mid textures; a translucent one is the classic's.
+		for (auto side : Level->lines[linenum].sidedef)
+			if (side) LevelMesh_SideChanged(side, side_t::mid);
 	}
 
 	return true;

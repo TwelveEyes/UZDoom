@@ -207,6 +207,10 @@ static bool SideStateExpressible(const LevelMeshTierBase &tb, side_t &side, int 
 	// height above / below the y offset.
 	if (tb.midClip && (float)side.GetTextureYOffset(tier) != tb.yOffset) return false;
 	if (LevelMesh_HasWallColorEffects(&side, tier, side.sector)) return false;
+	// A mid texture made translucent at run time (TranslucentLine, ZScript
+	// Line.alpha): the classic blends it, in its translucent pass.
+	if (tier == side_t::mid && side.linedef &&
+		((float)side.linedef->alpha != tb.lineAlpha || ((side.linedef->flags & ML_ADDTRANS) != 0) != tb.additive)) return false;
 	return true;
 }
 

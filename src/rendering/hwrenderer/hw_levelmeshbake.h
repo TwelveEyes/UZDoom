@@ -158,6 +158,10 @@ struct LevelMeshTierBase
 	bool valid = false;			// the tier has levelmesh surfaces
 	bool midClip = false;		// two-sided mid texture without wrap: the y offset moves its geometry
 	float yOffset = 0;			// at bake (midClip)
+	// Mid tiers: the line's translucency at bake (HWWall::DoMidTexture blends
+	// with line_t::alpha / ML_ADDTRANS); the baked surfaces are opaque.
+	float lineAlpha = 1.f;
+	bool additive = false;
 	int program = LMP_DEFAULT;	// material program (bucket)
 };
 
