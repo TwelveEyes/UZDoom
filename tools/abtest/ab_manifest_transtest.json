@@ -1,0 +1,85 @@
+{
+ "format": "ab-manifest/2",
+ "resolution": [
+  2560,
+  1440
+ ],
+ "backends": {
+  "gl33": 0,
+  "vulkan": 1
+ },
+ "ab_backends": [
+  "vulkan"
+ ],
+ "determinism_map": "TRANSTEST_MAP01",
+ "tolerance": {
+  "channel": 2,
+  "min_cluster": 4,
+  "calibration": {
+   "date": "2026-10-13",
+   "machine": "reference (RX 7900 XTX, RADV / radeonsi)",
+   "map": "DOOM2_MAP01",
+   "same_backend": "classic Vulkan vs classic Vulkan, separate launches (driver restarts): static 30/30 and demo 87/87 ticks byte-identical across 3 launches each (max delta 0). Classic needs no tolerance; it exists only for the levelmesh.",
+   "cross_backend": "classic GL33 vs classic Vulkan (known-good, different rasterizer): static 0/30 identical, max delta 24, 62.5% of differing px at delta <= 2, every cluster above delta 8 is a single pixel; demo 0/87 identical, max delta 208, 1-px-wide column clusters up to 1004 px (texture column / edge sampling). This is an upper bound on legitimate rasterizer noise, far looser than a same-backend levelmesh pair should be; thresholds that pass it would hide real bugs.",
+   "choice": "channel 2 = one-shade colour rounding; min_cluster 4 = isolated edge-sample specks (< 2x2). Larger differences must be classified under a delta class (DC1 z-fight / DC2 float-z, ...) in a reviewed allowlist entry. Re-calibrate (abtest.py calibrate) if the reference machine or driver changes.",
+   "runs": "tools/abtest/runs/*-cal/calibration.json (local)"
+  }
+ },
+ "static_ticks_default": [
+  1,
+  2,
+  3,
+  4,
+  6,
+  8,
+  10,
+  12,
+  16,
+  20,
+  24,
+  28,
+  32,
+  40,
+  48,
+  56,
+  64,
+  72,
+  80,
+  96,
+  112,
+  128,
+  144,
+  160,
+  176,
+  192,
+  200,
+  250,
+  300,
+  400
+ ],
+ "comment": "Translucency A/B (.scratch/levelmesh-impl ticket 16): wads/transtest.wad and demos/transtest/ (both from make_transtest.py), a scripted tour of 7 rooms: translucent / additive mid textures with sprites between them, fog boundaries (and a translucent mid beside one), fake planes over a pit / raised ceiling / invisible bridge (missing textures), flood-filled gaps, self-referencing deep water, a translucent stacked portal floor, TranslucentLine at run time, translucent mids on a lift and a lowering ceiling, a stack of eight translucent lines. MAP01 default lightmode, MAP02 lightmode 2. Translucent and FF_FOG 3D floors are in ab_manifest_3dfloortest.json. Captured every 5 tics. Same tolerance as ab_manifest.json.",
+ "demo_dir": "demos/transtest",
+ "demo_ticks": {
+  "start": 5,
+  "step": 5,
+  "last": 855
+ },
+ "maps": [
+  {
+   "name": "TRANSTEST_MAP01",
+   "iwad": "DOOM2.WAD",
+   "pwad": "transtest.wad",
+   "warp": "MAP01",
+   "demo": "TRANSTEST_MAP01.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "TRANSTEST_MAP02",
+   "iwad": "DOOM2.WAD",
+   "pwad": "transtest.wad",
+   "warp": "MAP02",
+   "demo": "TRANSTEST_MAP02.lmp",
+   "static_ticks": null
+  }
+ ]
+}

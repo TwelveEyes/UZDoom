@@ -103,8 +103,10 @@ class Map:
         return s
 
     def edge(self, a, b, **props):
-        """Line / side properties of the undirected edge a-b: line keys, and
-        'mid' / 'top' / 'bottom' for both sides."""
+        """Line / side properties of the undirected edge a-b: line keys,
+        'mid' / 'top' / 'bottom' for both sides, and 'both_sides' (a sector
+        index) to make a two-sided edge self-referencing (that sector on both
+        sides)."""
         self.edge_props[frozenset((a, b))] = props
 
     def thing(self, x, y, type, angle=0):
@@ -124,6 +126,7 @@ class Map:
         for key, users in by_edge.items():
             props = dict(self.edge_props.get(key, {}))
             mid, top, bottom = props.pop("mid", None), props.pop("top", None), props.pop("bottom", None)
+            both = props.pop("both_sides", None)
             if len(users) == 1:
                 s, a, b, wall = users[0]
                 # a -> b runs counter-clockwise around s: s is on the left,
@@ -132,6 +135,8 @@ class Map:
                      "blocking": True}
             elif len(users) == 2:
                 (s1, a, b, w1), (s2, _, _, w2) = users
+                if both is not None:
+                    s1 = s2 = both
                 l = {"v1": self.vert(*b), "v2": self.vert(*a), "twosided": True,
                      "sidefront": side(s1, mid or "-", top or w1, bottom or w1),
                      "sideback": side(s2, mid or "-", top or w2, bottom or w2)}
