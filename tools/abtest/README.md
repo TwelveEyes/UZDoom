@@ -210,6 +210,29 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   - Classic against levelmesh, MAP01 / MAP02 fail 12 / 15 of 171 ticks: specks (≤ 182 px)
     in rooms 2, 3 and 8 (run `20261017T171549Z-ab`). Before the run-time translucency fix,
     room 4 failed with up to 640k px.
+- **Actor / particle gather (ticket 17):** `ab_manifest_gathertest.json` replays
+  `demos/gathertest/` over `wads/gathertest.wad`. `make_gathertest.py` writes both and the
+  manifest (copy the wad into the build's `wads/` too). Every monster is a `dormant` thing:
+  it stands in its first frame and never moves; the manifest's `"monsters": true` makes
+  `abtest.py` omit `-nomonsters` (and `run_matrix.sh` needs `--monsters`). MAP01 has ten rooms:
+  - an open room (12 mixed monsters, pillars, lamps, barrels);
+  - a doorway reveal: a corridor walked at 16 then 24 units per tic (per-tic warps) past a
+    side-room opening;
+  - a pit: only the cyberdemon's upper body shows over the ledge, the pit floor is hidden;
+  - particle fountains in view, behind a solid pillar and beside the camera (a turn shows it);
+  - a fast turn (20, then 40 degrees per tic) inside two rings of 24 monsters;
+  - two monster rooms the camera jumps between (A, B, A, B);
+  - a line portal (monsters in the destination area), a mirror, a sector stack (monsters on
+    both sides of the portal edges).
+
+  MAP02 is a 2048 x 2048 arena (~370 monsters, 48 pillars, a hall with three large occluders:
+  sweep, wall stare, diagonal walk, hall walk). MAP03 / MAP04 are the level-size scaling pair:
+  the same room with 20 monsters in view and the same 1100 tic demo, MAP04 with 2000 never
+  visible decoy rooms (`run_matrix.sh --demos demos/gathertest --tics 1050 --monsters --only
+  GATHERTEST_MAP03`).
+  - The latency probes (doorway, fast turn, jumps) are captured every tic: `demo_ticks.dense`
+    in the manifest lists the ranges, every other tick is every 5. A map's own `demo_ticks`
+    replaces the manifest's (`abtest.py` `demo_tick_list`).
 - **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
   with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
   normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped

@@ -100,6 +100,15 @@ def die(msg) -> NoReturn:
 # manifest
 # --------------------------------------------------------------------------
 
+def check_demo_ticks(dt, where):
+    for key in ("step", "start", "last"):
+        if not isinstance(dt.get(key), int) or dt[key] <= 0:
+            die(f"manifest: {where}.{key} must be a positive int")
+    for r in dt.get("dense", []):
+        if not (isinstance(r, list) and len(r) == 2 and all(isinstance(v, int) and v > 0 for v in r) and r[0] <= r[1]):
+            die(f"manifest: {where}.dense entries must be [first, last] positive tic ranges")
+
+
 def load_manifest(path):
     if not os.path.isfile(path):
         die(f"manifest not found: {path}")
@@ -126,10 +135,7 @@ def load_manifest(path):
     for key in ("channel", "min_cluster"):
         if not isinstance(tol.get(key), int) or tol[key] < 0:
             die(f"manifest: tolerance.{key} must be a non-negative int")
-    dt = m["demo_ticks"]
-    for key in ("step", "start", "last"):
-        if not isinstance(dt.get(key), int) or dt[key] <= 0:
-            die(f"manifest: demo_ticks.{key} must be a positive int")
+    check_demo_ticks(m["demo_ticks"], "demo_ticks")
     if not isinstance(m["static_ticks_default"], list) or not m["static_ticks_default"]:
         die("manifest: static_ticks_default must be a non-empty tick list")
     seen = set()
@@ -140,6 +146,8 @@ def load_manifest(path):
         if mp["name"] in seen:
             die(f"manifest: duplicate map {mp['name']}")
         seen.add(mp["name"])
+        if "demo_ticks" in mp:
+            check_demo_ticks(mp["demo_ticks"], f"{mp['name']} demo_ticks")
         st = mp.get("static_ticks")
         if st is not None and (not isinstance(st, list) or not st):
             die(f"manifest: {mp['name']} static_ticks must be null or a non-empty list")
@@ -155,16 +163,20 @@ def static_tick_list(manifest, mp):
     return ticks
 
 
-def demo_tick_list(manifest):
-    dt = manifest["demo_ticks"]
-    ticks = list(range(dt["start"], dt["last"] + 1, dt["step"]))
-    if ticks[-1] != dt["last"]:
-        ticks.append(dt["last"])
-    return ticks
+def demo_tick_list(manifest, mp):
+    """demo_ticks (start / step / last), a map's own demo_ticks replacing the
+    manifest's; optional "dense": [[first, last], ...] adds every tic of
+    those ranges (latency probes)."""
+    dt = mp.get("demo_ticks") or manifest["demo_ticks"]
+    ticks = set(range(dt["start"], dt["last"] + 1, dt["step"]))
+    ticks.add(dt["last"])
+    for first, last in dt.get("dense", []):
+        ticks.update(range(first, min(last, dt["last"]) + 1))
+    return sorted(ticks)
 
 
 def tick_list(manifest, mp, mode):
-    return static_tick_list(manifest, mp) if mode == "static" else demo_tick_list(manifest)
+    return static_tick_list(manifest, mp) if mode == "static" else demo_tick_list(manifest, mp)
 
 
 def find_map(manifest, name):
@@ -510,9 +522,12 @@ def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir
     w, h = manifest["resolution"]
     # -rngseed pins the static RNG seed (FARGs take '-'; '+rngseed' is a no-op)
     # so per-launch random streams (face frames, FloatBobPhase) match.
-    cmd = [args.engine, "-iwad", os.path.join("wads", mp["iwad"]), "-nomonsters",
-           "-rngseed", "12345", "-config", cfg, "-exec", pins,
-           "-width", str(w), "-height", str(h)]
+    # A manifest with "monsters": true keeps them (the gather kit's dormant monsters).
+    cmd = [args.engine, "-iwad", os.path.join("wads", mp["iwad"])]
+    if not manifest.get("monsters"):
+        cmd.append("-nomonsters")
+    cmd += ["-rngseed", "12345", "-config", cfg, "-exec", pins,
+            "-width", str(w), "-height", str(h)]
     if mp.get("pwad"):
         cmd += ["-file", os.path.join("wads", mp["pwad"])]
     if mode == "static":
