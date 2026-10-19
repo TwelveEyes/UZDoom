@@ -92,6 +92,7 @@ mount_for() {
 	PLANISF_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE=planisf2.wad ;;
 	SOS_*)     BASE_IWAD=DOOM2.WAD; PWAD_FILE=SOS_Boom.wad ;;
 	GATHERTEST_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE=gathertest.wad ;;
+	OOBTEST_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE=oobtest.wad ;;
 	*) ;;
 	esac
 }

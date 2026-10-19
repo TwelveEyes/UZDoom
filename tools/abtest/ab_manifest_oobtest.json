@@ -1,0 +1,108 @@
+{
+ "format": "ab-manifest/2",
+ "resolution": [
+  2560,
+  1440
+ ],
+ "backends": {
+  "gl33": 0,
+  "vulkan": 1
+ },
+ "ab_backends": [
+  "vulkan"
+ ],
+ "determinism_map": "OOBTEST_MAP01",
+ "tolerance": {
+  "channel": 2,
+  "min_cluster": 4,
+  "calibration": {
+   "date": "2026-10-13",
+   "machine": "reference (RX 7900 XTX, RADV / radeonsi)",
+   "map": "DOOM2_MAP01",
+   "same_backend": "classic Vulkan vs classic Vulkan, separate launches (driver restarts): static 30/30 and demo 87/87 ticks byte-identical across 3 launches each (max delta 0). Classic needs no tolerance; it exists only for the levelmesh.",
+   "cross_backend": "classic GL33 vs classic Vulkan (known-good, different rasterizer): static 0/30 identical, max delta 24, 62.5% of differing px at delta <= 2, every cluster above delta 8 is a single pixel; demo 0/87 identical, max delta 208, 1-px-wide column clusters up to 1004 px (texture column / edge sampling). This is an upper bound on legitimate rasterizer noise, far looser than a same-backend levelmesh pair should be; thresholds that pass it would hide real bugs.",
+   "choice": "channel 2 = one-shade colour rounding; min_cluster 4 = isolated edge-sample specks (< 2x2). Larger differences must be classified under a delta class (DC1 z-fight / DC2 float-z, ...) in a reviewed allowlist entry. Re-calibrate (abtest.py calibrate) if the reference machine or driver changes.",
+   "runs": "tools/abtest/runs/*-cal/calibration.json (local)"
+  }
+ },
+ "static_ticks_default": [
+  1,
+  2,
+  3,
+  4,
+  6,
+  8,
+  10,
+  12,
+  16,
+  20,
+  24,
+  28,
+  32,
+  40,
+  48,
+  56,
+  64,
+  72,
+  80,
+  96,
+  112,
+  128,
+  144,
+  160,
+  176,
+  192,
+  200,
+  250,
+  300,
+  400
+ ],
+ "comment": "Game-logic feedback A/B (.scratch/levelmesh-impl ticket 18): wads/oobtest.wad and demos/oobtest/ (both from make_oobtest.py). One layout, three views: MAP01 a chase camera (out-of-body: secret, radar, dither rules), MAP02 an orthographic top-down camera (viewbox rule), MAP03 the in-body view (exposure set-diff with --gamestate). Captured every 5 tics, every tic around the pit, the secret opening and the dither stop (demo_ticks.dense). Same tolerance as ab_manifest.json.",
+ "demo_dir": "demos/oobtest",
+ "demo_ticks": {
+  "start": 5,
+  "step": 5,
+  "last": 310,
+  "dense": [
+   [
+    38,
+    85
+   ],
+   [
+    128,
+    170
+   ],
+   [
+    238,
+    300
+   ]
+  ]
+ },
+ "maps": [
+  {
+   "name": "OOBTEST_MAP01",
+   "iwad": "DOOM2.WAD",
+   "pwad": "oobtest.wad",
+   "warp": "MAP01",
+   "demo": "OOBTEST_MAP01.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "OOBTEST_MAP02",
+   "iwad": "DOOM2.WAD",
+   "pwad": "oobtest.wad",
+   "warp": "MAP02",
+   "demo": "OOBTEST_MAP02.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "OOBTEST_MAP03",
+   "iwad": "DOOM2.WAD",
+   "pwad": "oobtest.wad",
+   "warp": "MAP03",
+   "demo": "OOBTEST_MAP03.lmp",
+   "static_ticks": null
+  }
+ ],
+ "monsters": true
+}
