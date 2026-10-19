@@ -32,6 +32,7 @@
 #include "hw_lighting.h"
 #include "hw_material.h"
 #include "hwrenderer/scene/hw_drawinfo.h"
+#include "hwrenderer/hw_levelmeshbake.h"
 #include "flatvertices.h"
 #include "hw_lightbuffer.h"
 #include "hw_drawstructs.h"
@@ -397,8 +398,17 @@ inline void HWFlat::PutFlat(HWDrawInfo *di, bool fog)
 void HWFlat::Process(HWDrawInfo *di, sector_t * model, int whichplane, bool fog)
 {
 	plane.GetFromSector(model, whichplane);
-	model->ceilingplane.dithertransflag = false; // Resetting this every frame
-	model->floorplane.dithertransflag = false; // Resetting this every frame
+	// Resetting this every frame. A plane the levelmesh draws keeps its flag
+	// for the levelmesh's state stream; LevelMesh_ConsumeDither clears it
+	// (ticket 18).
+	auto bake = di->Level->levelMeshBake;
+	auto owned = [&](int pos)
+	{
+		unsigned ref = model->Index() * 2 + pos;
+		return bake && ref < bake->SectorPlaneOwned.Size() && bake->SectorPlaneOwned[ref];
+	};
+	if (!owned(sector_t::ceiling)) model->ceilingplane.dithertransflag = false;
+	if (!owned(sector_t::floor)) model->floorplane.dithertransflag = false;
 	if (whichplane != int(ceiling))
 	{
 		// Flip the normal if the source plane has a different orientation than what we are about to render.

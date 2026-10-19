@@ -53,6 +53,7 @@ struct LevelMeshPerfStats
 	unsigned clusters[2] = {}, triangles[2] = {};	// drawn per phase
 	unsigned frustumCulled = 0, occluded = 0;	// clusters
 	double cullMs[2] = {}, resolveMs[2] = {}, drawMs[2] = {}, hizMs = 0, totalMs = 0;	// GPU time
+	double markMs = 0;			// the main view's mark pass (ticket 18), part of totalMs
 	unsigned portalViews = 0;	// portal views the levelmesh drew in that frame (ticket 15)
 	double portalMs = 0;		// their GPU time (cull + resolve + draw, summed)
 };
@@ -84,6 +85,17 @@ struct LevelMeshGatherStats
 };
 extern LevelMeshGatherStats lmGatherStats;
 extern glcycle_t LevelMeshGatherTime;
+
+// Levelmesh exposure feedback of this frame (ticket 18, HWDrawInfo::
+// ApplyLevelMeshExposure), summed over the views that applied it.
+struct LevelMeshExposureStats
+{
+	unsigned views = 0;			// views whose marks came from the GPU mark pass
+	unsigned leaves = 0;		// subsectors newly marked SSECMF_DRAWN
+	unsigned lines = 0;			// lines newly marked ML_MAPPED
+};
+extern LevelMeshExposureStats lmExposureStats;
+extern glcycle_t LevelMeshExposureTime;
 
 void ResetProfilingData();
 void CheckBench();

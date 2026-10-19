@@ -237,13 +237,18 @@ struct Baker
 		surf.vRef = LM_NOPLANE;
 		surf.edgeTop = LM_NOPLANE;
 		surf.edgeClamp = LM_NOPLANE;
+		surf.leaf = 0xffffffffu;
+		surf.line = 0xffffffffu;
 		surf.firstVertex = Out->Vertices.Size();
 		surf.firstIndex = Out->Indices.Size();
 		return Out->Surfaces.Size();
 	}
 
-	void EndSurface(LevelMeshSurface &surf, subsector_t *leaf)
+	// 'seg': a wall's seg (its linedef is what the surface exposes).
+	void EndSurface(LevelMeshSurface &surf, subsector_t *leaf, seg_t *seg = nullptr)
 	{
+		surf.leaf = leaf ? leaf->Index() : 0xffffffffu;
+		if (seg && seg->linedef) surf.line = seg->linedef->Index();
 		surf.numVertices = Out->Vertices.Size() - surf.firstVertex;
 		surf.numIndices = Out->Indices.Size() - surf.firstIndex;
 		Out->Stats.triangles += surf.numIndices / 3;
@@ -383,6 +388,7 @@ struct Baker
 		uint32_t &g = Out->SideFFGroup[side->Index()];
 		if (g != ~0u) return g;
 		g = NewFFGroup();
+		Out->FFGroupSource.Push(side->Index());
 		if (!(lm_3dfloors & 1)) groupForceDeferred[g] = 1;
 		auto &list = groupWatches[g];
 		WatchLayout(list, rf);
@@ -404,6 +410,7 @@ struct Baker
 		uint32_t &g = Out->SectorFFGroup[sec->Index()];
 		if (g != ~0u) return g;
 		g = NewFFGroup();
+		Out->FFGroupSource.Push(-1 - sec->Index());
 		if (!(lm_3dfloors & 2)) groupForceDeferred[g] = 1;
 		WatchLayout(groupWatches[g], sec);
 		return g;
@@ -427,7 +434,11 @@ struct Baker
 		return index;
 	}
 	bool SideSkyClassic(seg_t *seg, sector_t *rf, sector_t *rb);
+	uint32_t BakeQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4], const float zb[2], const float zt[2], LevelMeshSurface &surf);
 	void BakeSkyQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4], const float zb[2], const float zt[2], uint32_t source, sector_t *closedBack);
+	void BakeExposureQuad(seg_t *seg, sector_t *front);
+	void BakeExposureQuads();
+	TArray<seg_t *> exposureSegs;	// the first seg of every side ProcessSides baked
 	void BakeSkyWall(const HWWall &w, sector_t *rf, sector_t *rb);
 	void BakeSkyClosedWalls(seg_t *seg, sector_t *rf, sector_t *rb);
 	void BakeSkyCap(subsector_t *sub, sector_t *sec, int h);
@@ -507,16 +518,16 @@ bool Baker::SideSkyClassic(seg_t *seg, sector_t *rf, sector_t *rb)
 	return false;
 }
 
-// One sky quad, as HWWall::CreateVertices orders a wall's corners: (x1, y1)
+// One wall quad's vertices, indices and plane refs (sky walls, exposure
+// quads), as HWWall::CreateVertices orders a wall's corners: (x1, y1)
 // bottom, top, then (x2, y2) top, bottom. A finite edge is anchored to the
 // side's plane it lies on; an edge at +-32768 to its end's finite vertex's
 // plane with an offset.
-void Baker::BakeSkyQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4], const float zb[2], const float zt[2], uint32_t source, sector_t *closedBack)
+uint32_t Baker::BakeQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4], const float zb[2], const float zt[2], LevelMeshSurface &surf)
 {
 	CandidateList list;
 	list.Add(rf, sector_t::ceiling); list.Add(rf, sector_t::floor);
 	list.Add(rb, sector_t::ceiling); list.Add(rb, sector_t::floor);
-	LevelMeshSurface surf = {};
 	uint32_t sindex = BeginSurface(surf);
 	uint32_t firstv = Out->Vertices.Size();
 	const float corner[4][3] = {
@@ -557,14 +568,6 @@ void Baker::BakeSkyQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4
 	}
 	bool overflow = false;
 	for (int i = 0; i < 4; i++) AddPlaneRef(surf, Out->Vertices[firstv + i].anchor & LMV_REFMASK, overflow);
-	surf.flags = LMSK_WALL | LMSF_SKY | (uint32_t(LMP_SKY) << LMSF_PROGRAMSHIFT);
-	if (closedBack)
-	{
-		surf.flags |= LMSF_SKYCLOSED;
-		surf.vRef = LM_PlaneRef(closedBack->Index(), sector_t::floor);
-		Out->Stats.skyClosedWalls++;
-	}
-	surf.sideRef = source;
 	surf.lightSector = rf->Index();
 	surf.lightList = -1;
 	surf.lightmapPage = -1;
@@ -575,10 +578,65 @@ void Baker::BakeSkyQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4
 		surf.normal[0] = dy / len;
 		surf.normal[1] = -dx / len;
 	}
+	return sindex;
+}
+
+void Baker::BakeSkyQuad(seg_t *seg, sector_t *rf, sector_t *rb, const float xy[4], const float zb[2], const float zt[2], uint32_t source, sector_t *closedBack)
+{
+	LevelMeshSurface surf = {};
+	uint32_t sindex = BakeQuad(seg, rf, rb, xy, zb, zt, surf);
+	surf.flags = LMSK_WALL | LMSF_SKY | (uint32_t(LMP_SKY) << LMSF_PROGRAMSHIFT);
+	if (closedBack)
+	{
+		surf.flags |= LMSF_SKYCLOSED;
+		surf.vRef = LM_PlaneRef(closedBack->Index(), sector_t::floor);
+		Out->Stats.skyClosedWalls++;
+	}
+	surf.sideRef = source;
 	Out->SkySurfaceSide.Push(seg->sidedef ? seg->sidedef->Index() : -1);
 	Out->SkySurfaceIndex.Push(sindex);
-	EndSurface(surf, seg->Subsector);
+	EndSurface(surf, seg->Subsector, seg);
 	Out->Stats.skyWalls++;
+}
+
+// Ticket 18: a side's exposure quad, from its sector's floor to its
+// ceiling along the whole line (as BakeSkyClosedWalls orders the side's
+// ends). Not drawn: the mark pass rasterizes it, so a line seen through an
+// opening (or a one-sided line whose wall the levelmesh does not draw) is
+// exposed like the classic's clipper-passing segs (ML_MAPPED).
+void Baker::BakeExposureQuad(seg_t *seg, sector_t *front)
+{
+	line_t *line = seg->linedef;
+	vertex_t *v1 = seg->sidedef == line->sidedef[0] ? line->v1 : line->v2;
+	vertex_t *v2 = seg->sidedef == line->sidedef[0] ? line->v2 : line->v1;
+	float xy[4] = { (float)v1->fX(), (float)v1->fY(), (float)v2->fX(), (float)v2->fY() };
+	float zb[2] = { (float)front->floorplane.ZatPoint(v1), (float)front->floorplane.ZatPoint(v2) };
+	float zt[2] = { (float)front->ceilingplane.ZatPoint(v1), (float)front->ceilingplane.ZatPoint(v2) };
+	LevelMeshSurface surf = {};
+	BakeQuad(seg, front, nullptr, xy, zb, zt, surf);
+	surf.flags = LMSK_WALL | (uint32_t(LMP_EXPOSURE) << LMSF_PROGRAMSHIFT);
+	surf.sideRef = 0xffffffffu;
+	surf.textureId = 0;
+	EndSurface(surf, seg->Subsector, seg);
+	Out->Stats.exposureQuads++;
+}
+
+// After ComputeOwnership (exposure quads are no tier's): every two-sided
+// side, and every one-sided side whose mid tier the levelmesh does not draw
+// (no wall, or a wall left to the classic path), gets an exposure quad.
+// Polyobject sides get none (their walls expose their lines).
+void Baker::BakeExposureQuads()
+{
+	for (seg_t *seg : exposureSegs)
+	{
+		if (seg->backsector == nullptr)
+		{
+			unsigned ref = seg->sidedef->Index() * 3 + side_t::mid;
+			if (ref < Out->SideTierOwned.Size() && Out->SideTierOwned[ref]) continue;
+		}
+		BakeExposureQuad(seg, seg->frontsector);
+	}
+	exposureSegs.Reset();
 }
 
 // A sky wall the classic emitter produced (HWWall::PutPortal, mesh mode).
@@ -731,6 +789,7 @@ void Baker::ProcessSides()
 				BakeWall(w);
 		}
 		for (auto &w : mh.translucent) Out->TranslucentWalls.Push(w);
+		exposureSegs.Push(seg);
 		// Sky walls (ticket 14): the levelmesh's, unless the side's sky
 		// depends on the view. Mesh mode leaves a sky plane's portal type
 		// unset (-1, HWWall::SkyPlane); SkyLine sets PORTALTYPE_SKY.
@@ -897,6 +956,7 @@ void Baker::ProcessPolyobjects()
 		for (unsigned k = firstSurface; k < Out->Surfaces.Size(); k++)
 		{
 			Out->Surfaces[k].flags |= LMSF_POLYOBJ;
+			Out->Surfaces[k].leaf = 0xffffffffu;	// moves: no BSP leaf of its own (the line still exposes)
 			Out->SurfaceLeaf[k] = -2 - int(i);
 		}
 		st.polySurfaces += Out->Surfaces.Size() - firstSurface;
@@ -1411,7 +1471,7 @@ void Baker::BakeWall(HWWall &w)
 		surf.flags |= LMSF_DEFERRED;
 		st.bandsDeferred++;
 	}
-	EndSurface(surf, w.seg->Subsector);
+	EndSurface(surf, w.seg->Subsector, w.seg);
 	st.wallSurfaces++;
 }
 
@@ -1597,7 +1657,7 @@ bool Baker::BakeBands(HWWall &w, const LevelMeshSurface &surf, uint32_t firstv, 
 		// RenderTexturedWall: the layer's light level where it has a caster.
 		if (light.caster != nullptr) b.flags |= LMSF_LIGHT3DLEVEL;
 		if (!lm_light3d) b.flags |= LMSF_DEFERRED;
-		EndSurface(b, w.seg->Subsector);
+		EndSurface(b, w.seg->Subsector, w.seg);
 		st.wallSurfaces++;
 		st.bandSurfaces++;
 		st.light3DSurfaces++;
@@ -2171,8 +2231,8 @@ void LevelMeshBake::PrintStats(const char *mapname) const
 		s.deferredSurfaces, s.deferredByTier, s.wallTextureNotSide);
 	Printf("LevelMeshBake %s: 3D lights %u, lit surfaces %u, banded walls %u (band surfaces %u, left classic %u, unmatched plane %u); edge-clamped tiers %u\n", mapname,
 		s.lights3D, s.light3DSurfaces, s.bandedWalls, s.bandSurfaces, s.bandsDeferred, s.bandPlaneUnmatched, s.edgeClamped);
-	Printf("LevelMeshBake %s: sky: %u walls (%u sky-sky door walls), %u caps, %u sources; %u sides left classic\n", mapname,
-		s.skyWalls, s.skyClosedWalls, s.skyCaps, SkySources.Size(), s.skyClassicSides);
+	Printf("LevelMeshBake %s: sky: %u walls (%u sky-sky door walls), %u caps, %u sources; %u sides left classic; exposure quads %u\n", mapname,
+		s.skyWalls, s.skyClosedWalls, s.skyCaps, SkySources.Size(), s.skyClassicSides, s.exposureQuads);
 	Printf("LevelMeshBake %s: polyobjects %u, baked %u (%u wall surfaces); classic: by sector %u, by wall %u\n", mapname,
 		s.polyobjs, s.polyobjsBaked, s.polySurfaces, s.polyClassicSectors, s.polyClassicWalls);
 	Printf("LevelMeshBake %s: 3D-floor groups %u (deferred at bake %u), watches %u; opaque 3D planes never drawn %u\n", mapname, s.ffGroups, s.ffGroupsDeferred, s.ffWatches, s.ffFlatsNotPicked);
@@ -2300,8 +2360,16 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild)
 	double t1 = I_msTimeF();
 	b.ProcessFlats();
 	b.ComputeOwnership();
+	b.BakeExposureQuads();
 	b.BuildFFTables();
 	b.BuildLight3DTables();
+	// Ticket 18: the out-of-body view rules' inputs.
+	for (auto &sec : Level->sectors)
+		if (sec.isSecret() && sec.wasSecret()) bake->SecretSectors.Push(sec.Index());
+	bake->RadarStamp.Resize(Level->subsectors.Size());
+	for (auto &s : bake->RadarStamp) s = 0;
+	bake->LineExposed.Resize(Level->lines.Size());
+	for (auto &e : bake->LineExposed) e = 0;
 	double t2 = I_msTimeF();
 
 	auto &st = bake->Stats;

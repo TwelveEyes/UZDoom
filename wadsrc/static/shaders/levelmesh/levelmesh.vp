@@ -23,7 +23,13 @@
 
 #include "shaders/levelmesh/lm_data.glsl"
 
+// The mark pass (ticket 18) re-rasterizes the drawn surfaces with another
+// fragment stage and a depth EQUAL test: every pipeline must compute the
+// same positions.
+invariant gl_Position;
+
 layout(location = LM_MATERIAL_LOCATION) flat out uvec4 vLMMaterial;
+layout(location = LM_EXPOSURE_LOCATION) flat out uvec2 vLMExposure;	// surface leaf, line (mark pass)
 layout(location = LM_SHADE_LOCATION) flat out vec4 vLMLight;		// uLightLevel, uFogDensity, uLightFactor, uLightDist
 layout(location = LM_SHADE_LOCATION + 1) flat out vec4 vLMFog;		// uFogColor.rgb, uDesaturationFactor
 layout(location = LM_SHADE_LOCATION + 2) flat out vec4 vLMGlowTop;	// uGlowTopColor
@@ -156,7 +162,17 @@ void main()
 	}
 	// VkRenderState::ApplyStreamData: timer = (FrameTime - firstFrame) * GetShaderSpeed() / 1000.
 	float materialTimer = uLevelMeshTime * tex.shaderSpeed;
+	// Dither (ticket 18): the surface's side tier / plane / 3D-floor group
+	// record says the classic would draw it with EFF_DITHERTRANS this frame.
+	if ((uLevelMeshFlags & LMVF_DITHER) != 0)
+	{
+		uint stateFlags = 0u;
+		if ((surf.flags & LMSF_3DFLOOR) != 0u || kind == LMSK_WALL) { if (surf.sideRef != 0xffffffffu) stateFlags = lmSides[surf.sideRef].flags; }
+		else if (surf.planeRefs[0] != LM_NOPLANE) stateFlags = lmPlaneXforms[surf.planeRefs[0]].flags;
+		if ((surf.flags & LMSF_SKY) == 0u && (stateFlags & LMTS_DITHER) != 0u) texflags |= LM_MAT_DITHER;
+	}
 	vLMMaterial = uvec4(tex.slot, tex.layers & 0xffffu, samplerMode | texflags, floatBitsToUint(materialTimer));
+	vLMExposure = uvec2(surf.leaf, surf.line);
 
 	vec4 worldcoord = ModelMatrix * vec4(v.x, z, v.y, 1.0);
 	vec4 eyeCoordPos = ViewMatrix * worldcoord;
@@ -234,6 +250,10 @@ void main()
 	// The classic path draws this surface for now (LMTS_DEFERRED): every
 	// vertex outside the clip volume, so its triangles are clipped away.
 	if (LM_StateDeferred(surf)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+	// Out-of-body views (ticket 18): only the leaves the view's rules allow
+	// (secret sectors, radar, ortho viewbox: LevelMeshView::leafMask).
+	if ((uLevelMeshFlags & LMVF_LEAFMASK) != 0 && surf.leaf != 0xffffffffu && (lmLeafMask[surf.leaf >> 5] & (1u << (surf.leaf & 31u))) == 0u)
+		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 	// Sky walls and caps: only in the draw of their sky configuration
 	// (DrawLevelMeshSky / the first sky portal's depth pass); a sky-sky door
 	// wall only while the back sector is closed (HWWall::SkyTop: ceiling
@@ -241,7 +261,8 @@ void main()
 	if ((surf.flags & LMSF_SKY) != 0u)
 	{
 		uint skyConfig = (uint(uLevelMeshFlags) >> LMVF_SKYSHIFT) & 0xffffu;
-		bool show = skyConfig != 0u && lmSkySources[surf.sideRef] == skyConfig;
+		// 0xffff (LMVF_SKYALL, the mark pass): any configuration this frame.
+		bool show = skyConfig != 0u && (skyConfig == 0xffffu ? lmSkySources[surf.sideRef] != 0u : lmSkySources[surf.sideRef] == skyConfig);
 		if (show && (surf.flags & LMSF_SKYCLOSED) != 0u)
 		{
 			LMSectorState back = lmSectors[surf.vRef >> 1];

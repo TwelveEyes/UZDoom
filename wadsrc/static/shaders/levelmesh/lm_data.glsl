@@ -51,6 +51,8 @@ struct LMSurface
 	float renderWidth;
 	float wrapWidth;
 	uint edgeClamp;
+	uint leaf;
+	uint line;
 };
 
 struct LMCluster
@@ -154,6 +156,8 @@ layout(set = LM_SET, binding = LMBIND_LIGHTS3D, std430) buffer readonly LMLight3
 layout(set = LM_SET, binding = LMBIND_POLYOBJS, std430) buffer readonly LMPolyobjBuffer { LMPolyobj lmPolyobjs[]; };
 // Per sky source: the sky configuration it belongs to this frame (LevelMeshView::skySources).
 layout(set = LM_SET, binding = LMBIND_SKYSOURCES, std430) buffer readonly LMSkySourceBuffer { uint lmSkySources[]; };
+// Bit per leaf: the leaves the view may show (LevelMeshView::leafMask, LMVF_LEAFMASK).
+layout(set = LM_SET, binding = LMBIND_LEAFMASK, std430) buffer readonly LMLeafMaskBuffer { uint lmLeafMask[]; };
 #ifndef LM_RESOLVE_WRITER
 layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolvedBuffer { LMResolved lmResolved[]; };
 #endif

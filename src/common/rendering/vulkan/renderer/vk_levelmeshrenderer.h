@@ -57,12 +57,15 @@ public:
 	// Frame boundary: the device has waited for every earlier submit. Makes
 	// the previous frame's visibility readback host-visible.
 	void BeginFrame();
+	// The frame's scene is recorded and no render pass is open: records the
+	// copies of its views' readbacks (CopyVisibility).
+	void EndFrame();
 
-	// The cluster visibility bitset (bit = cluster index) the view wrote in
-	// the previous rendered frame, or null: no levelmesh draw of that view last
-	// frame, a different level, or the frame was not rendered. Valid until the
-	// next BeginFrame.
-	const uint32_t *GetVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words);
+	// What the view found visible in the previous rendered frame: its cluster
+	// visibility bitset (bit = cluster index) and its mark pass's leaf / line
+	// bits. False: no levelmesh draw of that view last frame, a different
+	// level, or the frame was not rendered. Valid until the next BeginFrame.
+	bool GetVisibility(uint64_t levelId, uint64_t viewKey, LevelMeshReadback &out);
 
 	// Latest completed GPU timings and counters (lagged by the frames in flight).
 	const LevelMeshPerfStats &GetStats() const { return mStats; }
@@ -103,8 +106,16 @@ private:
 	struct ViewBuffers;
 	void UpdateCullSet(ViewBuffers &v);
 	ViewBuffers *PortalBuffers(VulkanCommandBuffer *cmd, unsigned &index);
-	void CopyVisibility(VulkanCommandBuffer *cmd, unsigned viewIndex, uint64_t viewKey);
-	VulkanPipeline *GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &target);
+	void CopyVisibility(unsigned viewIndex, uint64_t viewKey);
+	// Pipeline kinds: the scene draw, the mark pass over the drawn buckets
+	// (depth EQUAL), the mark pass over surfaces not in the depth buffer
+	// (sky, exposure quads: depth LEQUAL).
+	enum { PK_SCENE, PK_MARK, PK_MARKOPEN };
+	VulkanPipeline *GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &target, int kind = PK_SCENE);
+	void MarkPhase(VkLevelMesh *lm, const LevelMeshView &view, int phaseSlot, unsigned viewIndex);
+	void ClearExposure(VkLevelMesh *lm, VulkanCommandBuffer *cmd, unsigned viewIndex);
+	bool UploadLeafMask(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshView &view);
+	uint32_t ViewFlags(const LevelMeshView &view) const;
 	void DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t config, const VkRenderState::ExternalTarget &target);
 	void UploadSkySources(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshView &view);
 	void Cull(VulkanCommandBuffer *cmd, CullConstants &pc, uint32_t phase);
@@ -131,10 +142,22 @@ private:
 	{
 		VulkanRenderPass *renderPass;
 		uint64_t bits;
-		bool operator<(const PipelineKey &o) const { return renderPass != o.renderPass ? renderPass < o.renderPass : bits < o.bits; }
+		uint32_t extra;		// kind | dither << 2
+		bool operator<(const PipelineKey &o) const
+		{
+			return renderPass != o.renderPass ? renderPass < o.renderPass : bits != o.bits ? bits < o.bits : extra < o.extra;
+		}
 	};
 	std::map<PipelineKey, std::unique_ptr<VulkanPipeline>> mPipelines;
 	VkRenderState::ExternalTarget mTarget;	// render-target state of the current Draw
+	bool mDither = false;			// the current Draw's view uses the dither-capable pipelines (LMVF_DITHER)
+	bool mLeafMask = false;			// the current Draw's view applies its leaf mask (LMVF_LEAFMASK)
+	// Mark pass fragment stages (alpha test off / on), compiled per level
+	// (LM_LEAF_WORDS) and the leaf words they were compiled for.
+	std::unique_ptr<VulkanShader> mMarkFrag[2];
+	unsigned mMarkLeafWords = 0;
+	std::vector<uint32_t> mLeafMaskUploaded;	// last LMBIND_LEAFMASK contents (empty = none)
+	VulkanBuffer *mLeafMaskBuffer = nullptr;
 
 	// Per level
 	uint64_t mLevelId = 0;
@@ -176,14 +199,23 @@ private:
 	std::vector<std::unique_ptr<VulkanDescriptorSet>> mHiZSets;
 
 	// Timings + counter readback: a ring of query / readback slots, one per Draw.
-	enum { NumSlots = 8, NumPoints = 8, NumCounters = 6 * LMB_DRAWN + 4 };	// LMC_COUNT
+	enum { NumSlots = 8, NumPoints = 9, NumCounters = 6 * LMB_DRAWN + 4 };	// TS_COUNT, LMC_COUNT
 	enum { MaxPortalViews = 64 };	// per frame; further portal views stay classic
 	std::unique_ptr<VulkanQueryPool> mQueries;
-	// Per level: the views' visibility bitsets, per slot (1 + MaxPortalViews)
-	// views of mVisWords words; view 0 = the main view, 1 + k = portal view k.
+	// Per level: the views' readbacks, per slot (1 + MaxPortalViews) views of
+	// mVisWords + mExpWords words (the cluster visibility bitset, then the
+	// mark pass's leaf and line bits); view 0 = the main view, 1 + k =
+	// portal view k.
 	std::unique_ptr<VulkanBuffer> mVisReadback;
 	uint32_t *mVisReadbackData = nullptr;
-	unsigned mVisWords = 0;
+	unsigned mVisWords = 0, mExpWords = 0;
+	unsigned RecordWords() const { return mVisWords + mExpWords; }
+	struct PendingCopy
+	{
+		ViewBuffers *view;
+		unsigned viewIndex;
+	};
+	std::vector<PendingCopy> mPendingCopies;	// this frame's readback copies (EndFrame)
 	int mReadSlot = -1;	// the slot of the previous frame's views (BeginFrame), -1 = none
 	std::unique_ptr<VulkanBuffer> mReadback;
 	uint32_t *mReadbackData = nullptr;

@@ -300,6 +300,7 @@ static const char *shaderBindings = R"(
 		int uDataIndex;
 		int uLevelMeshFlags;
 		float uLevelMeshTime;
+		int uLevelMeshView;
 	};
 
 	// material types
@@ -389,12 +390,14 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadVertShader(FString shadername
 		.Create(shadername.GetChars(), fb->device.get());
 }
 
-std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type, bool levelmesh)
+std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type, bool levelmesh, const char *extensions)
 {
 	FString pre_placeholder = GetTargetGlslVersion();
 	pre_placeholder << "#extension GL_GOOGLE_include_directive : enable\n";
 	if (levelmesh)
 		pre_placeholder << "#extension GL_EXT_nonuniform_qualifier : enable\n";
+	if (extensions)
+		pre_placeholder << extensions;
 	if (fb->RaytracingEnabled())
 		pre_placeholder << "\n#define SUPPORTS_RAYTRACING\n";
 
@@ -502,11 +505,12 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername
 //
 //==========================================================================
 
-VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passType, int program)
+VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passType, int program, bool dither)
 {
 	static_assert(int(LMP_DEFAULT) == int(SHADER_Default) && int(LMP_WARP1) == int(SHADER_Warp1) && int(LMP_WARP2) == int(SHADER_Warp2), "levelmesh programs are shader indices");
-	if (program < 0 || program >= int(LMP_COUNT) || program == int(LMP_SKY)) program = LMP_DEFAULT;	// sky: depth / stencil only
-	auto &prog = mLevelMeshShaders[program][alphatest ? 1 : 0][passType];
+	// Sky: depth / stencil only. Exposure quads: the mark pass only.
+	if (program < 0 || program >= int(LMP_COUNT) || program == int(LMP_SKY) || program == int(LMP_EXPOSURE)) program = LMP_DEFAULT;
+	auto &prog = mLevelMeshShaders[program][alphatest ? 1 : 0][passType][dither ? 1 : 0];
 	if (!prog.frag)
 	{
 		FString defines = VkLevelMesh::ShaderDefines(VkLevelMesh::LM_SET_INDEX, VkLevelMesh::LM_TEXTURE_SET_INDEX);
@@ -514,12 +518,24 @@ VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passTyp
 			mLevelMeshVert = LoadLevelMeshVertShader("levelmesh_vert", defines.GetChars());
 		const FDefaultShader &shader = defaultshaders[program];
 		defines << shader.Defines;
-		FString name = FStringf("levelmesh_%s%s%s", shader.ShaderName, alphatest ? "" : "_nat", passType == GBUFFER_PASS ? "_gbuffer" : "");
+		// Ticket 18: the per-surface dither branch (lm_frag.glsl, main.fp).
+		if (dither) defines << "#define LM_DITHER\n";
+		FString name = FStringf("levelmesh_%s%s%s%s", shader.ShaderName, alphatest ? "" : "_nat", passType == GBUFFER_PASS ? "_gbuffer" : "", dither ? "_dither" : "");
 		name.Substitute(" ", "");
 		prog.frag = LoadFragShader(name, "shaders/glsl/main.fp", shader.gettexelfunc, shader.lightfunc,
 			defines.GetChars(), alphatest, passType == GBUFFER_PASS, static_cast<AllShaderIndex>(program), true);
 	}
 	return &prog;
+}
+
+std::unique_ptr<VulkanShader> VkShaderManager::LoadLevelMeshMarkShader(bool alphatest, unsigned leafWords, bool subgroups)
+{
+	FString defines = VkLevelMesh::ShaderDefines(VkLevelMesh::LM_SET_INDEX, VkLevelMesh::LM_TEXTURE_SET_INDEX);
+	defines.AppendFormat("#define LM_LEAF_WORDS %uu\n", leafWords);
+	if (subgroups) defines << "#define LM_SUBGROUP\n";
+	const char *extensions = subgroups ? "#extension GL_KHR_shader_subgroup_ballot : enable\n#extension GL_KHR_shader_subgroup_arithmetic : enable\n" : nullptr;
+	FString name = alphatest ? "levelmesh_mark" : "levelmesh_mark_nat";
+	return LoadFragShader(name, "shaders/levelmesh/mark.fp", nullptr, nullptr, defines.GetChars(), alphatest, false, static_cast<AllShaderIndex>(SHADER_Default), true, extensions);
 }
 
 std::unique_ptr<VulkanShader> VkShaderManager::LoadLevelMeshVertShader(FString shadername, const char *defines)

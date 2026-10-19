@@ -226,6 +226,8 @@ void LevelMesh_FillSideState(const LevelMeshBake *bake, side_t &side, int tier, 
 	unsigned ref = side.Index() * 3 + tier;
 	if (ref < bake->TierBase.Size() && bake->TierBase[ref].valid && !SideStateExpressible(bake->TierBase[ref], side, tier, texid))
 		out.flags |= LMTS_DEFERRED;
+	// HWWall::RenderWall: the tier's own flag, or the mid flag for any tier.
+	if (side.Flags & ((WALLF_DITHERTRANS << tier) | WALLF_DITHERTRANS_MID)) out.flags |= LMTS_DITHER;
 	unsigned s = side.Index();
 	int poly = s < bake->SidePoly.Size() ? bake->SidePoly[s] : -1;
 	if (poly >= 0 && unsigned(poly) < bake->PolyBaked.Size() && bake->PolyBaked[poly])
@@ -266,6 +268,8 @@ void LevelMesh_FillPlaneXform(const LevelMeshBake *bake, sector_t &sec, int pos,
 	out.yScale = (float)xf.yScale;
 	out.angle = (float)xf.Angle.Degrees();
 	out.baseAngle = (float)xf.baseAngle.Degrees();
+	// HWFlat::DrawFlat: the plane copied with its dither flag.
+	if ((pos == sector_t::ceiling ? sec.ceilingplane : sec.floorplane).dithertransflag) out.flags |= LMTS_DITHER;
 }
 
 //==========================================================================
@@ -319,7 +323,30 @@ void LevelMesh_FillFFGroup(FLevelLocals *Level, const LevelMeshBake *bake, unsig
 	const TArray<LevelMeshSectorState> &sectors, LevelMeshSideState &out)
 {
 	out = {};
-	out.flags = LMTS_DEFERRED;
+	// Dither: a side group follows its side's mid flag (HWWall::RenderWall
+	// for its 3D-floor sides), a sector group its 3D floors' planes.
+	uint32_t dither = 0;
+	if (group < bake->FFGroupSource.Size())
+	{
+		int32_t source = bake->FFGroupSource[group];
+		if (source >= 0 && unsigned(source) < Level->sides.Size())
+		{
+			if (Level->sides[source].Flags & WALLF_DITHERTRANS_MID) dither = LMTS_DITHER;
+		}
+		else if (source < 0 && unsigned(-1 - source) < Level->sectors.Size())
+		{
+			for (auto rover : Level->sectors[-1 - source].e->XFloor.ffloors)
+			{
+				if ((rover->flags & (FF_EXISTS | FF_RENDERPLANES)) == (FF_EXISTS | FF_RENDERPLANES) &&
+					(rover->top.plane->dithertransflag || rover->bottom.plane->dithertransflag))
+				{
+					dither = LMTS_DITHER;
+					break;
+				}
+			}
+		}
+	}
+	out.flags = LMTS_DEFERRED | dither;
 	if (group >= bake->FFGroupBaked.Size() || !bake->FFGroupBaked[group]) return;
 	for (uint32_t k = bake->FFWatchStart[group]; k < bake->FFWatchStart[group + 1]; k++)
 	{
@@ -352,7 +379,7 @@ void LevelMesh_FillFFGroup(FLevelLocals *Level, const LevelMeshBake *bake, unsig
 			return;
 		}
 	}
-	out.flags = 0;
+	out.flags = dither;
 }
 
 static void SetFFGroupOwned(LevelMeshBake *bake, uint32_t g)
@@ -601,6 +628,12 @@ void LevelMesh_ResetState(FLevelLocals *Level, LevelMeshBake *bake, const TArray
 	st.Frame = 0;
 	st.Stamp = 0;
 	st.SweepCursor = 0;
+	st.DitherSides.Clear();
+	st.DitherPlanes.Clear();
+	st.DitherSideFlag.Resize(tiers.Size());
+	for (auto &f : st.DitherSideFlag) f = 0;
+	st.DitherPlaneFlag.Resize(xforms.Size());
+	for (auto &f : st.DitherPlaneFlag) f = 0;
 }
 
 //==========================================================================
@@ -645,6 +678,79 @@ void LevelMesh_PlaneChanged(sector_t *sec, int pos)
 {
 	if (HookBake == nullptr || sec < HookSectors || sec >= HookSectors + HookSectorCount || pos < 0 || pos > 1) return;
 	HookBake->Stream.Xforms.Touch(unsigned(sec - HookSectors) * 2 + pos);
+}
+
+//==========================================================================
+//
+// Dither (ticket 18)
+//
+// The classic sets the dither flags during the frame (the camera trace
+// before CreateScene, the monsters' traces after the BSP walk) and clears
+// a tier's / plane's flag once it drew it. The levelmesh streams a flagged
+// tier / plane with LMTS_DITHER (a second LevelMesh_UpdateState after
+// CreateScene picks up the frame's traces) and clears the flags of the ones
+// it owns at the start of the next frame's traces.
+//
+//==========================================================================
+
+void LevelMesh_DitherChanged(side_t *side, int tier)
+{
+	if (HookBake == nullptr || side < HookSides || side >= HookSides + HookSideCount || tier < 0 || tier > 2) return;
+	auto &st = HookBake->Stream;
+	unsigned s = unsigned(side - HookSides);
+	unsigned ref = s * 3 + tier;
+	// The mid flag dithers every tier of the side (HWWall::RenderWall).
+	if (tier == side_t::mid) for (int t = 0; t < 3; t++) st.Sides.Touch(s * 3 + t);
+	else st.Sides.Touch(ref);
+	if (ref < st.DitherSideFlag.Size() && !st.DitherSideFlag[ref])
+	{
+		st.DitherSideFlag[ref] = 1;
+		st.DitherSides.Push(ref);
+	}
+}
+
+void LevelMesh_DitherChanged(sector_t *sec, secplane_t *plane)
+{
+	if (HookBake == nullptr || sec < HookSectors || sec >= HookSectors + HookSectorCount) return;
+	auto &st = HookBake->Stream;
+	unsigned ref = unsigned(sec - HookSectors) * 2 + (plane == &sec->ceilingplane ? sector_t::ceiling : sector_t::floor);
+	st.Xforms.Touch(ref);
+	if (ref < st.DitherPlaneFlag.Size() && !st.DitherPlaneFlag[ref])
+	{
+		st.DitherPlaneFlag[ref] = 1;
+		st.DitherPlanes.Push(ref);
+	}
+}
+
+void LevelMesh_ConsumeDither(FLevelLocals *Level)
+{
+	LevelMeshBake *bake = Level->levelMeshBake;
+	if (bake == nullptr || HookBake != bake) return;
+	auto &st = bake->Stream;
+	for (uint32_t ref : st.DitherSides)
+	{
+		st.DitherSideFlag[ref] = 0;
+		if (ref >= bake->SideTierOwned.Size() || !bake->SideTierOwned[ref] || ref / 3 >= Level->sides.Size()) continue;
+		side_t &side = Level->sides[ref / 3];
+		int tier = ref % 3;
+		side.Flags &= ~(WALLF_DITHERTRANS << tier);
+		if (tier == side_t::mid)
+		{
+			side.dithertranscount = 0;
+			for (int t = 0; t < 3; t++) st.Sides.Touch((ref / 3) * 3 + t);
+		}
+		else st.Sides.Touch(ref);
+	}
+	for (uint32_t ref : st.DitherPlanes)
+	{
+		st.DitherPlaneFlag[ref] = 0;
+		if (ref >= bake->SectorPlaneOwned.Size() || !bake->SectorPlaneOwned[ref] || (ref >> 1) >= Level->sectors.Size()) continue;
+		sector_t &sec = Level->sectors[ref >> 1];
+		((ref & 1) ? sec.ceilingplane : sec.floorplane).dithertransflag = false;
+		st.Xforms.Touch(ref);
+	}
+	st.DitherSides.Clear();
+	st.DitherPlanes.Clear();
 }
 
 void LevelMesh_BeginFrame()

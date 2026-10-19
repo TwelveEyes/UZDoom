@@ -244,6 +244,29 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
     `ab_manifest.json` with monsters kept (identical on both paths under `-rngseed`).
   - Perflog `v8` adds the gather columns `lmgv` (views that gathered), `lmgc` / `lmga` (clusters
     / of those only adjacent), `lmgs` / `lmgsec` (subsectors / sectors) and `lmgms` (CPU ms).
+- **Game-logic feedback (ticket 18):** `ab_manifest_oobtest.json` replays `demos/oobtest/` over
+  `wads/oobtest.wad`. `make_oobtest.py` writes both and the manifest (copy the wad into the
+  build's `wads/` too; `run_matrix.sh` mounts it for `OOBTEST_*`). One layout, three views set
+  by a ZScript `StaticEventHandler` per map: MAP01 a chase camera (`SetViewPos`, out of body),
+  MAP02 an orthographic top-down camera, MAP03 the in-body view. Rooms: two equal-height
+  sectors split by a textureless line (an exposure quad), a pillar with a dormant imp behind
+  it (dither target), a pit, an undiscovered secret sector (`special` 1024) the demos never
+  enter, a window sill into a far room, a line portal. Every demo holds still for 40 tics at
+  the end, so the one-frame exposure latency never reaches the last game-state dump.
+  - Cvars (not saved): `lm_exposure 0` keeps the walk marking `SSECMF_DRAWN` / `ML_MAPPED` and
+    latching the cullcolor (the A side); `lm_exposurelog 1` prints each view's newly marked
+    subsectors / lines (`LMEXPOSE`); `lm_oobmask 0` draws and gathers out-of-body views without
+    the classic rules' leaf mask (secret sectors, radar, ortho viewbox). Dither in the
+    levelmesh follows `r_dithertransparency` in out-of-body views (`LMVF_DITHER`).
+  - Exposure isolation (the marks come from the GPU mark pass, pixels never change):
+    `run --mode demo --gamestate --manifest tools/abtest/ab_manifest_oobtest.json --set-a
+    'gl_uselevelmesh 1' --set-a 'lm_exposure 0' --set-b 'gl_uselevelmesh 1'`; the same pair
+    with `--only DOOM2_MAP01 --only DOOM2_MAP27 --only MYHOUSE_20PAM` on `ab_manifest.json`.
+  - Out-of-body rules: classic against levelmesh on MAP01 / MAP02, with and without
+    `r_radarclipper 1` on both sides; `--set-b 'lm_oobmask 0'` is the negative control.
+  - Dither: MAP01 with `r_dithertransparency 1` on both sides, A `gl_uselevelmesh 0`.
+  - Perflog `v9` adds `lmxv` (views whose marks came from the GPU), `lmxl` / `lmxn` (subsectors
+    / lines newly marked), `lmxms` (exposure apply CPU ms) and `lmmk` (mark pass GPU ms).
 - **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
   with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
   normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped

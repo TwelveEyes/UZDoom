@@ -80,7 +80,7 @@ struct PushConstants
 	int uDataIndex;
 	int uLevelMeshFlags;	// levelmesh pipelines only (LMVF_*); 0 for classic draws
 	float uLevelMeshTime;	// levelmesh pipelines only: (FrameTime - firstFrame) / 1000, the material timer at speed 1
-	int padding3;
+	int uLevelMeshView;		// levelmesh mark pass only: word offset of the view's region in LMBIND_EXPOSURE (ticket 18)
 };
 
 class VkShaderProgram
@@ -106,7 +106,10 @@ public:
 
 	// Levelmesh: the vertex shader is shared by all programs (vert is null in
 	// the returned program; use GetLevelMeshVert).
-	VkShaderProgram *GetLevelMesh(bool alphatest, EPassType passType, int program);
+	VkShaderProgram *GetLevelMesh(bool alphatest, EPassType passType, int program, bool dither);
+	// The mark pass fragment stage (ticket 18) of a level whose leaf bits
+	// take 'leafWords' words (compiled in: the line bits follow them).
+	std::unique_ptr<VulkanShader> LoadLevelMeshMarkShader(bool alphatest, unsigned leafWords, bool subgroups);
 	VulkanShader *GetLevelMeshVert() { return mLevelMeshVert.get(); }
 	std::unique_ptr<VulkanShader> LoadComputeShader(FString shadername, const char *lump, const char *defines);
 
@@ -115,7 +118,7 @@ public:
 
 private:
 	std::unique_ptr<VulkanShader> LoadVertShader(FString shadername, const char *vert_lump, const char *defines, AllShaderIndex type);
-	std::unique_ptr<VulkanShader> LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type, bool levelmesh = false);
+	std::unique_ptr<VulkanShader> LoadFragShader(FString shadername, const char *frag_lump, const char *material_lump, const char *light_lump, const char *defines, bool alphatest, bool gbufferpass, AllShaderIndex type, bool levelmesh = false, const char *extensions = nullptr);
 	std::unique_ptr<VulkanShader> LoadLevelMeshVertShader(FString shadername, const char *defines);
 
 	FString GetTargetGlslVersion();
@@ -129,7 +132,7 @@ private:
 	std::vector<VkShaderProgram> mMaterialShaders[MAX_PASS_TYPES];
 	std::vector<VkShaderProgram> mMaterialShadersNAT[MAX_PASS_TYPES];
 	std::vector<VkShaderProgram> mEffectShaders[MAX_PASS_TYPES];
-	VkShaderProgram mLevelMeshShaders[LMP_COUNT][2][MAX_PASS_TYPES];
+	VkShaderProgram mLevelMeshShaders[LMP_COUNT][2][MAX_PASS_TYPES][2];	// program, alpha test, pass, dither
 	std::unique_ptr<VulkanShader> mLevelMeshVert;
 	uint8_t compilePass = 0, compileState = 0;
 	int compileIndex = 0;

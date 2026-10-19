@@ -64,7 +64,7 @@ constexpr size_t MIN_RING_SIZE = 256 * 1024;
 const char *BufferName(int b)
 {
 	static const char *names[] = { "vertices", "indices", "surfaces", "clusters", "cluster sectors", "cluster surfaces", "sector state", "side state", "plane xform", "texture table",
-		"resolved", "shading", "3D lights", "polyobjects", "sky sources" };
+		"resolved", "shading", "3D lights", "polyobjects", "sky sources", "leaf mask", "exposure" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "buffer names out of sync");
 	return names[b];
 }
@@ -98,6 +98,7 @@ VkLevelMesh::VkLevelMesh(VulkanRenderDevice *fb) : fb(fb)
 
 	check(dev->SupportsExtension(VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME) && vkCmdDrawIndexedIndirectCountKHR != nullptr, "VK_KHR_draw_indirect_count");
 	check(f.Features.multiDrawIndirect, "multiDrawIndirect");
+	check(f.Features.fragmentStoresAndAtomics, "fragmentStoresAndAtomics");	// the mark pass (ticket 18)
 	bool di = dev->SupportsExtension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
 	check(di, "VK_EXT_descriptor_indexing");
 	if (di)
@@ -112,6 +113,19 @@ VkLevelMesh::VkLevelMesh(VulkanRenderDevice *fb) : fb(fb)
 		uint32_t limit = std::min({ p.maxDescriptorSetUpdateAfterBindSampledImages, p.maxPerStageDescriptorUpdateAfterBindSampledImages, p.maxPerStageUpdateAfterBindResources });
 		mBindlessCapacity = limit > BINDLESS_MARGIN ? std::min(limit - BINDLESS_MARGIN, MAX_BINDLESS) : 0;
 		check(mBindlessCapacity >= MIN_BINDLESS, "bindlessCapacity");
+	}
+
+	// Optional (ticket 18): subgroup ballot / arithmetic in the fragment
+	// stage, so the mark pass issues one atomic per distinct word of a
+	// subgroup. SPIR-V 1.3+ is needed: ZVulkan targets 1.4 from Vulkan 1.2.
+	if (dev->Instance->ApiVersion >= VK_API_VERSION_1_2)
+	{
+		VkPhysicalDeviceSubgroupProperties sg = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES };
+		VkPhysicalDeviceProperties2 props = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+		props.pNext = &sg;
+		vkGetPhysicalDeviceProperties2(dev->PhysicalDevice.Device, &props);
+		const VkSubgroupFeatureFlags need = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+		mFragmentSubgroups = (sg.supportedStages & VK_SHADER_STAGE_FRAGMENT_BIT) && (sg.supportedOperations & need) == need;
 	}
 }
 
@@ -138,7 +152,7 @@ bool VkLevelMesh::Supported(bool report)
 	std::string missing;
 	auto add = [&](const std::string &name) { if (!missing.empty()) missing += ", "; missing += name; };
 	for (auto &name : mMissing) add(name);
-	static const char *all[] = { "VK_KHR_draw_indirect_count", "multiDrawIndirect", "VK_EXT_descriptor_indexing", "runtimeDescriptorArray",
+	static const char *all[] = { "VK_KHR_draw_indirect_count", "multiDrawIndirect", "fragmentStoresAndAtomics", "VK_EXT_descriptor_indexing", "runtimeDescriptorArray",
 		"descriptorBindingPartiallyBound", "descriptorBindingVariableDescriptorCount", "shaderSampledImageArrayNonUniformIndexing",
 		"descriptorBindingSampledImageUpdateAfterBind", "bindlessCapacity" };
 	for (auto name : all)
@@ -167,12 +181,17 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	d << "#define LEVELMESH\n";
 	d.AppendFormat("#define LM_SET %d\n#define LM_TEXTURE_SET %d\n", lmSet, textureSet);
 	d << "#define LM_MATERIAL_LOCATION 15\n";	// past the generated varyings
+	d << "#define LM_EXPOSURE_LOCATION 16\n";	// the surface's leaf / line (mark pass, ticket 18)
 	static const char *names[] = { "VERTICES", "INDICES", "SURFACES", "CLUSTERS", "CLUSTERSECTORS", "CLUSTERSURFACES",
-		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING", "LIGHTS3D", "POLYOBJS", "SKYSOURCES" };
+		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING", "LIGHTS3D", "POLYOBJS", "SKYSOURCES", "LEAFMASK", "EXPOSURE" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "binding names out of sync");
 	for (int b = 0; b < LMBIND_NUMBUFFERS; b++) d.AppendFormat("#define LMBIND_%s %d\n", names[b], b);
 	d.AppendFormat("#define LMBIND_SAMPLERS %d\n#define NUMSAMPLERS %d\n", (int)LMBIND_SAMPLERS, (int)NUMSAMPLERS);
 	d.AppendFormat("#define LMB_COUNT %d\n#define LMB_DRAWN %uu\n#define LMB_SKY %uu\n", (int)LMB_COUNT, (unsigned)LMB_DRAWN, (unsigned)LM_Bucket(LMP_SKY, false));
+	d.AppendFormat("#define LMB_EXPOSURE %uu\n", (unsigned)LM_Bucket(LMP_EXPOSURE, false));
+	d.AppendFormat("#define LMVF_LEAFMASK %d\n#define LMVF_DITHER %d\n#define LMTS_DITHER %uu\n#define LM_MAT_DITHER 0x%xu\n",
+		(int)LMVF_LEAFMASK, (int)LMVF_DITHER, (unsigned)LMTS_DITHER, 1u << 31);
+	static_assert((LMTE_TEXFMASK & (1u << 31)) == 0, "LM_MAT_DITHER shares vLMMaterial.z with the texture-mode flags");
 	d.AppendFormat("#define LM_NOPLANE 0x%xu\n#define LMV_REFMASK 0x%xu\n", LM_NOPLANE, (unsigned)LMV_REFMASK);
 	d.AppendFormat("#define LMV_ROLESHIFT %uu\n#define LMV_TOP %uu\n", (unsigned)LMV_ROLESHIFT, (unsigned)LMV_TOP);
 	d.AppendFormat("#define LMSF_KINDMASK %uu\n#define LMSK_WALL %uu\n", (unsigned)LMSF_KINDMASK, (unsigned)LMSK_WALL);
@@ -270,6 +289,7 @@ void VkLevelMesh::ReleaseLevel()
 	for (auto &s : mSizes) s = 0;
 	for (auto &c : mCounts) c = 0;
 	for (auto &c : mBucketIndices) c = 0;
+	mLeafWords = mLineWords = 0;
 	mResident = false;
 	mId = 0;
 	mTable.clear();
@@ -293,6 +313,8 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 	CreateDeviceObjects();
 	auto dev = fb->device.get();
 
+	const unsigned leafWords = std::max((data->numLeaves + 31) / 32, 1u);
+	const unsigned lineWords = std::max((data->numLines + 31) / 32, 1u);
 	struct Src { const void *data; size_t size; unsigned count; VkBufferUsageFlags usage; };
 	Src src[LMBIND_NUMBUFFERS] = {
 		{ data->vertices.data, data->vertices.size * sizeof(LevelMeshVertex), data->vertices.size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT },
@@ -310,6 +332,8 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		{ data->lights3D.data, data->lights3D.size * sizeof(LevelMeshLight3D), data->lights3D.size, 0 },
 		{ data->polyobjs.data, data->polyobjs.size * sizeof(LevelMeshPolyobj), data->polyobjs.size, 0 },
 		{ nullptr, data->numSkySources * sizeof(uint32_t), data->numSkySources, 0 },
+		{ nullptr, leafWords * sizeof(uint32_t), leafWords, 0 },
+		{ nullptr, (size_t)MaxExposureViews * (leafWords + lineWords) * sizeof(uint32_t), MaxExposureViews * (leafWords + lineWords), VK_BUFFER_USAGE_TRANSFER_SRC_BIT },
 	};
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();
@@ -370,6 +394,8 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		}
 	}
 
+	mLeafWords = leafWords;
+	mLineWords = lineWords;
 	mId = data->id;
 	mResident = true;
 	mUploadMs = I_msTimeF() - t0;
@@ -855,7 +881,7 @@ void VkLevelMesh::PrintStats()
 		if (e.layers & TEXF_Brightmap) brightmapped++;
 	}
 	FString buckets;
-	static const char *programs[] = { "default", "warp1", "warp2", "sky" };
+	static const char *programs[] = { "default", "warp1", "warp2", "sky", "exposure" };
 	static_assert(sizeof(programs) / sizeof(programs[0]) == LMP_COUNT, "program names");
 	for (int b = 0; b < (int)LMB_COUNT; b++)
 	{

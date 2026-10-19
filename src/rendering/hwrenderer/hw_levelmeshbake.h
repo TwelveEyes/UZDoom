@@ -65,6 +65,7 @@ struct LevelMeshBakeStats
 	unsigned polyClassicSectors = 0;			// left classic: not in one sector at bake, or a heightsec / 3D-floor / portal case
 	unsigned polyClassicWalls = 0;
 	unsigned skyWalls = 0, skyClosedWalls = 0, skyCaps = 0;	// sky surfaces (ticket 14): walls, of those sky-sky door walls, caps
+	unsigned exposureQuads = 0;					// ticket 18: mark-pass-only quads (LMP_EXPOSURE)
 	unsigned skyClassicSides = 0;				// sides whose sky walls the classic keeps (heightsec, view-dependent rules)			// left classic: a wall the mesh cannot draw (translucent, portal, fog, deferred)
 	unsigned translucentWalls = 0, portalWalls = 0, fogWalls = 0, upperMissing = 0, lowerMissing = 0;
 	unsigned translucentFlats = 0, portalFlats = 0, untexturedFlats = 0;
@@ -234,6 +235,10 @@ struct LevelMeshStateStream
 	TArray<LevelMeshPolyobj> Polyobjs;		// per polyobject: the transform as last handed to the backend
 	TArray<uint8_t> LayoutMoved;			// per sector: its 3D-floor layout differs from the bake (LML3_DEFERRED)
 	TArray<uint32_t> LayoutRecheck;			// sectors whose layout must be compared again (an update that was not uploaded)
+	// Ticket 18: the side tiers (side * 3 + tier) and plane refs a dither
+	// trace flagged since the last LevelMesh_ConsumeDither, deduplicated.
+	TArray<uint32_t> DitherSides, DitherPlanes;
+	TArray<uint8_t> DitherSideFlag, DitherPlaneFlag;
 };
 
 struct LevelMeshClusterStats
@@ -285,6 +290,17 @@ public:
 	// Sized once at clustering, never cleared: a gather costs what it takes.
 	TArray<uint32_t> GatherClusterStamp, GatherLeafStamp, GatherSectorStamp;
 	uint32_t GatherStamp = 0;
+	// Ticket 18, out-of-body views (HWDrawInfo::BuildLevelMeshLeafMask): the
+	// sectors that were undiscovered secrets at bake (re-tested per view: a
+	// found secret clears SECF_SECRET), and per subsector the RadarFrame of
+	// the last view whose walk accepted it under the radar rule
+	// (r_radarclipper; HWDrawInfo::DoSubsector stamps it).
+	TArray<uint32_t> SecretSectors;
+	TArray<uint32_t> RadarStamp;
+	uint32_t RadarFrame = 0;
+	// Ticket 18: per line, bit per side: HWDrawInfo::ApplyLevelMeshExposure
+	// has marked the subsectors of that side's segs (it skips it afterwards).
+	TArray<uint8_t> LineExposed;
 
 	LevelMeshStateStream Stream;
 	~LevelMeshBake();	// detaches the change hooks (hw_levelmeshstate.cpp)
@@ -324,6 +340,7 @@ public:
 	// hides them and gives the classic draw lists back the group.
 	TArray<uint32_t> SideFFGroup;		// per side: group, ~0u = none
 	TArray<uint32_t> SectorFFGroup;		// per sector: group, ~0u = none
+	TArray<int32_t> FFGroupSource;		// per group: its side (>= 0), or -1 - its sector (ticket 18 dither)
 	TArray<uint8_t> FFGroupBaked;		// per group: all its surfaces are drawable at bake
 	TArray<uint8_t> FFGroupOwned;		// per group: the levelmesh draws it now
 	TArray<uint32_t> FFWatchStart;		// group -> watches (CSR)
@@ -451,6 +468,16 @@ void LevelMesh_BeginFrame();
 // window and before the scene is built, so the uploaded records are the
 // values drawn this frame.
 void LevelMesh_UpdateState(FLevelLocals *Level);
+
+// Ticket 18 dither (hw_levelmeshstate.cpp): a dither trace flagged a side
+// tier (WALLF_DITHERTRANS_*) / a sector plane (secplane_t::dithertransflag
+// of one of the sector's planes): its record is streamed with LMTS_DITHER.
+void LevelMesh_DitherChanged(side_t *side, int tier);
+void LevelMesh_DitherChanged(sector_t *sec, secplane_t *plane);
+// Clears the dither flags of the levelmesh-owned tiers / planes flagged so
+// far (the classic clears its own after drawing them), once per frame
+// before the traces flag the frame's.
+void LevelMesh_ConsumeDither(FLevelLocals *Level);
 
 // The per-view inputs of the shading resolve (hw_levelmeshshade.cpp).
 void LevelMesh_FillShading(HWDrawInfo *di, LevelMeshShading &out);

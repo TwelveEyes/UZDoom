@@ -334,12 +334,15 @@ struct ClusterBuilder
 		LeafTris.Resize(nleaf);
 		for (auto &v : LeafStart) v = 0;
 		for (auto &v : LeafTris) v = 0;
+		// Exposure quads (mark pass only, ticket 18) ride along with their
+		// leaf without counting against the triangle budget.
+		auto isExposure = [&](unsigned s) { return ((surfaces[s].flags & LMSF_PROGRAMMASK) >> LMSF_PROGRAMSHIFT) == LMP_EXPOSURE; };
 		for (unsigned s = 0; s < nsurf; s++)
 		{
 			if (isPoly(s) || isSky(s)) continue;
 			int leaf = Bake->SurfaceLeaf[s];
 			LeafStart[leaf + 1]++;
-			LeafTris[leaf] += surfaces[s].numIndices / 3;
+			if (!isExposure(s)) LeafTris[leaf] += surfaces[s].numIndices / 3;
 		}
 		for (unsigned i = 0; i < nleaf; i++) LeafStart[i + 1] += LeafStart[i];
 		LeafSurfaces.Resize(LeafStart[nleaf]);

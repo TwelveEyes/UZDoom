@@ -56,6 +56,8 @@ enum ELevelMeshBinding
 	LMBIND_LIGHTS3D,		// LevelMeshLight3D
 	LMBIND_POLYOBJS,		// LevelMeshPolyobj
 	LMBIND_SKYSOURCES,		// per sky source: its sky configuration this frame (uint)
+	LMBIND_LEAFMASK,		// bit per leaf: the leaves the view may show (LevelMeshView::leafMask, ticket 18)
+	LMBIND_EXPOSURE,		// per view index (0 main, 1 + k portal view k): leaf bits, then line bits (mark pass, ticket 18)
 	LMBIND_NUMBUFFERS,
 	LMBIND_SAMPLERS = LMBIND_NUMBUFFERS,	// sampler[NUMSAMPLERS], indexed by clamp mode
 };
@@ -74,6 +76,8 @@ public:
 	static FString ShaderDefines(int lmSet, int textureSet);
 
 	bool Supported(bool report);
+	// Subgroup basic / ballot / arithmetic operations in fragment shaders (the mark pass dedupes its atomics).
+	bool FragmentSubgroups() const { return mFragmentSubgroups; }
 	void SetData(const LevelMeshUploadData *data);
 	bool IsResident(uint64_t id) const { return mResident && mId == id; }
 	void PrintStats();
@@ -116,6 +120,12 @@ public:
 	unsigned GetSkySourceCount() const { return mCounts[LMBIND_SKYSOURCES]; }
 	unsigned GetIndexCount() const { return mCounts[LMBIND_INDICES]; }
 	unsigned GetBucketIndexCount(int bucket) const { return mBucketIndices[bucket]; }
+	// Ticket 18: words of a leaf bitset, and of one view's exposure region
+	// (leaf bits, then line bits) in LMBIND_EXPOSURE.
+	unsigned GetLeafWords() const { return mLeafWords; }
+	unsigned GetLineWords() const { return mLineWords; }
+	unsigned GetExposureWords() const { return mLeafWords + mLineWords; }
+	enum { MaxExposureViews = 1 + 64 };	// the main view + VkLevelMeshRenderer::MaxPortalViews
 	uint64_t GetId() const { return mResident ? mId : 0; }
 
 private:
@@ -136,6 +146,7 @@ private:
 	std::vector<std::string> mMissing;		// required features the device lacks
 	std::string mReported;					// last reported missing list
 	uint32_t mBindlessCapacity = 0;
+	bool mFragmentSubgroups = false;
 
 	// Device objects (created on first upload)
 	bool mCreated = false;
@@ -153,6 +164,7 @@ private:
 	size_t mSizes[LMBIND_NUMBUFFERS] = {};
 	unsigned mCounts[LMBIND_NUMBUFFERS] = {};
 	unsigned mBucketIndices[LMB_COUNT] = {};	// per bucket, over all clusters
+	unsigned mLeafWords = 0, mLineWords = 0;
 	std::unique_ptr<VulkanDescriptorSet> mSet;
 	bool mSamplersDirty = false;
 	double mUploadMs = 0;

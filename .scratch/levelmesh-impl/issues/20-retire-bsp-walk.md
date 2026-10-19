@@ -63,3 +63,15 @@ Afterwards, the levelmesh render-CPU window must be independent of level size.
   the walk it needs its own place in the frame and a fallback for views without a readback
   (today: the walk gathers). Ticket 17's perf table shows the cluster-level gather processing
   2-3x the walk's sprites in myhouse interiors.
+- 2026-10-18 (from 18): the OOB radar rule (`r_radarclipper`) is the one view-mode rule still
+  sourced from the walk: `DoSubsector` stamps the radar-accepted subsectors
+  (`LevelMeshBake::RadarStamp`) that the leaf mask keeps (`HWDrawInfo::FinishLevelMeshLeafMask`),
+  and `AddLine` keeps the radar `SSECMF_DRAWN` marks. Retiring the walk needs a standalone radar
+  pass: a clipper-only BSP traversal from `Viewpoint.OffPos` (the `rClipper` logic of `AddLine`)
+  producing the stamp set and the radar marks. Secret gating and the ortho viewbox are
+  walk-independent (`BuildLevelMeshLeafMask`). The dither targets come from the actor gather
+  (`CollectDitherTargets`), the exposure marks and cullcolor latch from the mark pass
+  (`ApplyLevelMeshExposure`); both need the frame placement the gather gets here. The mark pass
+  sees the main view's depth before the portals draw, so geometry the levelmesh draws behind a
+  line portal (covered later by the portal's stencil) is exposed too; with the walk gone the
+  levelmesh will have to stop at portal lines anyway.

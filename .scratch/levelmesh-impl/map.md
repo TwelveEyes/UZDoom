@@ -61,6 +61,8 @@ Required:
   ZVulkan patch, and the bindless capacity must be at least 4096 (ticket 07).
   `descriptorBindingUpdateUnusedWhilePending` is not enabled, so all levelmesh descriptor writes
   happen at frame start.
+- `fragmentStoresAndAtomics`: the mark pass writes the exposure bits from the fragment stage
+  (ticket 18).
 - Testing: `vk_levelmesh_forcemissing "<feature>,..."` (or `all`) fakes missing features.
 
 Optional:
@@ -282,7 +284,7 @@ are included.
 | 25 | Polyobject origin subsectors baked as map-wide flats (citadel z-fighting) | task | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–17 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–18 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -501,3 +503,21 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Test map `tools/abtest/make_gathertest.py`, `ab_manifest_gather_monsters.json`; perflog v8
     `lmgv lmgc lmga lmgs lmgsec lmgms`.
   - Debug cvars: `lm_gather`, `lm_gatheradjacent`, `lm_gatherlog`.
+- 2026-10-19: ticket 18 resolved (transitional) → exposure marks (`SSECMF_DRAWN`, `ML_MAPPED`)
+  and the cullcolor latch come from a per-view **mark pass** (re-rasterization against the final
+  depth, a bit per leaf / line; `mark.fp`) read back with the cluster bitset, one frame late (DC3);
+  the walk's marks and latch are off for views with a readback (radar marks stay). Bake adds
+  `LevelMeshSurface::leaf / line` and mark-only **exposure quads** (`LMP_EXPOSURE`).
+  - Dither: `LMTS_DITHER` in the side / plane / 3D-floor group records, a second state update
+    after `CreateScene`, owned flags consumed before the next frame's traces, per-surface branch
+    in a dither-capable pipeline variant (`LMVF_DITHER`); targets from the actor gather.
+  - Out-of-body views draw and gather inside a leaf mask (secret sectors, ortho viewbox, radar
+    from the walk's `RadarStamp`); the suplex pitch window / `OoBFrustumAngle` are not ported.
+    The standalone radar pass is handed to ticket 20.
+  - New device requirement `fragmentStoresAndAtomics`; subgroup ballot / arithmetic (optional)
+    dedupes the mark atomics. Readback copies move to `VkLevelMeshRenderer::EndFrame` (no extra
+    render-pass break). Mark pass GPU 0.26 ms SOS MAP32 V1, 0.15 ms myhouse MAP01 V1; apply CPU
+    0.02 / 0.06 ms, level-size independent on the gathertest scaling pair.
+  - Game-state set-diffs (DC5: exact depth vs the clipper) staged in `allowlists/pending/` for
+    review. Test kit `tools/abtest/make_oobtest.py`; perflog v9 `lmxv lmxl lmxn lmxms lmmk`;
+    cvars `lm_exposure`, `lm_exposurelog`, `lm_oobmask`.

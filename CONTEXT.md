@@ -96,6 +96,19 @@ host-readable ring and read by CPU consumers (actor/decal gather, exposure, dith
 at most one pipeline depth later.
 _Avoid_: readback (too generic), occlusion results
 
+**Mark pass**:
+The re-rasterization of a view's levelmesh surfaces against its final depth (EQUAL for drawn
+surfaces, LEQUAL for sky surfaces and exposure quads) that sets a bit per leaf (subsector) and per
+line with a visible surface. It is the visibility feedback the exposure marks (`SSECMF_DRAWN`,
+`ML_MAPPED`) and the cullcolor latch come from (ticket 18).
+_Avoid_: occlusion query, exposure pass
+
+**Exposure quad**:
+A bake-only wall quad (front floor to front ceiling along a whole side) of a two-sided line, or of a
+one-sided line whose wall the levelmesh does not draw. Only the mark pass rasterizes it, so a line
+seen through an opening is exposed like the classic's clipper-passing segs.
+_Avoid_: portal quad, invisible wall
+
 **Side list**:
 A bake output for surfaces the opaque mesh cannot own: translucent and fog-boundary surfaces, portal
 windows, and missing-texture/flood fills. The CPU-driven passes in tickets 15 and 16 draw them.

@@ -80,7 +80,7 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_TWOSIDED = 1 << 6,		// unused (the levelmesh culls back faces; 3D-floor planes are baked once per drawn side)
 	LMSF_GLOW = 1 << 7,		// HWF_GLOW at bake
 	LMSF_HEIGHTSEC = 1 << 8,	// front or back sector has a Boom heightsec (view-dependent in classic, baked unfaked)
-	// 1 << 9 reserved: dither eligibility (ticket 18; WALLF_DITHERTRANS_* is per-frame state)
+	// 1 << 9 unused (dither is per-frame state, streamed in the side / plane records: LMTS_DITHER)
 	LMSF_SKEW = 1 << 10,		// sloped / skewed texture alignment
 	LMSF_LIGHTLIST = 1 << 11,	// banded wall: lit by lightSector's 3D lightlist per layer (classic split planes)
 	LMSF_SKY = 1 << 12,			// sky wall or sky cap: depth / stencil only, drawn by the sky portal of its sky (LMP_SKY, ticket 14)
@@ -93,8 +93,8 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_SKYCLOSED = 1 << 20,	// sky wall of a sky-sky line: shown only while the back sector (vRef's) is closed (HWWall::SkyTop / SkyBottom)
 	LMSF_POLYOBJ = 1 << 19,		// polyobject wall: x / y are polyobject-local, placed by its LevelMeshPolyobj (index in the side record)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
-	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..29
-	LMSF_PROGRAMMASK = 3u << 28,
+	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..30
+	LMSF_PROGRAMMASK = 7u << 28,
 };
 
 // LevelMeshSurface::sideFlags: the side_t::GetLightLevel inputs of the
@@ -115,7 +115,7 @@ enum ELevelMeshSurfaceKind : uint32_t
 	LMSK_CEILING,
 };
 
-// std430-compatible: 32 x 32 bit.
+// std430-compatible: 34 x 32 bit.
 // Sky surfaces (LMSF_SKY): sideRef is the sky source (LevelMeshBake::
 // SkySources), vRef the back sector's floor ref of an LMSF_SKYCLOSED wall;
 // the texture and light fields are unused.
@@ -164,8 +164,14 @@ struct LevelMeshSurface
 	// back sector's plane, so the clamp follows both planes as they move.
 	// LM_NOPLANE = none.
 	uint32_t edgeClamp;
+	// Ticket 18: what the surface exposes when it is visible (the mark pass,
+	// LevelMeshReadback): its BSP leaf (render subsector index) and, for
+	// walls, its linedef. 0xffffffff = none (polyobject walls have no leaf;
+	// flats and sky caps no line).
+	uint32_t leaf;
+	uint32_t line;
 };
-static_assert(sizeof(LevelMeshSurface) == 32 * 4, "LevelMeshSurface must stay std430-compatible");
+static_assert(sizeof(LevelMeshSurface) == 34 * 4, "LevelMeshSurface must stay std430-compatible");
 
 // A 3D light: one lightlist_t of a sector with 3D floors, identified at bake
 // by (sector, lightsource, p_lightlevel, caster), the inputs the classic
@@ -207,6 +213,10 @@ enum ELevelMeshProgram : uint32_t
 	// program's shaders into depth / stencil / alpha only, by the sky
 	// portals (DFrameBuffer::DrawLevelMeshSky), never by the scene draw.
 	LMP_SKY,
+	// Not a material: exposure quads (a two-sided line's opening, a one-sided
+	// line without a drawn wall), rasterized only by the mark pass
+	// (ticket 18), never by the scene or sky draws.
+	LMP_EXPOSURE,
 	LMP_COUNT,
 };
 
@@ -217,7 +227,8 @@ enum ELevelMeshProgram : uint32_t
 // holds the surfaces the levelmesh does not draw yet (3D floors, heightsecs,
 // light bands, sky-hack mid textures); the classic path keeps drawing them.
 // The LMP_SKY buckets hold the sky walls and caps, drawn only by the sky
-// portals (never by the scene pass)
+// portals (never by the scene pass); the LMP_EXPOSURE buckets the exposure
+// quads, drawn only by the mark pass
 // (LevelMeshBake::SideTierOwned / SectorPlaneOwned). A texture swap that
 // would change a surface's bucket defers its tier / plane at runtime
 // (LMTS_DEFERRED) instead.
@@ -236,7 +247,7 @@ inline uint32_t LM_Bucket(uint32_t program, bool masked)
 }
 
 // A spatial group of triangles: a BSP subtree cut at the triangle budget.
-// std430-compatible: 22 x 32 bit.
+// std430-compatible: (13 + LMB_COUNT) x 32 bit.
 struct LevelMeshCluster
 {
 	float bmin[3];			// xy AABB; z from the load heights, refreshed when an anchor plane moves (LevelMesh_UpdateState)
@@ -248,7 +259,7 @@ struct LevelMeshCluster
 	uint32_t firstSector, numSectors;	// into the cluster -> sector list (vertex anchor sectors)
 	uint32_t firstSurface, numSurfaces;	// into the cluster -> surface list
 };
-static_assert(sizeof(LevelMeshCluster) == 22 * 4, "LevelMeshCluster must stay std430-compatible");
+static_assert(sizeof(LevelMeshCluster) == (13 + LMB_COUNT) * 4, "LevelMeshCluster must stay std430-compatible");
 
 // Per-sector state. std430-compatible: 24 x 32 bit. Every field is
 // streamed dirty-only (LevelMesh_UpdateState compares the whole packed
@@ -279,6 +290,10 @@ enum ELevelMeshTextureStateFlags : uint32_t
 	// offset): the classic path draws the tier / plane, the levelmesh skips
 	// its surfaces.
 	LMTS_DEFERRED = 1,
+	// Ticket 18: the classic would draw the tier / plane with EFF_DITHERTRANS
+	// this frame (WALLF_DITHERTRANS_*, secplane_t::dithertransflag; 3D-floor
+	// groups: their side's mid tier / one of their sector's 3D-floor planes).
+	LMTS_DITHER = 2,
 };
 
 // Per side x tier (index side * 3 + tier). std430-compatible: 8 x 32 bit.
@@ -412,8 +427,12 @@ enum ELevelMeshViewFlags : uint32_t
 	LMVF_FULLBRIGHT = 1,	// debug: draw every surface with the render state's (fullbright) light instead of the resolve
 	// Sky draws: the sky configuration drawn (1-based, LevelMeshView::skySources)
 	// in bits 8..23; 0 hides every sky surface.
+	LMVF_LEAFMASK = 2,		// hide the surfaces of leaves outside LevelMeshView::leafMask (out-of-body view rules, ticket 18)
+	LMVF_DITHER = 4,		// dither-capable pipelines: surfaces whose record carries LMTS_DITHER dither (ticket 18)
 	LMVF_SKYSHIFT = 8,
 	LMVF_SKYMASK = 0xffff << LMVF_SKYSHIFT,
+	// The mark pass: every sky surface whose source has a configuration this frame.
+	LMVF_SKYALL = 0xffff << LMVF_SKYSHIFT,
 };
 
 struct LevelMeshView
@@ -445,6 +464,26 @@ struct LevelMeshView
 	// Ticket 17: identifies the view across frames (DFrameBuffer::
 	// LevelMeshVisibility); 0 = no visibility readback.
 	uint64_t viewKey = 0;
+	// Ticket 18: bit per leaf (render subsector), the leaves whose surfaces
+	// the view may show (out-of-body rules: secret sectors, radar, ortho
+	// viewbox); null = all. Valid during the call.
+	const uint32_t *leafMask = nullptr;
+	unsigned leafMaskWords = 0;
+};
+
+// Ticket 18: what a view's GPU work found visible in the previous rendered
+// frame (DFrameBuffer::LevelMeshVisibility): the clusters its final cull
+// passed (bit per cluster), and the leaves (render subsectors) and lines
+// with a surface that passed the depth test (the mark pass). A null array
+// = not available.
+struct LevelMeshReadback
+{
+	const uint32_t *clusters = nullptr;
+	unsigned clusterWords = 0;
+	const uint32_t *leaves = nullptr;
+	unsigned leafWords = 0;
+	const uint32_t *lines = nullptr;
+	unsigned lineWords = 0;
 };
 
 template<class T> struct LevelMeshSpan
@@ -515,4 +554,5 @@ struct LevelMeshUploadData
 	unsigned numSkySources = 0;			// LMBIND_SKYSOURCES entries (zero at upload: every sky surface hidden)
 	LevelMeshSpan<int> textureIds;		// ids resolved into the translation table
 	unsigned translationTableSize = 0;	// number of texture ids (TexMan.NumTextures())
+	unsigned numLeaves = 0, numLines = 0;	// render subsectors / linedefs (exposure and leaf mask bits, ticket 18)
 };

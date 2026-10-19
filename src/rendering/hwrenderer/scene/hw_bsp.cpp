@@ -51,6 +51,15 @@ CVAR(Bool, lm_gather, true, CVAR_NOSAVE)
 CVAR(Bool, lm_gatheradjacent, true, CVAR_NOSAVE)
 // Debug: print every view's gather (clusters, subsectors, sectors).
 CVAR(Bool, lm_gatherlog, false, CVAR_NOSAVE)
+// Levelmesh exposure (ticket 18): 0 keeps the BSP walk marking SSECMF_DRAWN /
+// ML_MAPPED and latching the cullcolor on the levelmesh path (the A side of
+// the exposure A/B).
+CVAR(Bool, lm_exposure, true, CVAR_NOSAVE)
+// Debug: print every view's applied exposure (newly marked subsectors / lines, cullcolor).
+CVAR(Bool, lm_exposurelog, false, CVAR_NOSAVE)
+// Out-of-body views (ticket 18): 0 draws and gathers without the classic
+// rules' leaf mask (secret sectors, radar, ortho viewbox).
+CVAR(Bool, lm_oobmask, true, CVAR_NOSAVE)
 EXTERN_CVAR(Bool, lm_draw)
 EXTERN_CVAR(Bool, lm_portals)
 EXTERN_CVAR(Bool, gl_texture)
@@ -366,7 +375,9 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 	{
 		if (!(currentsubsector->flags & SSECMF_DRAWN))
 		{
-			if (clipper.SafeCheckRange(startAngle, endAngle) && !doOob)
+			// Ticket 18: with lmExposure the view's marks come from the GPU
+			// mark pass; the radar marks (player-body visibility) stay here.
+			if (clipper.SafeCheckRange(startAngle, endAngle) && !doOob && !lmExposure)
 			{
 			  currentsubsector->flags |= SSECMF_DRAWN;
 			}
@@ -383,7 +394,12 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 		return;
 	}
 
-	if (!doOob || (!r_radarclipper || (Level->flags3 & LEVEL3_NOFOGOFWAR) || clipperr.SafeCheckRange(startAngleR, endAngleR)))
+	if (lmExposure)
+	{
+		if (doOob && r_radarclipper && !(Level->flags3 & LEVEL3_NOFOGOFWAR) && clipperr.SafeCheckRange(startAngleR, endAngleR))
+			currentsubsector->flags |= SSECMF_DRAWN;
+	}
+	else if (!doOob || (!r_radarclipper || (Level->flags3 & LEVEL3_NOFOGOFWAR) || clipperr.SafeCheckRange(startAngleR, endAngleR)))
 		currentsubsector->flags |= SSECMF_DRAWN;
 
 	uint8_t ispoly = uint8_t(seg->sidedef->Flags & WALLF_POLYOBJ);
@@ -401,7 +417,7 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 		{
 			clipper.SafeAddClipRange(startAngle, endAngle);
 		}
-		if (seg->frontsector->Colormap.FadeColor != 0) Level->cullcolor = seg->frontsector->Colormap.FadeColor; // Write can't be multithreaded
+		if (!lmExposure && seg->frontsector->Colormap.FadeColor != 0) Level->cullcolor = seg->frontsector->Colormap.FadeColor; // Write can't be multithreaded
 	}
 
 	// [XA] NOTE: ideally it'd be nice to collapse these checks into one,
@@ -449,7 +465,7 @@ void HWDrawInfo::AddLine (seg_t *seg, bool portalclip)
 		backsector = currentsector;
 	}
 
-	seg->linedef->flags |= ML_MAPPED;
+	if (!lmExposure) seg->linedef->flags |= ML_MAPPED;
 
 	if (ispoly || seg->linedef->validcount!=validcount)
 	{
@@ -779,8 +795,9 @@ void HWDrawInfo::RenderParticles(subsector_t *sub, sector_t *front)
 // rendered frame: the device waits for the previous frame's submits before
 // the next one starts (VkLevelMeshRenderer::BeginFrame). A view with no
 // readback (first frame of a level or after a frame without the levelmesh,
-// a portal view past the backend's limit, out-of-body or offscreen views)
-// gathers through the walk for that frame.
+// a portal view past the backend's limit, offscreen views) gathers through
+// the walk for that frame. Out-of-body views gather too, inside their leaf
+// mask (ticket 18: HWDrawInfo::BuildLevelMeshLeafMask).
 //
 // RenderThings / RenderParticles keep all their per-thing rules (distance,
 // map sections, thing->validcount dedup, the clip portal); the gather only
@@ -789,21 +806,25 @@ void HWDrawInfo::RenderParticles(subsector_t *sub, sector_t *front)
 //
 //==========================================================================
 
-const uint32_t *HWDrawInfo::BeginLevelMeshGather(unsigned &words)
+// Ticket 18: the same readback carries the view's exposure (the mark pass's
+// leaf / line bits): ApplyLevelMeshExposure marks them before the walk,
+// which then leaves its own marks and cullcolor latch out (lmExposure).
+bool HWDrawInfo::BeginLevelMeshFeedback(LevelMeshReadback &rb)
 {
 	lmGather = false;
-	words = 0;
+	lmExposure = false;
+	rb = {};
 	auto bake = Level->levelMeshBake;
-	// The conditions of DrawLevelMesh (a view the levelmesh draws), and
-	// out-of-body views stay classic (dither / radar rules: ticket 18).
-	if (!lm_gather || !gl_render_things || lmOffscreen || Viewpoint.bDoOob || bake == nullptr || !lm_draw || !gl_texture ||
-		(outer != nullptr && (!lm_portals || !mPortalStencil)) || !screen->LevelMeshResident(bake->Id)) return nullptr;
+	// The conditions of DrawLevelMesh (a view the levelmesh draws).
+	if (lmOffscreen || bake == nullptr || !lm_draw || !gl_texture ||
+		(outer != nullptr && (!lm_portals || !mPortalStencil)) || !screen->LevelMeshResident(bake->Id)) return false;
 	lmViewKey = LevelMeshViewKey();
-	const uint32_t *bits = screen->LevelMeshVisibility(bake->Id, lmViewKey, words);
-	if (bits == nullptr || words != std::max((bake->Clusters.Size() + 31) / 32, 1u) || bake->ClusterAdjStart.Size() != bake->Clusters.Size() + 1 ||
-		bake->GatherClusterStamp.Size() != bake->Clusters.Size()) return nullptr;
-	lmGather = true;
-	return bits;
+	if (!screen->LevelMeshVisibility(bake->Id, lmViewKey, rb)) return false;
+	lmGather = lm_gather && gl_render_things && rb.clusters != nullptr && rb.clusterWords == std::max((bake->Clusters.Size() + 31) / 32, 1u) &&
+		bake->ClusterAdjStart.Size() == bake->Clusters.Size() + 1 && bake->GatherClusterStamp.Size() == bake->Clusters.Size();
+	lmExposure = lm_exposure && rb.leaves != nullptr && rb.lines != nullptr && rb.leafWords == (Level->subsectors.Size() + 31) / 32 &&
+		rb.lineWords == (Level->lines.Size() + 31) / 32;
+	return lmGather || lmExposure;
 }
 
 void HWDrawInfo::GatherLevelMeshThings(const uint32_t *bits, unsigned words)
@@ -830,9 +851,10 @@ void HWDrawInfo::GatherLevelMeshThings(const uint32_t *bits, unsigned words)
 		bake->GatherLeafStamp[leaf] = stamp;
 		subsector_t *sub = &Level->subsectors[leaf];
 		sector_t *sector = sub->sector;
-		// DoSubsector's rejections.
+		// DoSubsector's rejections, and the out-of-body rules (ticket 18).
 		if (!sector || !CurrentMapSections[sub->mapsection] || (sub->flags & SSECF_POLYORG)) return;
 		if (mClipPortal && mClipPortal->ClipSubsector(sub) == PClip_InFront) return;
+		if (lmLeafMaskValid && !(lmLeafMask[leaf >> 5] & (1u << (leaf & 31)))) return;
 		nsubsectors++;
 		bool particles = sub->sprites.Size() > 0 || Level->ParticlesInSubsec[leaf] != NO_PARTICLE;
 		bool things = false;
@@ -857,6 +879,7 @@ void HWDrawInfo::GatherLevelMeshThings(const uint32_t *bits, unsigned words)
 			if (things) RenderThings(sub, fakesector);
 			SetupSprite.Unclock();
 		}
+		if (things) CollectDitherTargets(sector);
 	};
 	auto gatherCluster = [&](uint32_t c, bool adjacent)
 	{
@@ -911,6 +934,24 @@ void HWDrawInfo::GatherLevelMeshThings(const uint32_t *bits, unsigned words)
 // Draw one or more line segments.
 //
 //==========================================================================
+
+void HWDrawInfo::CollectDitherTargets(sector_t *sector)
+{
+	if (r_dithertransparency && Viewpoint.bDoOob && (RTnum < MAXDITHERACTORS) && mCurrentPortal == nullptr)
+	{
+		// [DVR] Not parallelizable due to variables RTnum and RenderedTargets[]
+		for (auto p = sector->touching_renderthings; p != nullptr; p = p->m_snext)
+		{
+			auto thing = p->m_thing;
+			if (thing->validcount == validcount) continue; // Don't double count
+			if (((thing->flags3 & MF3_ISMONSTER) && !(thing->flags & MF_CORPSE)) || (thing->flags & MF_MISSILE))
+			{
+				if (RTnum < MAXDITHERACTORS) RenderedTargets[RTnum++] = thing;
+				else break;
+			}
+		}
+	}
+}
 
 void HWDrawInfo::DoSubsector(subsector_t * sub)
 {
@@ -1013,6 +1054,14 @@ void HWDrawInfo::DoSubsector(subsector_t * sub)
 		// Skip subsector if outside vertical or horizontal clippers or is in unexplored territory (fog of war)
 		if(!pitchvisible || !anglevisible || (!radarvisible && r_radarclipper)) return;
 	}
+	// Ticket 18: the radar rule's accepted subsectors, for the levelmesh's
+	// leaf mask (FinishLevelMeshLeafMask).
+	if (doOob && r_radarclipper && !(Level->flags3 & LEVEL3_NOFOGOFWAR))
+	{
+		auto bake = Level->levelMeshBake;
+		unsigned i = sub->Index();
+		if (bake && i < bake->RadarStamp.Size()) bake->RadarStamp[i] = bake->RadarFrame;
+	}
 
 	if (mClipPortal)
 	{
@@ -1071,20 +1120,8 @@ void HWDrawInfo::DoSubsector(subsector_t * sub)
 				SetupSprite.Unclock();
 			}
 		}
-		if (r_dithertransparency && doOob && (RTnum < MAXDITHERACTORS) && mCurrentPortal == nullptr)
-		{
-			// [DVR] Not parallelizable due to variables RTnum and RenderedTargets[]
-			for (auto p = sector->touching_renderthings; p != nullptr; p = p->m_snext)
-			{
-				auto thing = p->m_thing;
-				if (thing->validcount == validcount) continue; // Don't double count
-				if (((thing->flags3 & MF3_ISMONSTER) && !(thing->flags & MF_CORPSE)) || (thing->flags & MF_MISSILE))
-				{
-					if (RTnum < MAXDITHERACTORS) RenderedTargets[RTnum++] = thing;
-					else break;
-				}
-			}
-		}
+		// The actor gather collects them with the things it gathers.
+		if (!lmGather) CollectDitherTargets(sector);
 	}
 
 	if (gl_render_flats)
@@ -1258,8 +1295,16 @@ void HWDrawInfo::RenderBSP(void *node, bool drawpsprites)
 
 	// Ticket 17: actors / particles from last frame's GPU visibility (lmGather
 	// makes the walk skip them); gathered after the walk, through the same jobs.
-	unsigned lmWords = 0;
-	const uint32_t *lmBits = BeginLevelMeshGather(lmWords);
+	// Ticket 18: exposure marks and the cullcolor latch from last frame's mark
+	// pass (lmExposure makes the walk skip them); the out-of-body rules' leaf
+	// mask, completed after the walk (the radar rule is the walk's).
+	LevelMeshReadback lmReadback;
+	BeginLevelMeshFeedback(lmReadback);
+	if (lmExposure) ApplyLevelMeshExposure(lmReadback);
+	lmLeafMaskValid = false;
+	if (Viewpoint.bDoOob && lm_oobmask && Level->levelMeshBake) BuildLevelMeshLeafMask();
+	const uint32_t *lmBits = lmGather ? lmReadback.clusters : nullptr;
+	unsigned lmWords = lmReadback.clusterWords;
 
 	multithread = gl_multithread;
 	if (multithread)
@@ -1270,6 +1315,7 @@ void HWDrawInfo::RenderBSP(void *node, bool drawpsprites)
 		});
 		if (Viewpoint.bDoOrtho && ((Level->flags3 & LEVEL3_NOFOGOFWAR) || !r_radarclipper)) RenderOrthoNoFog();
 		else RenderBSPNode(node);
+		FinishLevelMeshLeafMask();
 		if (lmBits) GatherLevelMeshThings(lmBits, lmWords);
 
 		jobQueue.AddJob(RenderJob::TerminateJob, nullptr, nullptr);
@@ -1282,6 +1328,7 @@ void HWDrawInfo::RenderBSP(void *node, bool drawpsprites)
 	{
 		if (Viewpoint.bDoOrtho && ((Level->flags3 & LEVEL3_NOFOGOFWAR) || !r_radarclipper)) RenderOrthoNoFog();
 		else RenderBSPNode(node);
+		FinishLevelMeshLeafMask();
 		if (lmBits) GatherLevelMeshThings(lmBits, lmWords);
 		Bsp.Unclock();
 	}

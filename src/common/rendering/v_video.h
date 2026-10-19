@@ -41,6 +41,7 @@ struct LevelMeshUploadData;
 struct LevelMeshStateUpdate;
 struct LevelMeshView;
 struct LevelMeshPerfStats;
+struct LevelMeshReadback;
 class FSkyVertexBuffer;
 class IIndexBuffer;
 class IVertexBuffer;
@@ -199,10 +200,11 @@ public:
 	// state's current depth / stencil / color mask. False = not drawn.
 	virtual bool DrawLevelMeshSky(uint32_t config, FRenderState &state) { return false; }
 	virtual bool GetLevelMeshStats(LevelMeshPerfStats &stats) { return false; }
-	// The cluster visibility bitset (bit = cluster index, 'words' 32-bit words)
-	// the view (LevelMeshView::viewKey) wrote in the previous rendered frame,
-	// or null (ticket 17 actor gather). Valid for the current frame.
-	virtual const uint32_t *LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words) { return nullptr; }
+	// What the view (LevelMeshView::viewKey) found visible in the previous
+	// rendered frame: its cluster visibility bitset (ticket 17 actor gather)
+	// and its mark pass's leaf / line bits (ticket 18 exposure). False = no
+	// readback. Valid for the current frame.
+	virtual bool LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, LevelMeshReadback &out) { return false; }
 	bool allowSSBO() const
 	{
 #ifndef HW_BLOCK_SSBO

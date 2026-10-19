@@ -238,6 +238,8 @@ void HWDrawInfo::StartScene(FRenderViewpoint &parentvp, HWViewpointUniforms *uni
 	// Portal views inherit whether the root view is offscreen (ProcessScene).
 	lmOffscreen = outer != nullptr && outer->lmOffscreen;
 	lmGather = false;
+	lmExposure = false;
+	lmLeafMaskValid = false;
 	lmViewKey = 0;
 
 }
@@ -675,6 +677,14 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	view.mirrored = portalState.isMirrored();
 	view.viewKey = LevelMeshViewKey();
 	if (view.portal && lm_portalrect) PortalCullRect(view.cullRect);
+	// Ticket 18: the classic dithers in out-of-body views; the out-of-body
+	// rules' leaves (BuildLevelMeshLeafMask).
+	if (r_dithertransparency && Viewpoint.bDoOob) view.flags |= LMVF_DITHER;
+	if (lmLeafMaskValid)
+	{
+		view.leafMask = lmLeafMask.Data();
+		view.leafMaskWords = lmLeafMask.Size();
+	}
 	LevelMeshShading shading;
 	LevelMesh_FillShading(this, shading);
 	view.shading = &shading;
@@ -1075,9 +1085,9 @@ static ETraceStatus TraceCallbackForDitherTransparency(FTraceResults& res, void*
 					// Two sided line! So let's find out if mid, top, or bottom texture needs dithered transparency
 					bf = max(bf, res.Line->sidedef[!res.Side]->sector->floorplane.ZatPoint(res.HitPos.XY()));
 					bc = min(bc, res.Line->sidedef[!res.Side]->sector->ceilingplane.ZatPoint(res.HitPos.XY()));
-					if (res.HitPos.Z <= bf) res.Line->sidedef[res.Side]->Flags |= WALLF_DITHERTRANS_BOTTOM;
-					else if (res.HitPos.Z < bc) res.Line->sidedef[res.Side]->Flags |= WALLF_DITHERTRANS_MID;
-					else res.Line->sidedef[res.Side]->Flags |= WALLF_DITHERTRANS_TOP;
+					int tier = res.HitPos.Z <= bf ? side_t::bottom : res.HitPos.Z < bc ? side_t::mid : side_t::top;
+					res.Line->sidedef[res.Side]->Flags |= WALLF_DITHERTRANS << tier;
+					LevelMesh_DitherChanged(res.Line->sidedef[res.Side], tier);
 
 					res.Line->sidedef[res.Side]->dithertranscount = max<int>(1, res.Line->sidedef[!res.Side]->sector->e->XFloor.ffloors.Size());
 				}
@@ -1085,6 +1095,7 @@ static ETraceStatus TraceCallbackForDitherTransparency(FTraceResults& res, void*
 				{
 					res.Line->sidedef[res.Side]->Flags |= WALLF_DITHERTRANS_MID;
 					res.Line->sidedef[res.Side]->dithertranscount = 1;
+					LevelMesh_DitherChanged(res.Line->sidedef[res.Side], side_t::mid);
 				}
 			}
 		}
@@ -1095,6 +1106,7 @@ static ETraceStatus TraceCallbackForDitherTransparency(FTraceResults& res, void*
 			if (res.HitPos.Z == res.Sector->floorplane.ZatPoint(res.HitPos))
 			{
 				res.Sector->floorplane.dithertransflag = true;
+				LevelMesh_DitherChanged(res.Sector, &res.Sector->floorplane);
 			}
 			else if (res.Sector->e->XFloor.ffloors.Size()) // Maybe it was 3D floors
 			{
@@ -1108,6 +1120,7 @@ static ETraceStatus TraceCallbackForDitherTransparency(FTraceResults& res, void*
 						if (res.HitPos.Z == rover->top.plane->ZatPoint(res.HitPos))
 						{
 							rover->top.plane->dithertransflag = true;
+							LevelMesh_DitherChanged(rover->model, rover->top.plane);
 							break; // Out of for loop
 						}
 					}
@@ -1121,6 +1134,7 @@ static ETraceStatus TraceCallbackForDitherTransparency(FTraceResults& res, void*
 			if (res.HitPos.Z == res.Sector->ceilingplane.ZatPoint(res.HitPos))
 			{
 				res.Sector->ceilingplane.dithertransflag = true;
+				LevelMesh_DitherChanged(res.Sector, &res.Sector->ceilingplane);
 			}
 			else if (res.Sector->e->XFloor.ffloors.Size()) // Maybe it was 3D floors
 			{
@@ -1134,6 +1148,7 @@ static ETraceStatus TraceCallbackForDitherTransparency(FTraceResults& res, void*
 						if (res.HitPos.Z == rover->bottom.plane->ZatPoint(res.HitPos))
 						{
 							rover->bottom.plane->dithertransflag = true;
+							LevelMesh_DitherChanged(rover->model, rover->bottom.plane);
 							break; // Out of for loop
 						}
 					}
@@ -1191,6 +1206,8 @@ void HWDrawInfo::SetDitherTransFlags(AActor* actor)
 				rover = actor->Sector->e->XFloor.ffloors[kk];
 				rover->top.plane->dithertransflag = true;
 				rover->bottom.plane->dithertransflag = true;
+				LevelMesh_DitherChanged(rover->model, rover->top.plane);
+				LevelMesh_DitherChanged(rover->model, rover->bottom.plane);
 			}
 		}
 	}
@@ -1360,6 +1377,10 @@ void HWDrawInfo::DrawScene(int drawmode)
 	{
 		ssao_portals_available = gl_ssao_portals;
 		applySSAO = true;
+		// Ticket 18: the levelmesh-owned tiers / planes the previous frame
+		// dithered are cleared before this frame's traces (the classic
+		// clears its own after drawing them).
+		if (Level->levelMeshBake) LevelMesh_ConsumeDither(Level);
 		if (r_dithertransparency && vp.bDoOob)
 		{
 			vp.camera->tracer ? SetDitherTransFlags(vp.camera->tracer) : SetDitherTransFlags(players[consoleplayer].mo);
@@ -1385,6 +1406,10 @@ void HWDrawInfo::DrawScene(int drawmode)
 	{
 		CreateScene(false);
 	}
+	// Ticket 18: stream the dither flags this frame's traces set (the camera
+	// trace above, the monsters' at the end of the walk), so the levelmesh
+	// dithers in the frame the classic walls do.
+	if (drawmode == DM_MAINVIEW && r_dithertransparency && vp.bDoOob) LevelMesh_UpdateState(Level);
 	auto& RenderState = *screen->RenderState();
 
 	RenderState.SetDepthMask(true);

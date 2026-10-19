@@ -259,9 +259,13 @@ public:
 	void RenderBSPNode(void *node);
 	void RenderOrthoNoFog();
 	void RenderBSP(void *node, bool drawpsprites);
-	// Levelmesh actor gather (ticket 17, hw_bsp.cpp).
-	const uint32_t *BeginLevelMeshGather(unsigned &words);
+	// Levelmesh GPU feedback (tickets 17 / 18, hw_bsp.cpp, hw_levelmeshfeedback.cpp).
+	bool BeginLevelMeshFeedback(LevelMeshReadback &rb);
 	void GatherLevelMeshThings(const uint32_t *bits, unsigned words);
+	void ApplyLevelMeshExposure(const LevelMeshReadback &rb);
+	void BuildLevelMeshLeafMask();
+	void FinishLevelMeshLeafMask();
+	void CollectDitherTargets(sector_t *sector);
 	uint64_t LevelMeshViewKey() const;
 
 	static HWDrawInfo *StartDrawInfo(FLevelLocals *lev, HWDrawInfo *parent, FRenderViewpoint &parentvp, HWViewpointUniforms *uniforms);
@@ -286,8 +290,15 @@ public:
 	// Levelmesh actor gather (ticket 17): this view gathers its actors /
 	// particles from last frame's GPU visibility instead of the BSP walk.
 	bool lmGather = false;
+	// Ticket 18: this view's exposure marks (SSECMF_DRAWN, ML_MAPPED) and
+	// cullcolor latch come from last frame's GPU mark pass, not the walk.
+	bool lmExposure = false;
 	bool lmOffscreen = false;	// DM_OFFSCREEN root view (camera texture, save picture): never gathers
 	uint64_t lmViewKey = 0;
+	// Ticket 18: out-of-body views: bit per leaf, the leaves the classic
+	// rules (secret sectors, radar, ortho viewbox) let the view show.
+	TArray<uint32_t> lmLeafMask;
+	bool lmLeafMaskValid = false;
 	void RenderTranslucent(FRenderState &state);
 	void RenderPortal(HWPortal *p, FRenderState &state, bool usestencil);
 	void EndDrawScene(sector_t * viewsector, FRenderState &state);

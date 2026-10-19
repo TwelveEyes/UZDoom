@@ -91,11 +91,12 @@ enum
 	TS_CULL2,
 	TS_RES2,
 	TS_DRAW2,
+	TS_MARK,		// the mark pass after the last draw phase (ticket 18)
 	TS_COUNT
 };
 
 static_assert(LMC_COUNT == 6 * LMB_DRAWN + 4, "VkLevelMeshRenderer::NumCounters");
-static_assert(TS_COUNT <= 8, "VkLevelMeshRenderer::NumPoints");
+static_assert(TS_COUNT <= 9, "VkLevelMeshRenderer::NumPoints");
 
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
@@ -150,8 +151,8 @@ bool VkLevelMeshRenderer::CreateObjects()
 		mHiZShaders[2] = shaders->LoadComputeShader("levelmesh_hiz_level", "shaders/levelmesh/hiz.comp", "");
 		for (int pass = NORMAL_PASS; pass <= GBUFFER_PASS; pass++)
 		{
-			shaders->GetLevelMesh(false, (EPassType)pass, LMP_DEFAULT);
-			shaders->GetLevelMesh(true, (EPassType)pass, LMP_DEFAULT);
+			shaders->GetLevelMesh(false, (EPassType)pass, LMP_DEFAULT, false);
+			shaders->GetLevelMesh(true, (EPassType)pass, LMP_DEFAULT, false);
 		}
 	}
 	catch (const CVulkanError &e)
@@ -281,9 +282,13 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 	mVisReadbackData = nullptr;
 	deleteList->Add(std::move(mVisReadback));
 	mVisWords = 0;
+	mExpWords = 0;
 	mReadSlot = -1;
+	mLeafMaskUploaded.clear();
+	mLeafMaskBuffer = nullptr;
 
-	// The material programs this level draws (warp variants on demand).
+	// The material programs this level draws (warp variants on demand), and
+	// the mark pass of its leaf count.
 	try
 	{
 		auto shaders = fb->GetShaderManager();
@@ -291,7 +296,16 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 		{
 			if (lm->GetBucketIndexCount(b) == 0) continue;
 			for (int pass = NORMAL_PASS; pass <= GBUFFER_PASS; pass++)
-				shaders->GetLevelMesh((b & 1) != 0, (EPassType)pass, b >> 1);
+				shaders->GetLevelMesh((b & 1) != 0, (EPassType)pass, b >> 1, false);
+		}
+		if (!mMarkFrag[0] || mMarkLeafWords != lm->GetLeafWords())
+		{
+			for (int i = 0; i < 2; i++)
+			{
+				fb->GetCommands()->DrawDeleteList->Add(std::move(mMarkFrag[i]));
+				mMarkFrag[i] = shaders->LoadLevelMeshMarkShader(i != 0, lm->GetLeafWords(), lm->FragmentSubgroups());
+			}
+			mMarkLeafWords = lm->GetLeafWords();
 		}
 	}
 	catch (const CVulkanError &e)
@@ -334,12 +348,14 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 		.DebugName("VkLevelMeshRenderer.Drawn")
 		.Create(dev);
 	mVisWords = std::max((mNumClusters + 31) / 32, 1u);
+	mExpWords = lm->GetExposureWords();
 	mMain.visBits = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
 		.Size(mVisWords * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.VisBits")
 		.Create(dev);
-	size_t visReadbackSize = (size_t)NumSlots * (1 + MaxPortalViews) * mVisWords * sizeof(uint32_t);
+	static_assert(1 + MaxPortalViews == VkLevelMesh::MaxExposureViews, "LMBIND_EXPOSURE holds a region per view");
+	size_t visReadbackSize = (size_t)NumSlots * (1 + MaxPortalViews) * RecordWords() * sizeof(uint32_t);
 	mVisReadback = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU)
 		.Size(visReadbackSize)
@@ -551,19 +567,23 @@ void VkLevelMeshRenderer::BuildHiZ(VulkanCommandBuffer *cmd)
 //
 //==========================================================================
 
-VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &t)
+VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &t, int kind)
 {
 	bool cull = lm_backfacecull != 0;
+	bool mark = kind != PK_SCENE;
+	bool dither = !mark && mDither && program != (int)LMP_SKY;
 	uint64_t bits = (uint64_t)masked | ((uint64_t)t.drawBuffers << 1) | ((uint64_t)t.samples << 4) | ((uint64_t)t.depthTest << 12) |
 		((uint64_t)t.depthWrite << 13) | ((uint64_t)t.depthClamp << 14) | ((uint64_t)t.stencilTest << 15) | ((uint64_t)t.depthFunc << 16) |
 		((uint64_t)t.stencilOp << 20) | ((uint64_t)t.colorMask << 24) | ((uint64_t)cull << 28) | ((uint64_t)mMirrored << 29) | ((uint64_t)program << 32);
-	PipelineKey key = { t.renderPass, bits };
+	// Mark pipelines are per level: their fragment stage is compiled for its leaf count.
+	uint32_t extra = (uint32_t)kind | ((uint32_t)dither << 2) | ((mark ? mMarkLeafWords : 0u) << 3);
+	PipelineKey key = { t.renderPass, bits, extra };
 	auto &pipeline = mPipelines[key];
 	if (pipeline) return pipeline.get();
 
 	EPassType passType = t.drawBuffers > 1 ? GBUFFER_PASS : NORMAL_PASS;
 	auto shaders = fb->GetShaderManager();
-	auto shaderProgram = shaders->GetLevelMesh(masked, passType, program);
+	VulkanShader *frag = mark ? mMarkFrag[masked ? 1 : 0].get() : shaders->GetLevelMesh(masked, passType, program, dither)->frag.get();
 
 	static const VkStencilOp op2vk[] = { VK_STENCIL_OP_KEEP, VK_STENCIL_OP_INCREMENT_AND_CLAMP, VK_STENCIL_OP_DECREMENT_AND_CLAMP };
 	static const VkCompareOp depthfunc2vk[] = { VK_COMPARE_OP_LESS, VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_ALWAYS };
@@ -571,7 +591,7 @@ VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, c
 	GraphicsPipelineBuilder builder;
 	builder.Cache(fb->GetRenderPassManager()->GetCache());
 	builder.AddVertexShader(shaders->GetLevelMeshVert());
-	builder.AddFragmentShader(shaderProgram->frag.get());
+	builder.AddFragmentShader(frag);
 	builder.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT);
 	builder.AddDynamicState(VK_DYNAMIC_STATE_SCISSOR);
 	builder.AddDynamicState(VK_DYNAMIC_STATE_DEPTH_BIAS);
@@ -579,8 +599,18 @@ VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, c
 	builder.Viewport(0.0f, 0.0f, 320.0f, 200.0f);
 	builder.Scissor(0, 0, 320, 200);
 	builder.Topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-	builder.DepthStencilEnable(t.depthTest, t.depthWrite, t.stencilTest);
-	builder.DepthFunc(depthfunc2vk[t.depthFunc]);
+	if (mark)
+	{
+		// The mark pass tests against the view's final depth, writes nothing
+		// but its exposure bits, and keeps the stencil test (portal views).
+		builder.DepthStencilEnable(true, false, t.stencilTest);
+		builder.DepthFunc(kind == PK_MARK ? VK_COMPARE_OP_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL);
+	}
+	else
+	{
+		builder.DepthStencilEnable(t.depthTest, t.depthWrite, t.stencilTest);
+		builder.DepthFunc(depthfunc2vk[t.depthFunc]);
+	}
 	if (fb->device->EnabledFeatures.Features.depthClamp)
 		builder.DepthClampEnable(t.depthClamp);
 	builder.DepthBias(false, 0.0f, 0.0f, 0.0f);
@@ -589,15 +619,15 @@ VulkanPipeline *VkLevelMeshRenderer::GetDrawPipeline(bool masked, int program, c
 	// counter-clockwise on screen (verified against lm_backfacecull 0).
 	// A mirrored view (portalState.isMirrored()) flips the screen winding.
 	builder.Cull(cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, mMirrored ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
-	builder.Stencil(VK_STENCIL_OP_KEEP, op2vk[t.stencilOp], VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 0xffffffff, 0xffffffff, 0);
+	builder.Stencil(VK_STENCIL_OP_KEEP, mark ? VK_STENCIL_OP_KEEP : op2vk[t.stencilOp], VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 0xffffffff, 0xffffffff, 0);
 	ColorBlendAttachmentBuilder blend;
-	blend.ColorWriteMask((VkColorComponentFlags)t.colorMask);
+	blend.ColorWriteMask(mark ? (VkColorComponentFlags)0 : (VkColorComponentFlags)t.colorMask);
 	for (int i = 0; i < t.drawBuffers; i++)
 		builder.AddColorBlendAttachment(blend.Create());
 	builder.RasterizationSamples(t.samples);
 	builder.Layout(fb->GetLevelMesh()->GetPipelineLayout());
 	builder.RenderPass(t.renderPass);
-	builder.DebugName(masked ? "VkLevelMeshRenderer.MaskedPipeline" : "VkLevelMeshRenderer.OpaquePipeline");
+	builder.DebugName(mark ? "VkLevelMeshRenderer.MarkPipeline" : masked ? "VkLevelMeshRenderer.MaskedPipeline" : "VkLevelMeshRenderer.OpaquePipeline");
 	pipeline = builder.Create(fb->device.get());
 	return pipeline.get();
 }
@@ -691,7 +721,8 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 	auto cmd = state->BeginExternalDraw(layout, pc);
 	pc.uTextureMode &= 0xffff;	// the material layer flags are per surface (lm_frag.glsl)
 	pc.uLightIndex = -1;
-	pc.uLevelMeshFlags = (int)view.flags;
+	pc.uLevelMeshFlags = (int)ViewFlags(view);
+	pc.uLevelMeshView = 0;
 	// VkRenderState::ApplyStreamData: the material timer at speed 1 (lm_frag.glsl scales it per surface).
 	pc.uLevelMeshTime = static_cast<float>((double)(screen->FrameTime - state->firstFrame) / 1000.);
 	if (view.shading == nullptr) pc.uLevelMeshFlags |= LMVF_FULLBRIGHT;	// nothing resolved
@@ -703,7 +734,7 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
 	for (int b = 0; b < (int)LMB_DRAWN; b++)
 	{
-		if (mBucketCount[b] == 0 || (b >> 1) == (int)LMP_SKY) continue;
+		if (mBucketCount[b] == 0 || (b >> 1) == (int)LMP_SKY || (b >> 1) == (int)LMP_EXPOSURE) continue;
 		bool masked = (b & 1) != 0;
 		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(masked, b >> 1, mTarget));
 		// As HWDrawInfo::RenderScene: AlphaFunc(Alpha_GEqual, gl_mask_threshold).
@@ -722,6 +753,107 @@ void VkLevelMeshRenderer::DrawPhase(VkLevelMesh *lm, const LevelMeshView &view, 
 		}
 	}
 	state->EndExternalDraw();
+}
+
+// The push constant flags of the view's draws: LMVF_LEAFMASK only when its
+// mask was uploaded for this Draw.
+uint32_t VkLevelMeshRenderer::ViewFlags(const LevelMeshView &view) const
+{
+	uint32_t flags = view.flags & ~(uint32_t)LMVF_LEAFMASK;
+	if (mLeafMask) flags |= LMVF_LEAFMASK;
+	if (!mDither) flags &= ~(uint32_t)LMVF_DITHER;
+	return flags;
+}
+
+//==========================================================================
+//
+// Mark pass (ticket 18)
+//
+// After the view's last draw phase its surfaces are rasterized again with
+// the mark fragment stage (mark.fp): the drawn buckets with depth EQUAL
+// against the final depth (both Hi-Z phases' arguments: the depth is final
+// for both), the sky surfaces and the exposure quads, which are not in the
+// depth buffer, with LEQUAL. Each passing fragment sets its surface's leaf
+// and line bits in the view's region of LMBIND_EXPOSURE, copied to the
+// readback with the cluster visibility (CopyVisibility).
+//
+//==========================================================================
+
+void VkLevelMeshRenderer::ClearExposure(VkLevelMesh *lm, VulkanCommandBuffer *cmd, unsigned viewIndex)
+{
+	if (viewIndex >= (unsigned)VkLevelMesh::MaxExposureViews) return;
+	VkDeviceSize words = lm->GetExposureWords();
+	cmd->fillBuffer(lm->GetBuffer(LMBIND_EXPOSURE)->buffer, viewIndex * words * sizeof(uint32_t), words * sizeof(uint32_t), 0);
+}
+
+void VkLevelMeshRenderer::MarkPhase(VkLevelMesh *lm, const LevelMeshView &view, int phaseSlot, unsigned viewIndex)
+{
+	if (!mMarkFrag[0] || viewIndex >= (unsigned)VkLevelMesh::MaxExposureViews) return;
+	auto state = fb->GetRenderState();
+	auto layout = lm->GetPipelineLayout();
+	PushConstants pc;
+	auto cmd = state->BeginExternalDraw(layout, pc);
+	pc.uTextureMode &= 0xffff;
+	pc.uLightIndex = -1;
+	// Every sky surface of a configuration this frame (none when the view
+	// uploaded no sky sources: the buffer would be another view's).
+	uint32_t flags = ViewFlags(view) & ~(uint32_t)(LMVF_SKYMASK | LMVF_DITHER);
+	if (view.numSkySources > 0) flags |= LMVF_SKYALL;
+	pc.uLevelMeshFlags = (int)(flags | LMVF_FULLBRIGHT);	// no shading needed
+	pc.uLevelMeshTime = 0.f;
+	pc.uLevelMeshView = (int)(viewIndex * lm->GetExposureWords());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
+	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
+	bool compact = view.drawMode == LMDRAW_COMPACT;
+	cmd->bindIndexBuffer(compact ? mView->compact->buffer : lm->GetIndexBuffer()->buffer, 0, VK_INDEX_TYPE_UINT32);
+
+	const uint32_t stride = sizeof(VkDrawIndexedIndirectCommand);
+	for (int b = 0; b < (int)LMB_DRAWN; b++)
+	{
+		if (mBucketCount[b] == 0) continue;
+		int program = b >> 1;
+		bool masked = (b & 1) != 0;
+		int kind = (program == (int)LMP_SKY || program == (int)LMP_EXPOSURE) ? PK_MARKOPEN : PK_MARK;
+		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, GetDrawPipeline(masked, program, mTarget, kind));
+		pc.uAlphaThreshold = masked ? view.maskThreshold - 0.001f : -0.001f;
+		cmd->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
+		uint32_t slot = phaseSlot * LMB_DRAWN + b;
+		if (compact)
+		{
+			cmd->drawIndexedIndirect(mView->drawArgs->buffer, slot * stride, 1, stride);
+		}
+		else
+		{
+			VkDeviceSize offset = (2 * LMB_DRAWN + (VkDeviceSize)slot * mNumClusters) * stride;
+			vkCmdDrawIndexedIndirectCountKHR(cmd->buffer, mView->drawArgs->buffer, offset, mView->counters->buffer, (LMC_COMMANDS + slot) * sizeof(uint32_t),
+				std::max(mNumClusters, 1u), stride);
+		}
+	}
+	state->EndExternalDraw();
+}
+
+// The view's leaf mask (LevelMeshView::leafMask) into LMBIND_LEAFMASK,
+// unless the buffer already holds it. False: the view has no usable mask.
+bool VkLevelMeshRenderer::UploadLeafMask(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshView &view)
+{
+	unsigned words = lm->GetLeafWords();
+	if (view.leafMask == nullptr || view.leafMaskWords != words || words == 0) return false;
+	VulkanBuffer *buffer = lm->GetBuffer(LMBIND_LEAFMASK);
+	if (mLeafMaskBuffer == buffer && mLeafMaskUploaded.size() == words && memcmp(mLeafMaskUploaded.data(), view.leafMask, words * sizeof(uint32_t)) == 0) return true;
+	mLeafMaskUploaded.assign(view.leafMask, view.leafMask + words);
+	mLeafMaskBuffer = buffer;
+	size_t bytes = words * sizeof(uint32_t);
+	auto alloc = lm->AllocUpload(bytes, 4);
+	memcpy(alloc.data, view.leafMask, bytes);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+	VkBufferCopy region = { alloc.offset, 0, bytes };
+	cmd->copyBuffer(alloc.buffer->buffer, buffer->buffer, 1, &region);
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
+	return true;
 }
 
 //==========================================================================
@@ -770,6 +902,7 @@ void VkLevelMeshRenderer::DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t
 	pc.uTextureMode &= 0xffff;
 	pc.uLightIndex = -1;
 	pc.uLevelMeshFlags = (int)(LMVF_FULLBRIGHT | (config << LMVF_SKYSHIFT));
+	pc.uLevelMeshView = 0;
 	pc.uAlphaThreshold = -0.001f;
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_SET_INDEX, lm->GetSet());
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, VkLevelMesh::LM_TEXTURE_SET_INDEX, lm->GetTextureSet());
@@ -840,6 +973,8 @@ bool VkLevelMeshRenderer::DrawPortalView(const LevelMeshView &view)
 	if (!v) return false;
 	mView = v;
 	mMirrored = view.mirrored;
+	mDither = (view.flags & LMVF_DITHER) != 0;
+	mLeafMask = UploadLeafMask(lm, cmd, view);
 
 	bool resolve = view.shading != nullptr && !(view.flags & LMVF_FULLBRIGHT);
 	if (resolve) UploadShading(lm, cmd, *view.shading);
@@ -849,15 +984,19 @@ bool VkLevelMeshRenderer::DrawPortalView(const LevelMeshView &view)
 	bool timed = mPortalQueries && slot.frame == mFrame && slot.portalViews < MaxPortalViews;
 	if (timed) cmd->writeTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mPortalQueries.get(), query);
 
+	// The previous views' indirect / index / shader reads and mark pass
+	// writes (LMBIND_EXPOSURE) must finish before the buffers are rewritten.
 	PipelineBarrier()
-		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 	cmd->fillBuffer(v->counters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
 	cmd->fillBuffer(v->visBits->buffer, 0, VK_WHOLE_SIZE, 0);
+	ClearExposure(lm, cmd, 1 + portalIndex);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 
 	LevelMeshView pv = view;
 	pv.cullMode = view.cullMode == LMCULL_NONE ? LMCULL_NONE : LMCULL_FRUSTUM;
@@ -888,9 +1027,10 @@ bool VkLevelMeshRenderer::DrawPortalView(const LevelMeshView &view)
 	pc.numClusters = mNumClusters;
 	pc.hizLevels = (uint32_t)mHiZLevels;
 	Cull(cmd, pc, LMPHASE_SINGLE);
-	CopyVisibility(cmd, 1 + portalIndex, view.viewKey);
 	if (resolve) Resolve(cmd);
 	DrawPhase(lm, pv, 0);
+	MarkPhase(lm, pv, 0, 1 + portalIndex);
+	CopyVisibility(1 + portalIndex, view.viewKey);
 	if (timed)
 	{
 		cmd->writeTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mPortalQueries.get(), query + 1);
@@ -977,18 +1117,23 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 	mDrawFrame = mFrame;
 	mDrawCullMode = view.cullMode;
 	mDrawDrawMode = view.drawMode;
+	mDither = (view.flags & LMVF_DITHER) != 0;
+	mLeafMask = UploadLeafMask(lm, cmd, view);
 
-	// The previous draws' indirect / index reads, and the previous resolve's
-	// reads of drawn[], must finish before they are rewritten.
+	// The previous draws' indirect / index reads, the previous resolve's
+	// reads of drawn[], and the previous mark passes' exposure writes must
+	// finish before they are rewritten.
 	PipelineBarrier()
-		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 	cmd->fillBuffer(mView->counters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
 	cmd->fillBuffer(mView->visBits->buffer, 0, VK_WHOLE_SIZE, 0);
+	ClearExposure(lm, cmd, 0);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 
 	CullConstants pc = {};
 	memcpy(pc.viewProj, view.viewProj, sizeof(pc.viewProj));
@@ -1007,7 +1152,6 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		PipelineBarrier()
 			.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)
 			.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
-		CopyVisibility(cmd, 0, view.viewKey);
 	};
 
 	if (view.cullMode == LMCULL_HIZ)
@@ -1029,6 +1173,10 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		Timestamp(cmd, TS_RES2);
 		DrawPhase(lm, view, 1);
 		Timestamp(cmd, TS_DRAW2);
+		// Both phases' surfaces against the final depth.
+		MarkPhase(lm, view, 0, 0);
+		MarkPhase(lm, view, 1, 0);
+		Timestamp(cmd, TS_MARK);
 	}
 	else
 	{
@@ -1039,7 +1187,10 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		Timestamp(cmd, TS_RES1);
 		DrawPhase(lm, view, 0);
 		Timestamp(cmd, TS_DRAW1);
+		MarkPhase(lm, view, 0, 0);
+		Timestamp(cmd, TS_MARK);
 	}
+	CopyVisibility(0, view.viewKey);
 	return true;
 }
 
@@ -1052,47 +1203,91 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 //
 //==========================================================================
 
-void VkLevelMeshRenderer::CopyVisibility(VulkanCommandBuffer *cmd, unsigned viewIndex, uint64_t viewKey)
+// Queues the current view's readback: its cluster bitset and mark pass
+// bits are copied at the end of the frame (EndFrame), where no render pass
+// is open, instead of breaking the scene's render pass after the mark pass.
+// Each view of a frame has its own buffers / exposure region (a second main
+// view, a stereo eye, replaces the first one's under the same key).
+void VkLevelMeshRenderer::CopyVisibility(unsigned viewIndex, uint64_t viewKey)
 {
 	auto &slot = mSlots[mSlot];
 	if (!mVisReadback || viewKey == 0 || slot.frame != mFrame || viewIndex > MaxPortalViews) return;
-	VkDeviceSize offset = ((VkDeviceSize)mSlot * (1 + MaxPortalViews) + viewIndex) * mVisWords * sizeof(uint32_t);
-	cmd->copyBuffer(mView->visBits.get(), mVisReadback.get(), 0, offset, mVisWords * sizeof(uint32_t));
-	PipelineBarrier()
-		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+	mPendingCopies.push_back({ mView, viewIndex });
 	// Views skipped in between (key 0) are never matched.
 	for (unsigned i = slot.viewCount; i < viewIndex; i++) slot.viewKeys[i] = 0;
 	slot.viewKeys[viewIndex] = viewKey;
 	slot.viewCount = std::max(slot.viewCount, viewIndex + 1);
 }
 
+void VkLevelMeshRenderer::EndFrame()
+{
+	if (mPendingCopies.empty()) return;
+	auto lm = fb->GetLevelMesh();
+	auto &slot = mSlots[mSlot];
+	if (!mVisReadback || !lm || slot.frame != mFrame || slot.levelId != lm->GetId())
+	{
+		mPendingCopies.clear();
+		return;
+	}
+	auto cmd = fb->GetCommands()->GetDrawCommands();
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+	bool exposure = mExpWords == lm->GetExposureWords();
+	for (auto &copy : mPendingCopies)
+	{
+		VkDeviceSize offset = ((VkDeviceSize)mSlot * (1 + MaxPortalViews) + copy.viewIndex) * RecordWords() * sizeof(uint32_t);
+		cmd->copyBuffer(copy.view->visBits.get(), mVisReadback.get(), 0, offset, mVisWords * sizeof(uint32_t));
+		if (exposure)
+		{
+			cmd->copyBuffer(lm->GetBuffer(LMBIND_EXPOSURE), mVisReadback.get(), (VkDeviceSize)copy.viewIndex * mExpWords * sizeof(uint32_t),
+				offset + mVisWords * sizeof(uint32_t), mExpWords * sizeof(uint32_t));
+		}
+	}
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+	mPendingCopies.clear();
+}
+
 void VkLevelMeshRenderer::BeginFrame()
 {
+	mPendingCopies.clear();
 	auto &last = mSlots[mSlot];
 	mReadSlot = -1;
 	if (mVisReadback && last.serial != 0 && last.frame == mFrame && last.viewCount != 0 && last.levelId == mLevelId)
 	{
 		mReadSlot = mSlot;
 		vmaInvalidateAllocation(fb->device->allocator, mVisReadback->allocation,
-			(VkDeviceSize)mReadSlot * (1 + MaxPortalViews) * mVisWords * sizeof(uint32_t), (VkDeviceSize)last.viewCount * mVisWords * sizeof(uint32_t));
+			(VkDeviceSize)mReadSlot * (1 + MaxPortalViews) * RecordWords() * sizeof(uint32_t), (VkDeviceSize)last.viewCount * RecordWords() * sizeof(uint32_t));
 	}
 	mFrame++;
 	mPortalViews = 0;
 }
 
-const uint32_t *VkLevelMeshRenderer::GetVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words)
+bool VkLevelMeshRenderer::GetVisibility(uint64_t levelId, uint64_t viewKey, LevelMeshReadback &out)
 {
-	if (mReadSlot < 0 || viewKey == 0 || !mVisReadbackData) return nullptr;
+	out = {};
+	if (mReadSlot < 0 || viewKey == 0 || !mVisReadbackData) return false;
 	auto &slot = mSlots[mReadSlot];
-	if (slot.levelId != levelId) return nullptr;
+	if (slot.levelId != levelId) return false;
+	auto lm = fb->GetLevelMesh();
 	for (unsigned i = 0; i < slot.viewCount; i++)
 	{
 		if (slot.viewKeys[i] != viewKey) continue;
-		words = mVisWords;
-		return mVisReadbackData + ((size_t)mReadSlot * (1 + MaxPortalViews) + i) * mVisWords;
+		const uint32_t *record = mVisReadbackData + ((size_t)mReadSlot * (1 + MaxPortalViews) + i) * RecordWords();
+		out.clusters = record;
+		out.clusterWords = mVisWords;
+		if (lm && mExpWords != 0 && mExpWords == lm->GetExposureWords())
+		{
+			out.leaves = record + mVisWords;
+			out.leafWords = lm->GetLeafWords();
+			out.lines = out.leaves + out.leafWords;
+			out.lineWords = lm->GetLineWords();
+		}
+		return true;
 	}
-	return nullptr;
+	return false;
 }
 
 //==========================================================================
@@ -1147,7 +1342,8 @@ void VkLevelMeshRenderer::Harvest()
 		{
 			s.clusters[p] = c[LMC_CLUSTERS + p];
 			uint32_t indices = 0;
-			for (int b = 0; b < (int)LMB_DRAWN; b++) indices += c[LMC_INDICES + p * LMB_DRAWN + b];
+			for (int b = 0; b < (int)LMB_DRAWN; b++)
+				if ((b >> 1) != (int)LMP_EXPOSURE) indices += c[LMC_INDICES + p * LMB_DRAWN + b];	// exposure quads are not drawn
 			s.triangles[p] = indices / 3;
 		}
 		s.frustumCulled = c[LMC_FRUSTUMCULLED];
@@ -1159,7 +1355,9 @@ void VkLevelMeshRenderer::Harvest()
 		s.cullMs[1] = ms(TS_HIZ, TS_CULL2);
 		s.resolveMs[1] = ms(TS_CULL2, TS_RES2);
 		s.drawMs[1] = ms(TS_RES2, TS_DRAW2);
-		s.totalMs = ms(TS_START, slot.cullMode == LMCULL_HIZ ? TS_DRAW2 : TS_DRAW1);
+		int lastDraw = slot.cullMode == LMCULL_HIZ ? TS_DRAW2 : TS_DRAW1;
+		s.markMs = ms(lastDraw, TS_MARK);
+		s.totalMs = ms(TS_START, (slot.points & (1u << TS_MARK)) ? TS_MARK : lastDraw);
 		s.portalViews = slot.portalViews;
 		s.portalMs = portalMs;
 	}

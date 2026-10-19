@@ -35,6 +35,16 @@ layout(location = LM_SHADE_LOCATION + 1) flat in vec4 vLMFog;
 layout(location = LM_SHADE_LOCATION + 2) flat in vec4 vLMGlowTop;
 layout(location = LM_SHADE_LOCATION + 3) flat in vec4 vLMGlowBottom;
 layout(location = LM_SHADE_LOCATION + 4) flat in int vLMFogMode;
+layout(location = LM_EXPOSURE_LOCATION) flat in uvec2 vLMExposure;	// surface leaf, line (read by the mark pass only)
+
+// Dither (ticket 18): the dither-capable variant (LM_DITHER) dithers the
+// surfaces the vertex stage flagged (LM_MAT_DITHER), the way the classic
+// EFF_DITHERTRANS shader draws a wall / flat (main.fp, DITHERTRANS).
+#ifdef LM_DITHER
+#define LM_DITHER_ACTIVE ((vLMMaterial.z & LM_MAT_DITHER) != 0u)
+#else
+#define LM_DITHER_ACTIVE false
+#endif
 
 #define uLightLevel vLMLight.x
 #define uFogDensity vLMLight.y

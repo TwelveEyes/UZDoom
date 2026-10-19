@@ -221,6 +221,7 @@ void VulkanRenderDevice::Update()
 	twod->Clear();
 
 	mRenderState->EndRenderPass();
+	if (mLevelMeshRenderer) mLevelMeshRenderer->EndFrame();
 	mRenderState->EndFrame();
 
 	Flush3D.Unclock();
@@ -591,11 +592,12 @@ bool VulkanRenderDevice::GetLevelMeshStats(LevelMeshPerfStats &stats)
 	return true;
 }
 
-const uint32_t *VulkanRenderDevice::LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words)
+bool VulkanRenderDevice::LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, LevelMeshReadback &out)
 {
+	out = {};
 	// The screen's views only (camera textures and save pictures never draw the levelmesh).
-	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get()) return nullptr;
-	return mLevelMeshRenderer->GetVisibility(levelId, viewKey, words);
+	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get()) return false;
+	return mLevelMeshRenderer->GetVisibility(levelId, viewKey, out);
 }
 
 void VulkanRenderDevice::PrintLevelMeshStats()
