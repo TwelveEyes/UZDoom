@@ -54,8 +54,15 @@ public:
 	// geometry). False if there is no Draw of this frame to take them from.
 	bool DrawSky(uint32_t config);
 
-	// Frame boundary: the device has waited for every earlier submit.
-	void BeginFrame() { mFrame++; mPortalViews = 0; }
+	// Frame boundary: the device has waited for every earlier submit. Makes
+	// the previous frame's visibility readback host-visible.
+	void BeginFrame();
+
+	// The cluster visibility bitset (bit = cluster index) the view wrote in
+	// the previous rendered frame, or null: no levelmesh draw of that view last
+	// frame, a different level, or the frame was not rendered. Valid until the
+	// next BeginFrame.
+	const uint32_t *GetVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words);
 
 	// Latest completed GPU timings and counters (lagged by the frames in flight).
 	const LevelMeshPerfStats &GetStats() const { return mStats; }
@@ -95,7 +102,8 @@ private:
 	bool PrepareHiZ(int width, int height, VkSampleCountFlagBits samples);
 	struct ViewBuffers;
 	void UpdateCullSet(ViewBuffers &v);
-	ViewBuffers *PortalBuffers(VulkanCommandBuffer *cmd);
+	ViewBuffers *PortalBuffers(VulkanCommandBuffer *cmd, unsigned &index);
+	void CopyVisibility(VulkanCommandBuffer *cmd, unsigned viewIndex, uint64_t viewKey);
 	VulkanPipeline *GetDrawPipeline(bool masked, int program, const VkRenderState::ExternalTarget &target);
 	void DrawSkyBucket(VkLevelMesh *lm, int phaseSlot, uint32_t config, const VkRenderState::ExternalTarget &target);
 	void UploadSkySources(VkLevelMesh *lm, VulkanCommandBuffer *cmd, const LevelMeshView &view);
@@ -140,6 +148,7 @@ private:
 	{
 		std::unique_ptr<VulkanBuffer> visibility, counters, drawArgs, compact;
 		std::unique_ptr<VulkanBuffer> drawn;	// per cluster: drawn by the last cull phase (resolve.comp input)
+		std::unique_ptr<VulkanBuffer> visBits;	// bit per cluster: visible in the last cull phase (copied to mVisReadback)
 		std::unique_ptr<VulkanDescriptorSet> cullSet;
 	};
 	ViewBuffers mMain;
@@ -170,6 +179,12 @@ private:
 	enum { NumSlots = 8, NumPoints = 8, NumCounters = 6 * LMB_DRAWN + 4 };	// LMC_COUNT
 	enum { MaxPortalViews = 64 };	// per frame; further portal views stay classic
 	std::unique_ptr<VulkanQueryPool> mQueries;
+	// Per level: the views' visibility bitsets, per slot (1 + MaxPortalViews)
+	// views of mVisWords words; view 0 = the main view, 1 + k = portal view k.
+	std::unique_ptr<VulkanBuffer> mVisReadback;
+	uint32_t *mVisReadbackData = nullptr;
+	unsigned mVisWords = 0;
+	int mReadSlot = -1;	// the slot of the previous frame's views (BeginFrame), -1 = none
 	std::unique_ptr<VulkanBuffer> mReadback;
 	uint32_t *mReadbackData = nullptr;
 	struct Slot
@@ -180,6 +195,9 @@ private:
 		uint32_t points = 0;	// written timestamp points (bit mask)
 		uint64_t frame = 0;		// mFrame when written
 		unsigned portalViews = 0;	// portal views timed in mPortalQueries
+		uint64_t levelId = 0;		// the level of the visibility bitsets
+		unsigned viewCount = 0;		// views with a bitset (viewKeys[0 .. viewCount), 0 = none written)
+		uint64_t viewKeys[1 + MaxPortalViews] = {};	// LevelMeshView::viewKey per bitset
 	} mSlots[NumSlots];
 	std::unique_ptr<VulkanQueryPool> mPortalQueries;	// per slot: start / end per portal view
 	uint64_t mFrame = 0;

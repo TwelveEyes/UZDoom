@@ -199,6 +199,10 @@ public:
 	// state's current depth / stencil / color mask. False = not drawn.
 	virtual bool DrawLevelMeshSky(uint32_t config, FRenderState &state) { return false; }
 	virtual bool GetLevelMeshStats(LevelMeshPerfStats &stats) { return false; }
+	// The cluster visibility bitset (bit = cluster index, 'words' 32-bit words)
+	// the view (LevelMeshView::viewKey) wrote in the previous rendered frame,
+	// or null (ticket 17 actor gather). Valid for the current frame.
+	virtual const uint32_t *LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words) { return nullptr; }
 	bool allowSSBO() const
 	{
 #ifndef HW_BLOCK_SSBO

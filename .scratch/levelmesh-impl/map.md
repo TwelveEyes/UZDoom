@@ -193,7 +193,8 @@ tracked, but the perf bars only apply after ticket 20 removes the walk from the 
   - **DC2 float z:** plane-anchored GPU z versus classic CPU z rounding, at sub-pixel edges.
   - **DC3 feedback latency:** CPU consumers of GPU visibility (actor gather on newly revealed
     clusters, exposure, dither) lag by at most the readback depth. This must be bounded and
-    measured.
+    measured. Measured in ticket 17: exactly one rendered frame (the device waits for every
+    submit at the frame boundary).
   - **DC4 light selection:** clustered light binning versus per-surface lists at edges
     (ticket 19).
   - **DC5 visibility precision:** exact depth visibility versus the classic clipper's
@@ -281,7 +282,7 @@ are included.
 | 25 | Polyobject origin subsectors baked as map-wide flats (citadel z-fighting) | task | — |
 
 Critical path: 02/04 → 05 → 06 → 07 → 08 → 09 → 10 → 12/14 → 15 → 17 → 18 → 20 → 21.
-Tickets 01–16 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
+Tickets 01–17 are resolved. The ticket 05 gate resolved as go-with-changes (2026-10-13), and
 tickets 06–21 are `ready-for-agent`.
 
 ## Working the frontier
@@ -485,3 +486,18 @@ ticket file, and decisions that change this map are written back here, under Dec
     translucency incl. run-time changes) and a fix: mid textures made translucent at run time
     go back to the classic (tier base records line alpha / `ML_ADDTRANS`; `TranslucentLine`
     hook).
+- 2026-10-18: ticket 17 resolved (transitional) → on the levelmesh path actors and particles
+  are gathered from the previous frame's GPU cluster visibility (per view, portal views
+  included; visible clusters plus their bake adjacency, intersected with the current frustum).
+  The walk stops calling `RenderThings` / `RenderParticles` and keeps everything else.
+  - Latency (DC3) = exactly one rendered frame; a view without a readback gathers through the
+    walk that frame. Measured DC3: 1-frame pops of distant sprites on the leading edge of fast
+    turns (SOS MAP32: 4 of 87 ticks; 9 with adjacency off), one teleport pop on the test map.
+  - Decal gather moved to ticket 20 (user decision); dither / exposure / out-of-body views stay
+    classic (ticket 18).
+  - Gather cost is level-size independent (0.000 ms on the 2000-room scaling map) and follows the
+    gathered clusters: 0.13 ms SOS MAP32 V1 (sprites processed 2514 → 589, `r` -1.9 ms),
+    0.28 ms myhouse MAP01 V1/V2 (clusters coarser than the walk's clipper there: 2-3x sprites).
+  - Test map `tools/abtest/make_gathertest.py`, `ab_manifest_gather_monsters.json`; perflog v8
+    `lmgv lmgc lmga lmgs lmgsec lmgms`.
+  - Debug cvars: `lm_gather`, `lm_gatheradjacent`, `lm_gatherlog`.

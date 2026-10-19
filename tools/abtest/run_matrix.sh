@@ -91,6 +91,7 @@ mount_for() {
 	PIRATES_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE="Pirates!.wad" ;;
 	PLANISF_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE=planisf2.wad ;;
 	SOS_*)     BASE_IWAD=DOOM2.WAD; PWAD_FILE=SOS_Boom.wad ;;
+	GATHERTEST_*) BASE_IWAD=DOOM2.WAD; PWAD_FILE=gathertest.wad ;;
 	*) ;;
 	esac
 }

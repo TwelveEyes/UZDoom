@@ -55,3 +55,11 @@ Afterwards, the levelmesh render-CPU window must be independent of level size.
   (`ab_manifest_transtest.json`); its fill rooms only show when the classic's conditions hold,
   so A/B them after the change. Log the translucent set's CPU time per frame on the stress
   vantages (ticket 16's second acceptance item).
+- 2026-10-18 (from 17, decal scope moved here by user decision): actors and particles come from
+  the GPU visibility readback (`HWDrawInfo::GatherLevelMeshThings`, one frame late), but the
+  walk still produces the `HWWall`s that carry decals. Gather decals of visible sides from the
+  same bitset once the walk is gone. The gather runs after `RenderBSPNode` and applies the
+  walk's subsector rejections (`CurrentMapSections`, polyobject origin, clip portal); without
+  the walk it needs its own place in the frame and a fallback for views without a readback
+  (today: the walk gathers). Ticket 17's perf table shows the cluster-level gather processing
+  2-3x the walk's sprites in myhouse interiors.

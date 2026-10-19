@@ -101,6 +101,7 @@ public:
 	bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) override;
 	bool DrawLevelMeshSky(uint32_t config, FRenderState &state) override;
 	bool GetLevelMeshStats(LevelMeshPerfStats &stats) override;
+	const uint32_t *LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words) override;
 	void UpdateShadowMap() override;
 	void SetSaveBuffers(bool yes) override;
 	void ImageTransitionScene(bool unknown) override;

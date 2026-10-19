@@ -235,6 +235,10 @@ void HWDrawInfo::StartScene(FRenderViewpoint &parentvp, HWViewpointUniforms *uni
 
 	outer = gl_drawinfo;
 	gl_drawinfo = this;
+	// Portal views inherit whether the root view is offscreen (ProcessScene).
+	lmOffscreen = outer != nullptr && outer->lmOffscreen;
+	lmGather = false;
+	lmViewKey = 0;
 
 }
 
@@ -669,6 +673,7 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	// A portal view (HWDrawInfo::RenderPortal's child drawinfo).
 	view.portal = outer != nullptr;
 	view.mirrored = portalState.isMirrored();
+	view.viewKey = LevelMeshViewKey();
 	if (view.portal && lm_portalrect) PortalCullRect(view.cullRect);
 	LevelMeshShading shading;
 	LevelMesh_FillShading(this, shading);
@@ -717,6 +722,37 @@ bool HWDrawInfo::DrawLevelMesh(FRenderState &state)
 	for (int list : { GLDL_PLAINWALLS, GLDL_PLAINFLATS, GLDL_MASKEDWALLS, GLDL_MASKEDFLATS, GLDL_MASKEDWALLSOFS })
 		drawlists[list].RemoveLevelMeshOwned(bake);
 	return true;
+}
+
+//-----------------------------------------------------------------------------
+//
+// LevelMeshViewKey
+//
+// Ticket 17. Identifies a view across frames so its GPU visibility can be
+// read back by the same view's actor gather next frame: 1 for the main view;
+// a portal view hashes its parent's key with its portal's source, type and
+// mirroring (FNV-1a), so the same portal reached along the same path gets
+// the same key. Never 0 (0 = no readback).
+//
+//-----------------------------------------------------------------------------
+
+uint64_t HWDrawInfo::LevelMeshViewKey() const
+{
+	if (outer == nullptr || mCurrentPortal == nullptr) return 1;
+	uint64_t h = 0xcbf29ce484222325ull;
+	auto mix = [&](uint64_t v)
+	{
+		for (int i = 0; i < 8; i++)
+		{
+			h ^= (v >> (i * 8)) & 0xff;
+			h *= 0x100000001b3ull;
+		}
+	};
+	mix(outer->LevelMeshViewKey());
+	mix((uint64_t)(uintptr_t)mCurrentPortal->GetSource());
+	mix((uint64_t)mCurrentPortal->GetHWPortalType());
+	mix(portalState.isMirrored() ? 1 : 0);
+	return h != 0 ? h : 2;
 }
 
 //-----------------------------------------------------------------------------
@@ -1386,6 +1422,7 @@ void HWDrawInfo::ProcessScene(bool toscreen)
 	if (Viewpoint.bDoOob || Viewpoint.bDoOrtho)
 		mapsection = Level->PointInRenderSubsector(Viewpoint.OffPos)->mapsection;
 	CurrentMapSections.Set(mapsection);
+	lmOffscreen = !toscreen;
 	DrawScene(toscreen ? DM_MAINVIEW : DM_OFFSCREEN);
 
 }

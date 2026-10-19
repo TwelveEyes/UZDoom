@@ -591,6 +591,13 @@ bool VulkanRenderDevice::GetLevelMeshStats(LevelMeshPerfStats &stats)
 	return true;
 }
 
+const uint32_t *VulkanRenderDevice::LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words)
+{
+	// The screen's views only (camera textures and save pictures never draw the levelmesh).
+	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get()) return nullptr;
+	return mLevelMeshRenderer->GetVisibility(levelId, viewKey, words);
+}
+
 void VulkanRenderDevice::PrintLevelMeshStats()
 {
 	if (mLevelMesh)

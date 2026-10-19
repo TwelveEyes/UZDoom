@@ -259,6 +259,10 @@ public:
 	void RenderBSPNode(void *node);
 	void RenderOrthoNoFog();
 	void RenderBSP(void *node, bool drawpsprites);
+	// Levelmesh actor gather (ticket 17, hw_bsp.cpp).
+	const uint32_t *BeginLevelMeshGather(unsigned &words);
+	void GatherLevelMeshThings(const uint32_t *bits, unsigned words);
+	uint64_t LevelMeshViewKey() const;
 
 	static HWDrawInfo *StartDrawInfo(FLevelLocals *lev, HWDrawInfo *parent, FRenderViewpoint &parentvp, HWViewpointUniforms *uniforms);
 	void StartScene(FRenderViewpoint &parentvp, HWViewpointUniforms *uniforms);
@@ -279,6 +283,11 @@ public:
 	bool lmSkyPending = false;
 	uint32_t lmFirstSky = 0;
 	TArray<uint32_t> lmSkySources;
+	// Levelmesh actor gather (ticket 17): this view gathers its actors /
+	// particles from last frame's GPU visibility instead of the BSP walk.
+	bool lmGather = false;
+	bool lmOffscreen = false;	// DM_OFFSCREEN root view (camera texture, save picture): never gathers
+	uint64_t lmViewKey = 0;
 	void RenderTranslucent(FRenderState &state);
 	void RenderPortal(HWPortal *p, FRenderState &state, bool usestencil);
 	void EndDrawScene(sector_t * viewsector, FRenderState &state);

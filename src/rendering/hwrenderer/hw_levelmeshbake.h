@@ -250,6 +250,8 @@ struct LevelMeshClusterStats
 	unsigned maxSectorClusters = 0;	// largest sector -> cluster fan-out
 	unsigned fallbackLeaves = 0;	// walls without a seg subsector, placed by point lookup
 	unsigned orphanSurfaces = 0;	// surfaces of leaves outside the BSP (section hole fills), placed by point lookup
+	unsigned adjacencyEdges = 0;	// ClusterAdj entries (each undirected edge counted from both sides)
+	unsigned maxAdjacency = 0;		// largest cluster adjacency list
 	double ms = 0;
 };
 
@@ -271,6 +273,18 @@ public:
 	TArray<uint32_t> SectorClusters;
 	TArray<uint32_t> ClusterPlaneStart;	// cluster -> anchor planes (CSR, numclusters + 1 entries)
 	TArray<LevelMeshClusterPlane> ClusterPlanes;
+	// Ticket 17: the BSP leaves (render subsectors) a cluster was cut from, the
+	// inverse map, and the cluster adjacency (leaves sharing a seg partner or a
+	// chunked leaf). Sky and polyobject clusters have no leaves. CSR, numclusters
+	// (numsubsectors) + 1 starts; kept after GeometryReleased.
+	TArray<uint32_t> ClusterLeafStart, ClusterLeaves;	// cluster -> subsector indices
+	TArray<uint32_t> LeafClusterStart, LeafClusters;	// subsector -> clusters
+	TArray<uint32_t> ClusterAdjStart, ClusterAdj;		// cluster -> adjacent clusters (sorted, unique)
+	// Gather dedup (HWDrawInfo::GatherLevelMeshThings): per cluster /
+	// subsector / sector the GatherStamp of the gather that last took it.
+	// Sized once at clustering, never cleared: a gather costs what it takes.
+	TArray<uint32_t> GatherClusterStamp, GatherLeafStamp, GatherSectorStamp;
+	uint32_t GatherStamp = 0;
 
 	LevelMeshStateStream Stream;
 	~LevelMeshBake();	// detaches the change hooks (hw_levelmeshstate.cpp)
@@ -374,6 +388,11 @@ LevelMeshBake *LevelMeshBake_Create(FLevelLocals *Level, bool rebuild = false);
 
 // Cuts the bake into clusters and orders the index buffer by cluster.
 void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budget);
+
+// Ticket 17: whether a cluster box can be inside the frustum of viewProj
+// (ProjectionMatrix * ViewMatrix, column-major, GL world space): the
+// rejection test of cull.comp's ProjectBox.
+bool LevelMesh_ClusterInFrustum(const float *viewProj, const LevelMeshCluster &c);
 
 // Makes the level's levelmesh resident on the device: uploads at level setup,
 // re-bakes and re-uploads after a device reset, drops the path if the new

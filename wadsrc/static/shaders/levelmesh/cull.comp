@@ -24,6 +24,10 @@
 **  SINGLE  one pass, frustum only (LMCULL_FRUSTUM) or nothing (LMCULL_NONE);
 **          rewrites the visibility.
 **
+** SECOND and SINGLE also set the cluster's bit in visBits when it is visible
+** (cleared by the renderer before the view's culls): the bitset the CPU
+** reads back for next frame's actor gather (ticket 17).
+**
 ** LMPHASE_FINALIZE (one invocation) turns the compaction counters into the
 ** draw arguments of the phase that just ran (pc.finalizePhase).
 */
@@ -47,6 +51,7 @@ layout(set = LM_CULL_SET, binding = 2, std430) buffer DrawArgsBuffer { DrawIndex
 layout(set = LM_CULL_SET, binding = 3, std430) buffer writeonly CompactBuffer { uint compactIndices[]; };
 layout(set = LM_CULL_SET, binding = 4) uniform sampler2D hiz;
 layout(set = LM_CULL_SET, binding = 5, std430) buffer writeonly DrawnBuffer { uint drawn[]; };	// resolve.comp input
+layout(set = LM_CULL_SET, binding = 6, std430) buffer VisBitsBuffer { uint visBits[]; };	// readback: bit ci = visible
 
 layout(push_constant) uniform CullConstants
 {
@@ -199,6 +204,7 @@ void main()
 				}
 			}
 			visibility[ci] = vis ? 1u : 0u;
+			if (vis) atomicOr(visBits[ci >> 5], 1u << (ci & 31u));
 			// Second phase: drawn in the first phase = visible last frame and
 			// inside the frustum now; a visible cluster is either that or new.
 			if (phase == LMPHASE_SECOND)

@@ -233,6 +233,17 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   - The latency probes (doorway, fast turn, jumps) are captured every tic: `demo_ticks.dense`
     in the manifest lists the ranges, every other tick is every 5. A map's own `demo_ticks`
     replaces the manifest's (`abtest.py` `demo_tick_list`).
+  - At the default cluster budget (256) MAP01 bakes 2 clusters and every gather takes all of
+    it; `--set-a 'lm_cluster_budget 16' --set-b 'lm_cluster_budget 16'` (36 clusters) makes
+    the rooms separate clusters, so pop-in can show.
+  - Isolation pair: `--set-a 'gl_uselevelmesh 1' --set-a 'lm_gather 0'` (the walk gathers)
+    against the default. At budget 256 every tick is identical (run `20261018T222821Z-ab`); at
+    budget 16 MAP01 fails one tick (573, the second jump into room B: its monsters appear one
+    frame late; run `20261018T223707Z-ab`).
+  - `ab_manifest_gather_monsters.json` replays the DOOM2 MAP01 / MAP23 and SOS MAP32 tours of
+    `ab_manifest.json` with monsters kept (identical on both paths under `-rngseed`).
+  - Perflog `v8` adds the gather columns `lmgv` (views that gathered), `lmgc` / `lmga` (clusters
+    / of those only adjacent), `lmgs` / `lmgsec` (subsectors / sectors) and `lmgms` (CPU ms).
 - **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
   with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
   normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped

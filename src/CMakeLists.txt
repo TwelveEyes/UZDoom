@@ -830,6 +830,7 @@ set (PCH_SOURCES
 	rendering/hwrenderer/doom_levelmesh.cpp
 	rendering/hwrenderer/hw_levelmeshbake.cpp
 	rendering/hwrenderer/hw_levelmeshclusters.cpp
+	rendering/hwrenderer/hw_levelmeshgather.cpp
 	rendering/hwrenderer/hw_levelmeshresources.cpp
 	rendering/hwrenderer/hw_levelmeshshade.cpp
 	rendering/hwrenderer/hw_levelmeshstate.cpp

@@ -62,6 +62,7 @@ struct ClusterBuilder
 	TArray<uint32_t> LeafTris;
 	TArray<uint32_t> NodeTris;
 	TArray<uint32_t> Gather;
+	TArray<uint32_t> GatherLeaves;				// the BSP leaves of Gather's group (every cluster it is cut into lists them)
 	TArray<float> Z;							// vertex z at load
 	TArray<uint32_t> OldFirstIndex;
 	TArray<uint32_t> NewIndices;
@@ -96,6 +97,7 @@ struct ClusterBuilder
 		{
 			int leaf = Leaf(child)->Index();
 			Visited[leaf] = 1;
+			GatherLeaves.Push(leaf);
 			for (uint32_t k = LeafStart[leaf]; k < LeafStart[leaf + 1]; k++)
 				Gather.Push(LeafSurfaces[k]);
 			return;
@@ -111,6 +113,8 @@ struct ClusterBuilder
 			int leaf = Leaf(child)->Index();
 			Visited[leaf] = 1;
 			Gather.Clear();
+			GatherLeaves.Clear();
+			GatherLeaves.Push(leaf);
 			for (uint32_t k = LeafStart[leaf]; k < LeafStart[leaf + 1]; k++)
 				Gather.Push(LeafSurfaces[k]);
 			EmitGroup(LeafTris[leaf] > Budget);
@@ -120,6 +124,7 @@ struct ClusterBuilder
 		if (NodeTris[node->Index()] <= Budget)
 		{
 			Gather.Clear();
+			GatherLeaves.Clear();
 			Collect(child);
 			EmitGroup(false);
 			return;
@@ -156,6 +161,8 @@ struct ClusterBuilder
 		uint32_t drawn = cur.bucketMask & ((1u << LMB_DRAWN) - 1);
 		if ((drawn & (drawn - 1)) != 0) Bake->ClusterStats.mixedBucketClusters++;
 		Bake->Clusters.Push(cur);
+		Bake->ClusterLeafStart.Push(Bake->ClusterLeaves.Size());
+		for (uint32_t leaf : GatherLeaves) Bake->ClusterLeaves.Push(leaf);
 		ClusterTris.Push(curTris);
 	}
 
@@ -377,6 +384,8 @@ struct ClusterBuilder
 			for (unsigned i = 0; i < nleaf; i++)
 			{
 				Gather.Clear();
+				GatherLeaves.Clear();
+				GatherLeaves.Push(i);
 				for (uint32_t k = LeafStart[i]; k < LeafStart[i + 1]; k++) Gather.Push(LeafSurfaces[k]);
 				EmitGroup(LeafTris[i] > Budget);
 			}
@@ -391,6 +400,8 @@ struct ClusterBuilder
 			{
 				if (Visited[i] || LeafStart[i] == LeafStart[i + 1]) continue;
 				Gather.Clear();
+				GatherLeaves.Clear();
+				GatherLeaves.Push(i);
 				for (uint32_t k = LeafStart[i]; k < LeafStart[i + 1]; k++) Gather.Push(LeafSurfaces[k]);
 				EmitGroup(LeafTris[i] > Budget);
 			}
@@ -424,6 +435,7 @@ struct ClusterBuilder
 			for (unsigned i = 0; i < nleaf; i++)
 				if (!seen[i]) order.Push(i);
 			Gather.Clear();
+			GatherLeaves.Clear();
 			uint32_t tris = 0;
 			for (uint32_t leaf : order)
 			{
@@ -486,6 +498,59 @@ struct ClusterBuilder
 			}
 		}
 
+		// Cluster -> leaves is complete; subsector -> clusters (CSR).
+		unsigned ncl = Bake->Clusters.Size();
+		Bake->ClusterLeafStart.Push(Bake->ClusterLeaves.Size());
+		auto &lstart = Bake->LeafClusterStart;
+		lstart.Resize(nleaf + 1);
+		for (auto &v : lstart) v = 0;
+		for (auto leaf : Bake->ClusterLeaves) lstart[leaf + 1]++;
+		for (unsigned i = 0; i < nleaf; i++) lstart[i + 1] += lstart[i];
+		Bake->LeafClusters.Resize(Bake->ClusterLeaves.Size());
+		{
+			TArray<uint32_t> fill(nleaf, true);
+			for (unsigned i = 0; i < nleaf; i++) fill[i] = lstart[i];
+			for (unsigned c = 0; c < ncl; c++)
+				for (uint32_t k = Bake->ClusterLeafStart[c]; k < Bake->ClusterLeafStart[c + 1]; k++)
+					Bake->LeafClusters[fill[Bake->ClusterLeaves[k]]++] = c;
+		}
+
+		// Cluster adjacency: the other clusters of its leaves (chunk
+		// siblings) and the clusters of the leaves across its leaves' segs.
+		Bake->ClusterAdjStart.Resize(ncl + 1);
+		Bake->ClusterAdj.Clear();
+		{
+			TArray<uint32_t> adj;
+			auto addLeaf = [&](unsigned leaf, unsigned c)
+			{
+				for (uint32_t k = lstart[leaf]; k < lstart[leaf + 1]; k++)
+					if (Bake->LeafClusters[k] != c) adj.Push(Bake->LeafClusters[k]);
+			};
+			for (unsigned c = 0; c < ncl; c++)
+			{
+				Bake->ClusterAdjStart[c] = Bake->ClusterAdj.Size();
+				adj.Clear();
+				for (uint32_t k = Bake->ClusterLeafStart[c]; k < Bake->ClusterLeafStart[c + 1]; k++)
+				{
+					unsigned leaf = Bake->ClusterLeaves[k];
+					addLeaf(leaf, c);
+					subsector_t &sub = Level->subsectors[leaf];
+					for (uint32_t i = 0; i < sub.numlines; i++)
+					{
+						seg_t *partner = sub.firstline[i].PartnerSeg;
+						if (partner && partner->Subsector) addLeaf(partner->Subsector->Index(), c);
+					}
+				}
+				std::sort(adj.begin(), adj.end());
+				auto end = std::unique(adj.begin(), adj.end());
+				unsigned n = unsigned(end - adj.begin());
+				for (unsigned i = 0; i < n; i++) Bake->ClusterAdj.Push(adj[i]);
+				cs.maxAdjacency = std::max(cs.maxAdjacency, n);
+			}
+			Bake->ClusterAdjStart[ncl] = Bake->ClusterAdj.Size();
+			cs.adjacencyEdges = Bake->ClusterAdj.Size();
+		}
+
 		// Stats.
 		cs.clusters = Bake->Clusters.Size();
 		cs.triangles = Bake->Indices.Size() / 3;
@@ -520,6 +585,12 @@ void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budge
 	bake->ClusterPlaneStart.Clear();
 	bake->ClusterStats = {};
 	bake->PolyClusterStart.Clear();
+	bake->ClusterLeafStart.Clear();
+	bake->ClusterLeaves.Clear();
+	bake->LeafClusterStart.Clear();
+	bake->LeafClusters.Clear();
+	bake->ClusterAdjStart.Clear();
+	bake->ClusterAdj.Clear();
 	bake->ClusterStats.budget = std::clamp(budget, 16, 65536);
 	if (bake->Surfaces.Size() > 0 && Level->subsectors.Size() > 0)
 	{
@@ -534,12 +605,34 @@ void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budge
 		bake->PolyClusterStart.Resize(bake->PolyBaked.Size() + 1);
 		for (auto &v : bake->PolyClusterStart) v = bake->Clusters.Size();
 	}
+	if (bake->ClusterLeafStart.Size() != bake->Clusters.Size() + 1)
+	{
+		// No BSP walk ran: no cluster has leaves.
+		bake->ClusterLeafStart.Resize(bake->Clusters.Size() + 1);
+		for (auto &v : bake->ClusterLeafStart) v = 0;
+		bake->ClusterLeaves.Clear();
+		bake->ClusterAdjStart = bake->ClusterLeafStart;
+		bake->ClusterAdj.Clear();
+		bake->LeafClusterStart.Resize(Level->subsectors.Size() + 1);
+		for (auto &v : bake->LeafClusterStart) v = 0;
+		bake->LeafClusters.Clear();
+	}
+	bake->GatherClusterStamp.Resize(bake->Clusters.Size());
+	bake->GatherLeafStamp.Resize(Level->subsectors.Size());
+	bake->GatherSectorStamp.Resize(Level->sectors.Size());
+	for (auto &v : bake->GatherClusterStamp) v = 0;
+	for (auto &v : bake->GatherLeafStamp) v = 0;
+	for (auto &v : bake->GatherSectorStamp) v = 0;
+	bake->GatherStamp = 0;
 	bake->SurfaceLeaf.Reset();
 	bake->Clusters.ShrinkToFit();
 	bake->ClusterSectors.ShrinkToFit();
 	bake->ClusterSurfaces.ShrinkToFit();
 	bake->ClusterPlanes.ShrinkToFit();
 	bake->ClusterPlaneStart.ShrinkToFit();
+	bake->ClusterLeaves.ShrinkToFit();
+	bake->LeafClusters.ShrinkToFit();
+	bake->ClusterAdj.ShrinkToFit();
 	bake->ClusterStats.ms = I_msTimeF() - t0;
 }
 
@@ -549,6 +642,6 @@ void LevelMeshBake::PrintClusterStats(const char *mapname) const
 	Printf("LevelMeshClusters %s: %u clusters (budget %u), %u triangles, %.1f ms; tris/cluster min %u p50 %u p90 %u max %u; histogram",
 		mapname, c.clusters, c.budget, c.triangles, c.ms, c.minTris, c.p50Tris, c.p90Tris, c.maxTris);
 	for (int i = 0; i < 9; i++) Printf(" %u", c.histogram[i]);
-	Printf("; chunked leaves %u (%u clusters), split surfaces %u, mixed-bucket clusters %u, cluster-sector refs %u, max sector fan-out %u, fallback leaves %u, hole surfaces %u\n",
-		c.chunkedLeaves, c.chunkClusters, c.splitSurfaces, c.mixedBucketClusters, c.clusterSectorRefs, c.maxSectorClusters, c.fallbackLeaves, c.orphanSurfaces);
+	Printf("; chunked leaves %u (%u clusters), split surfaces %u, mixed-bucket clusters %u, cluster-sector refs %u, max sector fan-out %u, fallback leaves %u, hole surfaces %u, adjacency %u (max %u)\n",
+		c.chunkedLeaves, c.chunkClusters, c.splitSurfaces, c.mixedBucketClusters, c.clusterSectorRefs, c.maxSectorClusters, c.fallbackLeaves, c.orphanSurfaces, c.adjacencyEdges, c.maxAdjacency);
 }

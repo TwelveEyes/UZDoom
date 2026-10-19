@@ -442,6 +442,9 @@ struct LevelMeshView
 	// Portal views: the portal window's screen rectangle (NDC x0, y0, x1, y1)
 	// the cull narrows its frustum to; x0 > x1 = the whole screen.
 	float cullRect[4] = { 1.f, 1.f, -1.f, -1.f };
+	// Ticket 17: identifies the view across frames (DFrameBuffer::
+	// LevelMeshVisibility); 0 = no visibility readback.
+	uint64_t viewKey = 0;
 };
 
 template<class T> struct LevelMeshSpan

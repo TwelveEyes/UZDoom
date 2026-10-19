@@ -15,6 +15,8 @@
 **
 */
 
+#include <bit>
+
 #include "p_lnspec.h"
 #include "p_local.h"
 #include "a_sharedglobal.h"
@@ -33,6 +35,7 @@
 #include "flatvertices.h"
 #include "hw_vertexbuilder.h"
 #include "hw_walldispatcher.h"
+#include "hwrenderer/hw_levelmeshbake.h"
 
 #include "p_visualthinker.h"
 
@@ -41,6 +44,16 @@
 #endif // ARCH_IA32
 
 CVAR(Bool, gl_multithread, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+// Levelmesh actor gather (ticket 17): 0 keeps the BSP walk gathering actors
+// and particles on the levelmesh path (the A side of the gather A/B).
+CVAR(Bool, lm_gather, true, CVAR_NOSAVE)
+// Debug: 0 gathers only the visible clusters, not their neighbours.
+CVAR(Bool, lm_gatheradjacent, true, CVAR_NOSAVE)
+// Debug: print every view's gather (clusters, subsectors, sectors).
+CVAR(Bool, lm_gatherlog, false, CVAR_NOSAVE)
+EXTERN_CVAR(Bool, lm_draw)
+EXTERN_CVAR(Bool, lm_portals)
+EXTERN_CVAR(Bool, gl_texture)
 
 EXTERN_CVAR(Float, r_actorspriteshadowdist)
 EXTERN_CVAR(Bool, r_radarclipper)
@@ -753,6 +766,142 @@ void HWDrawInfo::RenderParticles(subsector_t *sub, sector_t *front)
 	SetupSprite.Unclock();
 }
 
+//==========================================================================
+//
+// Levelmesh actor gather (ticket 17)
+//
+// On the levelmesh path a view takes its actors and particles from the
+// clusters its GPU cull found visible in the previous rendered frame (read
+// back through DFrameBuffer::LevelMeshVisibility), plus their neighbours
+// (LevelMeshBake::ClusterAdj: what can come into view in one frame through
+// an edge of the visible set), intersected with the current frustum. The
+// BSP walk then skips RenderThings / RenderParticles. The latency is one
+// rendered frame: the device waits for the previous frame's submits before
+// the next one starts (VkLevelMeshRenderer::BeginFrame). A view with no
+// readback (first frame of a level or after a frame without the levelmesh,
+// a portal view past the backend's limit, out-of-body or offscreen views)
+// gathers through the walk for that frame.
+//
+// RenderThings / RenderParticles keep all their per-thing rules (distance,
+// map sections, thing->validcount dedup, the clip portal); the gather only
+// replaces which subsectors / sectors they are called for, with the walk's
+// per-subsector rejections (map section, polyobject origin, clip portal).
+//
+//==========================================================================
+
+const uint32_t *HWDrawInfo::BeginLevelMeshGather(unsigned &words)
+{
+	lmGather = false;
+	words = 0;
+	auto bake = Level->levelMeshBake;
+	// The conditions of DrawLevelMesh (a view the levelmesh draws), and
+	// out-of-body views stay classic (dither / radar rules: ticket 18).
+	if (!lm_gather || !gl_render_things || lmOffscreen || Viewpoint.bDoOob || bake == nullptr || !lm_draw || !gl_texture ||
+		(outer != nullptr && (!lm_portals || !mPortalStencil)) || !screen->LevelMeshResident(bake->Id)) return nullptr;
+	lmViewKey = LevelMeshViewKey();
+	const uint32_t *bits = screen->LevelMeshVisibility(bake->Id, lmViewKey, words);
+	if (bits == nullptr || words != std::max((bake->Clusters.Size() + 31) / 32, 1u) || bake->ClusterAdjStart.Size() != bake->Clusters.Size() + 1 ||
+		bake->GatherClusterStamp.Size() != bake->Clusters.Size()) return nullptr;
+	lmGather = true;
+	return bits;
+}
+
+void HWDrawInfo::GatherLevelMeshThings(const uint32_t *bits, unsigned words)
+{
+	auto bake = Level->levelMeshBake;
+	LevelMeshGatherTime.Clock();
+	uint32_t stamp = ++bake->GatherStamp;
+	if (stamp == 0)
+	{
+		for (auto &v : bake->GatherClusterStamp) v = 0;
+		for (auto &v : bake->GatherLeafStamp) v = 0;
+		for (auto &v : bake->GatherSectorStamp) v = 0;
+		stamp = ++bake->GatherStamp;
+	}
+	VSMatrix viewProj = VPUniforms.ProjectionMatrix;
+	viewProj.multMatrix(VPUniforms.ViewMatrix);
+	const float *vp = viewProj.get();
+	const unsigned numClusters = bake->Clusters.Size();
+	unsigned nclusters = 0, nadjacent = 0, nsubsectors = 0, nsectors = 0;
+
+	auto gatherLeaf = [&](uint32_t leaf)
+	{
+		if (bake->GatherLeafStamp[leaf] == stamp) return;
+		bake->GatherLeafStamp[leaf] = stamp;
+		subsector_t *sub = &Level->subsectors[leaf];
+		sector_t *sector = sub->sector;
+		// DoSubsector's rejections.
+		if (!sector || !CurrentMapSections[sub->mapsection] || (sub->flags & SSECF_POLYORG)) return;
+		if (mClipPortal && mClipPortal->ClipSubsector(sub) == PClip_InFront) return;
+		nsubsectors++;
+		bool particles = sub->sprites.Size() > 0 || Level->ParticlesInSubsec[leaf] != NO_PARTICLE;
+		bool things = false;
+		if (bake->GatherSectorStamp[sector->sectornum] != stamp)
+		{
+			bake->GatherSectorStamp[sector->sectornum] = stamp;
+			nsectors++;
+			things = sector->touching_renderthings || sector->sectorportal_thinglist;
+		}
+		if (!particles && !things) return;
+		// The worker needs the fake sector prepared by this thread.
+		sector_t *fakesector = hw_FakeFlat(sector, in_area, false);
+		if (multithread)
+		{
+			if (particles) jobQueue.AddJob(RenderJob::ParticleJob, sub, nullptr);
+			if (things) jobQueue.AddJob(RenderJob::SpriteJob, sub, nullptr);
+		}
+		else
+		{
+			SetupSprite.Clock();
+			if (particles) RenderParticles(sub, fakesector);
+			if (things) RenderThings(sub, fakesector);
+			SetupSprite.Unclock();
+		}
+	};
+	auto gatherCluster = [&](uint32_t c, bool adjacent)
+	{
+		if (c >= numClusters || bake->GatherClusterStamp[c] == stamp) return;
+		bake->GatherClusterStamp[c] = stamp;
+		uint32_t first = bake->ClusterLeafStart[c], last = bake->ClusterLeafStart[c + 1];
+		if (first == last || !LevelMesh_ClusterInFrustum(vp, bake->Clusters[c])) return;
+		nclusters++;
+		if (adjacent) nadjacent++;
+		for (uint32_t k = first; k < last; k++) gatherLeaf(bake->ClusterLeaves[k]);
+	};
+
+	// The visible clusters first, so a visible neighbour is not counted as adjacent.
+	for (unsigned w = 0; w < words; w++)
+	{
+		for (uint32_t m = bits[w]; m != 0; m &= m - 1)
+			gatherCluster(w * 32 + std::countr_zero(m), false);
+	}
+	if (lm_gatheradjacent)
+	{
+		for (unsigned w = 0; w < words; w++)
+		{
+			for (uint32_t m = bits[w]; m != 0; m &= m - 1)
+			{
+				uint32_t c = w * 32 + std::countr_zero(m);
+				if (c >= numClusters) continue;
+				for (uint32_t k = bake->ClusterAdjStart[c]; k < bake->ClusterAdjStart[c + 1]; k++)
+					gatherCluster(bake->ClusterAdj[k], true);
+			}
+		}
+	}
+
+	lmGatherStats.views++;
+	lmGatherStats.clusters += nclusters;
+	lmGatherStats.adjacent += nadjacent;
+	lmGatherStats.subsectors += nsubsectors;
+	lmGatherStats.sectors += nsectors;
+	LevelMeshGatherTime.Unclock();
+	if (lm_gatherlog)
+	{
+		Printf("LMGATHER frame %llu key %llx clusters %u adj %u subsectors %u sectors %u\n", (unsigned long long)screen->FrameTime,
+			(unsigned long long)lmViewKey, nclusters, nadjacent, nsubsectors, nsectors);
+	}
+}
+
 
 //==========================================================================
 //
@@ -883,7 +1032,7 @@ void HWDrawInfo::DoSubsector(subsector_t * sub)
 	}
 
 	// [RH] Add particles
-	if (gl_render_things && (sub->sprites.Size() > 0 || Level->ParticlesInSubsec[sub->Index()] != NO_PARTICLE))
+	if (gl_render_things && !lmGather && (sub->sprites.Size() > 0 || Level->ParticlesInSubsec[sub->Index()] != NO_PARTICLE))
 	{
 		if (multithread)
 		{
@@ -909,7 +1058,7 @@ void HWDrawInfo::DoSubsector(subsector_t * sub)
 		sector->validcount = validcount;
 		sector->MoreFlags |= SECMF_DRAWN;
 
-		if (gl_render_things && (sector->touching_renderthings || sector->sectorportal_thinglist))
+		if (gl_render_things && !lmGather && (sector->touching_renderthings || sector->sectorportal_thinglist))
 		{
 			if (multithread)
 			{
@@ -1107,6 +1256,11 @@ void HWDrawInfo::RenderBSP(void *node, bool drawpsprites)
 
 	validcount++;	// used for processing sidedefs only once by the renderer.
 
+	// Ticket 17: actors / particles from last frame's GPU visibility (lmGather
+	// makes the walk skip them); gathered after the walk, through the same jobs.
+	unsigned lmWords = 0;
+	const uint32_t *lmBits = BeginLevelMeshGather(lmWords);
+
 	multithread = gl_multithread;
 	if (multithread)
 	{
@@ -1116,6 +1270,7 @@ void HWDrawInfo::RenderBSP(void *node, bool drawpsprites)
 		});
 		if (Viewpoint.bDoOrtho && ((Level->flags3 & LEVEL3_NOFOGOFWAR) || !r_radarclipper)) RenderOrthoNoFog();
 		else RenderBSPNode(node);
+		if (lmBits) GatherLevelMeshThings(lmBits, lmWords);
 
 		jobQueue.AddJob(RenderJob::TerminateJob, nullptr, nullptr);
 		Bsp.Unclock();
@@ -1127,6 +1282,7 @@ void HWDrawInfo::RenderBSP(void *node, bool drawpsprites)
 	{
 		if (Viewpoint.bDoOrtho && ((Level->flags3 & LEVEL3_NOFOGOFWAR) || !r_radarclipper)) RenderOrthoNoFog();
 		else RenderBSPNode(node);
+		if (lmBits) GatherLevelMeshThings(lmBits, lmWords);
 		Bsp.Unclock();
 	}
 

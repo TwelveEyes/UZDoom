@@ -72,6 +72,19 @@ struct LevelMeshStateStats
 extern LevelMeshStateStats lmStateStats;
 extern glcycle_t LevelMeshStateTime;
 
+// Levelmesh actor gather of this frame (ticket 17, HWDrawInfo::
+// GatherLevelMeshThings), summed over the views that gathered.
+struct LevelMeshGatherStats
+{
+	unsigned views = 0;			// views that gathered from the GPU visibility
+	unsigned clusters = 0;		// clusters taken (visible or adjacent, inside the frustum)
+	unsigned adjacent = 0;		// of those, taken only as a neighbour of a visible cluster
+	unsigned subsectors = 0;	// subsectors gathered
+	unsigned sectors = 0;		// sectors whose things were gathered
+};
+extern LevelMeshGatherStats lmGatherStats;
+extern glcycle_t LevelMeshGatherTime;
+
 void ResetProfilingData();
 void CheckBench();
 void  checkBenchActive();

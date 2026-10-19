@@ -111,6 +111,7 @@ VkLevelMeshRenderer::VkLevelMeshRenderer(VulkanRenderDevice *fb) : fb(fb)
 VkLevelMeshRenderer::~VkLevelMeshRenderer()
 {
 	if (mReadback && mReadbackData) mReadback->Unmap();
+	if (mVisReadback && mVisReadbackData) mVisReadback->Unmap();
 }
 
 static FString CullDefines()
@@ -167,6 +168,7 @@ bool VkLevelMeshRenderer::CreateObjects()
 		.AddBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
 		.AddBinding(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
 		.AddBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
+		.AddBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT)
 		.DebugName("VkLevelMeshRenderer.CullSetLayout")
 		.Create(dev);
 	mCullLayout = PipelineLayoutBuilder()
@@ -215,7 +217,7 @@ bool VkLevelMeshRenderer::CreateObjects()
 	// list), so the pool holds a few generations.
 	mPool = DescriptorPoolBuilder()
 		.MaxSets(512)
-		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * (MaxPortalViews + 4))
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7 * (MaxPortalViews + 4))
 		.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 256)
 		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 256)
 		.DebugName("VkLevelMeshRenderer.Pool")
@@ -268,12 +270,18 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 		deleteList->Add(std::move(v.drawArgs));
 		deleteList->Add(std::move(v.compact));
 		deleteList->Add(std::move(v.drawn));
+		deleteList->Add(std::move(v.visBits));
 		deleteList->Add(std::move(v.cullSet));
 	};
 	release(mMain);
 	for (auto &v : mPortals) release(*v);
 	mPortals.clear();
 	mShading.reset();
+	if (mVisReadback && mVisReadbackData) mVisReadback->Unmap();
+	mVisReadbackData = nullptr;
+	deleteList->Add(std::move(mVisReadback));
+	mVisWords = 0;
+	mReadSlot = -1;
 
 	// The material programs this level draws (warp variants on demand).
 	try
@@ -325,6 +333,24 @@ bool VkLevelMeshRenderer::PrepareLevel(VkLevelMesh *lm, VulkanCommandBuffer *cmd
 		.Size(std::max(mNumClusters, 1u) * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.Drawn")
 		.Create(dev);
+	mVisWords = std::max((mNumClusters + 31) / 32, 1u);
+	mMain.visBits = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
+		.Size(mVisWords * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.VisBits")
+		.Create(dev);
+	size_t visReadbackSize = (size_t)NumSlots * (1 + MaxPortalViews) * mVisWords * sizeof(uint32_t);
+	mVisReadback = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU)
+		.Size(visReadbackSize)
+		.DebugName("VkLevelMeshRenderer.VisReadback")
+		.Create(dev);
+	mVisReadbackData = (uint32_t *)mVisReadback->Map(0, visReadbackSize);
+	for (auto &s : mSlots)
+	{
+		s.levelId = 0;
+		s.viewCount = 0;
+	}
 	mMain.compact = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
 		.Size(compactCount * sizeof(uint32_t))
@@ -357,14 +383,16 @@ void VkLevelMeshRenderer::UpdateCullSet(ViewBuffers &v)
 		.AddBuffer(v.cullSet.get(), 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (v.compact ? v.compact : mMain.compact).get())
 		.AddCombinedImageSampler(v.cullSet.get(), 4, mHiZView.get(), mPointSampler.get(), VK_IMAGE_LAYOUT_GENERAL)
 		.AddBuffer(v.cullSet.get(), 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, v.drawn.get())
+		.AddBuffer(v.cullSet.get(), 6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, v.visBits.get())
 		.Execute(fb->device.get());
 }
 
-// The buffers of the next portal view of this frame (null past MaxPortalViews).
-VkLevelMeshRenderer::ViewBuffers *VkLevelMeshRenderer::PortalBuffers(VulkanCommandBuffer *cmd)
+// The buffers of the next portal view of this frame (null past MaxPortalViews);
+// 'index': the view's index in this frame.
+VkLevelMeshRenderer::ViewBuffers *VkLevelMeshRenderer::PortalBuffers(VulkanCommandBuffer *cmd, unsigned &index)
 {
 	if (mPortalViews >= MaxPortalViews) return nullptr;
-	unsigned index = mPortalViews++;
+	index = mPortalViews++;
 	if (index < mPortals.size()) return mPortals[index].get();
 	auto dev = fb->device.get();
 	auto v = std::make_unique<ViewBuffers>();
@@ -389,6 +417,11 @@ VkLevelMeshRenderer::ViewBuffers *VkLevelMeshRenderer::PortalBuffers(VulkanComma
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
 		.Size(clusters * sizeof(uint32_t))
 		.DebugName("VkLevelMeshRenderer.PortalDrawn")
+		.Create(dev);
+	v->visBits = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
+		.Size(mVisWords * sizeof(uint32_t))
+		.DebugName("VkLevelMeshRenderer.PortalVisBits")
 		.Create(dev);
 	UpdateCullSet(*v);
 	mPortals.push_back(std::move(v));
@@ -802,7 +835,8 @@ bool VkLevelMeshRenderer::DrawPortalView(const LevelMeshView &view)
 
 	state->EndRenderPass();
 	auto cmd = fb->GetCommands()->GetDrawCommands();
-	ViewBuffers *v = PortalBuffers(cmd);
+	unsigned portalIndex = 0;
+	ViewBuffers *v = PortalBuffers(cmd, portalIndex);
 	if (!v) return false;
 	mView = v;
 	mMirrored = view.mirrored;
@@ -816,10 +850,11 @@ bool VkLevelMeshRenderer::DrawPortalView(const LevelMeshView &view)
 	if (timed) cmd->writeTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mPortalQueries.get(), query);
 
 	PipelineBarrier()
-		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 	cmd->fillBuffer(v->counters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
+	cmd->fillBuffer(v->visBits->buffer, 0, VK_WHOLE_SIZE, 0);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -853,6 +888,7 @@ bool VkLevelMeshRenderer::DrawPortalView(const LevelMeshView &view)
 	pc.numClusters = mNumClusters;
 	pc.hizLevels = (uint32_t)mHiZLevels;
 	Cull(cmd, pc, LMPHASE_SINGLE);
+	CopyVisibility(cmd, 1 + portalIndex, view.viewKey);
 	if (resolve) Resolve(cmd);
 	DrawPhase(lm, pv, 0);
 	if (timed)
@@ -907,6 +943,8 @@ bool VkLevelMeshRenderer::BeginFrameSetup(VkLevelMesh *lm, const VkRenderState::
 	if (mQueries) cmd->resetQueryPool(mQueries.get(), mSlot * NumPoints, NumPoints);
 	if (mPortalQueries) cmd->resetQueryPool(mPortalQueries.get(), mSlot * 2 * MaxPortalViews, 2 * MaxPortalViews);
 	slot.portalViews = 0;
+	slot.levelId = lm->GetId();
+	slot.viewCount = 0;
 	mSetupFrame = mFrame;
 	return true;
 }
@@ -943,10 +981,11 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 	// The previous draws' indirect / index reads, and the previous resolve's
 	// reads of drawn[], must finish before they are rewritten.
 	PipelineBarrier()
-		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		.AddMemory(VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 	cmd->fillBuffer(mView->counters->buffer, 0, LMC_COUNT * sizeof(uint32_t), 0);
+	cmd->fillBuffer(mView->visBits->buffer, 0, VK_WHOLE_SIZE, 0);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -968,6 +1007,7 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		PipelineBarrier()
 			.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)
 			.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+		CopyVisibility(cmd, 0, view.viewKey);
 	};
 
 	if (view.cullMode == LMCULL_HIZ)
@@ -1001,6 +1041,58 @@ bool VkLevelMeshRenderer::Draw(const LevelMeshView &view)
 		Timestamp(cmd, TS_DRAW1);
 	}
 	return true;
+}
+
+//==========================================================================
+//
+// Visibility readback (ticket 17): the final cull phase's visBits of each
+// view, per frame slot, for the next frame's actor gather. BeginFrame runs
+// after VulkanRenderDevice::Update waited for every submit, so the copies of
+// the previous frame are complete: the gather lags exactly one frame.
+//
+//==========================================================================
+
+void VkLevelMeshRenderer::CopyVisibility(VulkanCommandBuffer *cmd, unsigned viewIndex, uint64_t viewKey)
+{
+	auto &slot = mSlots[mSlot];
+	if (!mVisReadback || viewKey == 0 || slot.frame != mFrame || viewIndex > MaxPortalViews) return;
+	VkDeviceSize offset = ((VkDeviceSize)mSlot * (1 + MaxPortalViews) + viewIndex) * mVisWords * sizeof(uint32_t);
+	cmd->copyBuffer(mView->visBits.get(), mVisReadback.get(), 0, offset, mVisWords * sizeof(uint32_t));
+	PipelineBarrier()
+		.AddMemory(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)
+		.Execute(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+	// Views skipped in between (key 0) are never matched.
+	for (unsigned i = slot.viewCount; i < viewIndex; i++) slot.viewKeys[i] = 0;
+	slot.viewKeys[viewIndex] = viewKey;
+	slot.viewCount = std::max(slot.viewCount, viewIndex + 1);
+}
+
+void VkLevelMeshRenderer::BeginFrame()
+{
+	auto &last = mSlots[mSlot];
+	mReadSlot = -1;
+	if (mVisReadback && last.serial != 0 && last.frame == mFrame && last.viewCount != 0 && last.levelId == mLevelId)
+	{
+		mReadSlot = mSlot;
+		vmaInvalidateAllocation(fb->device->allocator, mVisReadback->allocation,
+			(VkDeviceSize)mReadSlot * (1 + MaxPortalViews) * mVisWords * sizeof(uint32_t), (VkDeviceSize)last.viewCount * mVisWords * sizeof(uint32_t));
+	}
+	mFrame++;
+	mPortalViews = 0;
+}
+
+const uint32_t *VkLevelMeshRenderer::GetVisibility(uint64_t levelId, uint64_t viewKey, unsigned &words)
+{
+	if (mReadSlot < 0 || viewKey == 0 || !mVisReadbackData) return nullptr;
+	auto &slot = mSlots[mReadSlot];
+	if (slot.levelId != levelId) return nullptr;
+	for (unsigned i = 0; i < slot.viewCount; i++)
+	{
+		if (slot.viewKeys[i] != viewKey) continue;
+		words = mVisWords;
+		return mVisReadbackData + ((size_t)mReadSlot * (1 + MaxPortalViews) + i) * mVisWords;
+	}
+	return nullptr;
 }
 
 //==========================================================================
