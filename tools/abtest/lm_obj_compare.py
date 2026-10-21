@@ -13,6 +13,7 @@
 import argparse, os, re, subprocess, tempfile
 import numpy as np
 from PIL import Image, ImageDraw
+from gamescope_wrap import wrap as gamescope_wrap, env as gamescope_env
 
 KIT = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.abspath(os.path.join(KIT, "..", "..", "build"))
@@ -30,7 +31,7 @@ def run_engine(iwad, pwad, mapname, demo, ticks, workdir):
             "+set", "fov", "90", "+set", "vid_scalemode", "0", "+set", "vid_scalefactor", "1",
             "+set", "r_ab_capture", ",".join(map(str, ticks)) + ":" + workdir]
     cmd += ["-playdemo", os.path.abspath(demo)] if demo else ["+map", mapname]
-    out = subprocess.run(cmd, cwd=BUILD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=600).stdout
+    out = subprocess.run(gamescope_wrap(cmd, W, H), cwd=BUILD, env=gamescope_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=600).stdout
     views = {}
     last = None
     for l in out.splitlines():

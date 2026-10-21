@@ -22,6 +22,8 @@ import sys
 
 from PIL import Image, ImageDraw
 
+from gamescope_wrap import wrap as gamescope_wrap, env as gamescope_env
+
 KIT = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(KIT, "..", ".."))
 BUILD = os.path.join(ROOT, "build")
@@ -82,7 +84,7 @@ def main():
     log = os.path.join(tmp, "stdout.log")
     with open(log, "wb") as out:
         try:
-            subprocess.run(cmd, cwd=BUILD, stdout=out, stderr=subprocess.STDOUT,
+            subprocess.run(gamescope_wrap(cmd, 1280, 720), cwd=BUILD, env=gamescope_env(), stdout=out, stderr=subprocess.STDOUT,
                            timeout=a.timeout)
         except subprocess.TimeoutExpired:
             print(f"warning: engine timed out ({a.timeout}s); tiling what exists",

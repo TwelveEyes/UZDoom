@@ -8,6 +8,17 @@ work is tickets 02 (perf baseline v2) and 03 (A/B tooling v2) in
 committed home for demos, manifests, allowlists, and scripts; large perf
 logs stay local (`logs/`, `runs/` are gitignored).
 
+**All runs are headless under gamescope.** Every engine launch of the kit
+(`abtest.py`, `lm_obj_compare.py`, `contact_sheet.py`, `run_matrix.sh`) is
+wrapped as `gamescope --backend headless -W w -H h -w w -h h -- uzdoom ...`
+with `SDL_VIDEODRIVER=x11` (`gamescope_wrap.py`; the nested display equals
+the capture resolution). `run_matrix.sh` adds `-r 1000 --immediate-flips`:
+the nested display otherwise paces every frame to 60 Hz. Never run two game
+instances at once: wrap each tool invocation in `flock
+/tmp/helion-smoke/game.lock`. A fatal engine error under gamescope opens the
+modal error window and hangs the launch until the tool's timeout (the
+message is not on stdout).
+
 ## A/B tooling v2 (current; ticket 03 of `.scratch/levelmesh-impl/`)
 
 `../abtest.py` compares classic (`gl_uselevelmesh 0`) with levelmesh (`1`) frames captured

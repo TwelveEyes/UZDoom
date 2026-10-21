@@ -44,8 +44,9 @@ Subcommands:
   promote    MAP --reviewer NAME         move reviewed candidates
   validate                               manifest + allowlists
 
-Requirements: Python 3, Pillow. WADs in build/wads/, engine at
-build/uzdoom (--engine). Run unsandboxed on a real GPU with a display.
+Requirements: Python 3, Pillow, gamescope. WADs in build/wads/, engine at
+build/uzdoom (--engine). Every launch runs headless under gamescope
+(abtest/gamescope_wrap.py); run unsandboxed on a real GPU.
 Exit: 0 all pass, 1 any check failed, 2 usage/setup error.
 """
 
@@ -59,6 +60,9 @@ import subprocess
 import sys
 import time
 from typing import NoReturn
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "abtest"))
+from gamescope_wrap import wrap as gamescope_wrap, env as gamescope_env  # noqa: E402
 
 try:
     from PIL import Image, ImageChops
@@ -477,10 +481,10 @@ set vid_contrast 1
 set vid_saturation 1
 set vid_preferbackend {backend}
 set gl_uselevelmesh {cvar}
-// Dynamic lights pinned off on BOTH paths: levelmesh dynlights are a
-// separate clustered forward+ design (.scratch/levelmesh-impl/issues/
-// 19-dynamic-lights.md); remove this pin when 19 lands.
-set r_dynlights 0
+// Dynamic lights on (ticket 19: the levelmesh light lists). Shadowmaps
+// pinned to their default; a shadowmap run overrides with --set-a/--set-b.
+set r_dynlights 1
+set gl_light_shadowmap 0
 set r_ab_fullbright {fullbright}
 set r_ab_gamestate {gamestate}
 // Notify lines off: the tour demos' tic-0 cheat messages tick through
@@ -530,6 +534,8 @@ def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir
             "-width", str(w), "-height", str(h)]
     if mp.get("pwad"):
         cmd += ["-file", os.path.join("wads", mp["pwad"])]
+    for f in manifest.get("extra_files", []):
+        cmd += ["-file", f]
     if mode == "static":
         # +map takes the lump name (MAP01, E1M2, 20PAM); -warp wants ints.
         cmd += ["+map", mp["warp"]]
@@ -540,8 +546,8 @@ def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir
     t0 = time.monotonic()
     try:
         with open(stdout_log, "wb") as out:
-            proc = subprocess.run(cmd, cwd=args.build, stdout=out, stderr=subprocess.STDOUT,
-                                  timeout=args.timeout)
+            proc = subprocess.run(gamescope_wrap(cmd, w, h), cwd=args.build, env=gamescope_env(),
+                                  stdout=out, stderr=subprocess.STDOUT, timeout=args.timeout)
     except subprocess.TimeoutExpired:
         return False, f"timeout after {args.timeout}s", time.monotonic() - t0
     elapsed = time.monotonic() - t0

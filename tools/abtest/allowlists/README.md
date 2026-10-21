@@ -21,7 +21,7 @@ rasterization noise. Every larger cluster, and every game-state difference, need
 | DC1 | z-fight: coplanar/near-coplanar surfaces, either winner legitimate |
 | DC2 | float-z rounding: plane-anchored GPU z vs classic CPU z at sub-pixel edges |
 | DC3 | feedback latency: CPU consumers of GPU visibility lag ≤ the readback depth |
-| DC4 | dynamic-light selection: clustered binning vs per-surface lists at edges |
+| DC4 | dynamic-light selection / evaluation (ticket 19): (a) float summation order of a surface's light list (slot order) vs the classic per-surface list (pointer order); (b) additive-light color on sprites / particles (the record's `0.2`-scaled color `× 5.0`: ULP); (c) sprite shadow test: nearest shadowmap texel vs the classic CPU ray test, shadowmaps on only |
 | DC5 | visibility precision: exact depth visibility vs the clipper, for game-state sets |
 
 A new class needs an ADR 0002 amendment and a matching change to `CLASSES` in `abtest.py`.

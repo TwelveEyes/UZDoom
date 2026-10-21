@@ -32,7 +32,9 @@
 #   run_matrix.sh --demos demos/v2 --tag mon --monsters --only SOS
 # --demos  demo directory (default demos/); --tag  log-name prefix;
 # --monsters  drop -nomonsters; --tics  demo length for the completion check;
-# --set 'CVAR VALUE'  extra +set on the engine command line (repeatable).
+# --set 'CVAR VALUE'  extra +set on the engine command line (repeatable);
+# --build DIR  another build directory (default build/; its wads/ must hold the WADs);
+# --file F  extra -file relative to the build dir (repeatable, e.g. lights.pk3).
 # Every run loads baseline.cfg (incl. r_ticstability 0, perf baseline v2).
 # Status: tools/abtest/logs/status.tsv (demo, backend, exit, verdict,
 # wall_s, lline).
@@ -52,6 +54,10 @@ TAG=""
 MONSTERS=0
 TICS=2600
 SETS=()
+EXTRA_FILES=()
+# Perf runs must not be paced by the nested display (60 Hz by default):
+# a high nested refresh with immediate flips leaves the frame rate uncapped.
+GAMESCOPE_PERF="-r 1000 --immediate-flips"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -62,6 +68,8 @@ while [ $# -gt 0 ]; do
 	--monsters) MONSTERS=1; shift ;;
 	--tics) TICS="$2"; shift 2 ;;
 	--set) SETS+=(+set ${2%% *} "${2#* }"); shift 2 ;;
+	--build) BUILD=$(cd "$2" && pwd); shift 2 ;;
+	--file) EXTRA_FILES+=(-file "$2"); shift 2 ;;
 	*) echo "unknown arg: $1" >&2; exit 2 ;;
 	esac
 done
@@ -115,13 +123,13 @@ wait_timedemo() {
 		if [ "$still" -ge 3 ]; then
 			last=$(awk '$1=="F"{t=$3} END{sub("tic=","",t); print t+0}' "$plog" 2>/dev/null)
 			if [ "${last:-0}" -ge $((TICS-1)) ]; then
-				kill "$pid" 2>/dev/null; sleep 2; kill -9 "$pid" 2>/dev/null
+				pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; sleep 2; kill -9 "$pid" 2>/dev/null
 				wait "$pid" 2>/dev/null
 				return 255
 			fi
 		fi
 		if [ $(( $(date +%s) - start )) -ge "$TIMEOUT" ]; then
-			kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+			pkill -9 -P "$pid" 2>/dev/null; kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 			return 124
 		fi
 	done
@@ -191,11 +199,15 @@ for demo in $DEMOS; do
 		if [ "$MONSTERS" -eq 0 ]; then
 			EXTRA+=(-nomonsters)
 		fi
+		EXTRA+=("${EXTRA_FILES[@]}")
 		(
 			cd "$BUILD"
 			# line-buffered: the engine is killed at the end dialog, and a
 			# block-buffered stdout would be lost with it
-			exec stdbuf -oL -eL "$BUILD/uzdoom" \
+			# headless: every in-game run goes through gamescope (README)
+			export SDL_VIDEODRIVER=x11
+			exec gamescope --backend headless -W "$W" -H "$H" -w "$W" -h "$H" $GAMESCOPE_PERF -- \
+				stdbuf -oL -eL "$BUILD/uzdoom" \
 				-iwad "wads/$BASE_IWAD" \
 				"${EXTRA[@]}" \
 				-width "$W" -height "$H" \

@@ -16,8 +16,9 @@ and at most a fraction F of the frames process no wall or flat at all. A
 run whose camera looks at nothing measures present/2D overhead, not
 rendering. Protocol values: --min-geom 5 --max-empty 0.10.
 
-Perflog format: see the '# r_perflog v2' header (hw_clock.cpp). 'L' lines
-precede the 'F' frames of their level. v1 logs (no wall column) still parse.
+Perflog format: see the '# r_perflog vN' header (hw_clock.cpp). 'L' lines
+precede the 'F' frames of their level. Older logs (v1: no wall column; before
+v10: no light list columns) still parse: missing fields are left out.
 
 Usage:
   parse_perflog.py [--warmup 350] [--window 2100] [--min-geom 0]
@@ -31,8 +32,12 @@ import math
 import sys
 
 TIME_FIELDS = ("wall", "total", "r", "bsp", "clip", "wr", "ws", "fr", "fs",
-               "sr", "ss", "2d", "f3d", "fin", "pg", "pr", "dcms")
-COUNT_FIELDS = ("wl", "fl", "sp", "dec", "portals", "wv", "fv", "cbuf")
+               "sr", "ss", "2d", "f3d", "fin", "pg", "pr", "dcms",
+               # levelmesh (r_perflog v10, ticket 19): draw / total GPU ms, light
+               # list CPU ms, cluster light refine GPU ms; absent in older logs
+               "lmd1", "lmgpu", "lmlms", "lmlf")
+COUNT_FIELDS = ("wl", "fl", "sp", "dec", "portals", "wv", "fv", "cbuf",
+                "lmlt", "lmlr", "lmlo", "lmlp", "lmlix", "lmlc")
 
 
 def parse_file(path):

@@ -1,0 +1,161 @@
+{
+ "format": "ab-manifest/2",
+ "resolution": [
+  2560,
+  1440
+ ],
+ "backends": {
+  "gl33": 0,
+  "vulkan": 1
+ },
+ "ab_backends": [
+  "vulkan"
+ ],
+ "determinism_map": "DYNLIGHTTEST_MAP01",
+ "tolerance": {
+  "channel": 2,
+  "min_cluster": 4,
+  "calibration": {
+   "date": "2026-10-13",
+   "machine": "reference (RX 7900 XTX, RADV / radeonsi)",
+   "map": "DOOM2_MAP01",
+   "same_backend": "classic Vulkan vs classic Vulkan, separate launches (driver restarts): static 30/30 and demo 87/87 ticks byte-identical across 3 launches each (max delta 0). Classic needs no tolerance; it exists only for the levelmesh.",
+   "cross_backend": "classic GL33 vs classic Vulkan (known-good, different rasterizer): static 0/30 identical, max delta 24, 62.5% of differing px at delta <= 2, every cluster above delta 8 is a single pixel; demo 0/87 identical, max delta 208, 1-px-wide column clusters up to 1004 px (texture column / edge sampling). This is an upper bound on legitimate rasterizer noise, far looser than a same-backend levelmesh pair should be; thresholds that pass it would hide real bugs.",
+   "choice": "channel 2 = one-shade colour rounding; min_cluster 4 = isolated edge-sample specks (< 2x2). Larger differences must be classified under a delta class (DC1 z-fight / DC2 float-z, ...) in a reviewed allowlist entry. Re-calibrate (abtest.py calibrate) if the reference machine or driver changes.",
+   "runs": "tools/abtest/runs/*-cal/calibration.json (local)"
+  }
+ },
+ "static_ticks_default": [
+  1,
+  2,
+  4,
+  8,
+  16,
+  35,
+  70
+ ],
+ "comment": "Dynamic-light A/B (.scratch/levelmesh-impl ticket 19): wads/dynlighttest.wad, demos/dynlighttest/ and this manifest (all from make_dynlighttest.py). Four areas (light types, reachability through a solid wall / above a ceiling / round a corridor loop, 3D-floor bands, linked line portals), each vantage its own map lump (MAP<vantage><area>) for static mode; the demos hold, turn 20 degrees each way and back. lights.pk3 is loaded (extra_files). Same tolerance as ab_manifest.json.",
+ "demo_dir": "demos/dynlighttest",
+ "demo_ticks": {
+  "start": 5,
+  "step": 5,
+  "last": 65
+ },
+ "maps": [
+  {
+   "name": "DYNLIGHTTEST_MAP01",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP01",
+   "demo": "DYNLIGHTTEST_MAP01.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP02",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP02",
+   "demo": "DYNLIGHTTEST_MAP02.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP03",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP03",
+   "demo": "DYNLIGHTTEST_MAP03.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP04",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP04",
+   "demo": "DYNLIGHTTEST_MAP04.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP11",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP11",
+   "demo": "DYNLIGHTTEST_MAP11.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP12",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP12",
+   "demo": "DYNLIGHTTEST_MAP12.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP13",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP13",
+   "demo": "DYNLIGHTTEST_MAP13.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP14",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP14",
+   "demo": "DYNLIGHTTEST_MAP14.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP21",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP21",
+   "demo": "DYNLIGHTTEST_MAP21.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP22",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP22",
+   "demo": "DYNLIGHTTEST_MAP22.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP23",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP23",
+   "demo": "DYNLIGHTTEST_MAP23.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP24",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP24",
+   "demo": "DYNLIGHTTEST_MAP24.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP31",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP31",
+   "demo": "DYNLIGHTTEST_MAP31.lmp",
+   "static_ticks": null
+  },
+  {
+   "name": "DYNLIGHTTEST_MAP32",
+   "iwad": "DOOM2.WAD",
+   "pwad": "dynlighttest.wad",
+   "warp": "MAP32",
+   "demo": "DYNLIGHTTEST_MAP32.lmp",
+   "static_ticks": null
+  }
+ ],
+ "extra_files": [
+  "lights.pk3"
+ ]
+}

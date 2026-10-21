@@ -64,6 +64,9 @@
   "step": 30,
   "last": 2599
  },
+ "extra_files": [
+  "lights.pk3"
+ ],
  "maps": [
   {
    "name": "DOOM2_MAP01",
