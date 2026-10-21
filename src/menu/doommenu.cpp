@@ -34,7 +34,6 @@
 #include "gamestate.h"
 #include "gi.h"
 #include "gstrings.h"
-#include "hwrenderer/scene/hw_drawinfo.h"
 #include "i_interface.h"
 #include "i_net.h"
 #include "i_soundinternal.h"

@@ -19,7 +19,7 @@
 #pragma once
 
 #include "palettecontainer.h"
-#include "hwrenderer/scene/hw_drawstructs.h"
+#include "p_effect.h"
 
 //===========================================================================
 //

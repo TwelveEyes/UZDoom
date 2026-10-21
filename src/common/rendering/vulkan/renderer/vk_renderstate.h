@@ -26,6 +26,7 @@
 #include "vulkan/shaders/vk_shader.h"
 #include "vulkan/renderer/vk_renderpass.h"
 #include "vulkan/renderer/vk_streambuffer.h"
+#include "vulkan/textures/vk_imagetransition.h"
 
 #include "name.h"
 
@@ -35,12 +36,14 @@
 class VulkanRenderDevice;
 class VkRenderPassSetup;
 class VkTextureImage;
+class VkRenderProgram;
+class VkProgramRenderTarget;
 
 class VkRenderState : public FRenderState
 {
 public:
 	VkRenderState(VulkanRenderDevice* fb);
-	virtual ~VkRenderState() = default;
+	virtual ~VkRenderState();
 
 	// Draw commands
 	void ClearScreen() override;
@@ -65,30 +68,32 @@ public:
 	void EnableLineSmooth(bool on) override;
 	void EnableDrawBuffers(int count, bool apply) override;
 
+	// Render program mode (hw_renderprogram.h), see vk_renderstate_program.cpp
+	void OnSetProgram(IRenderProgram *prog) override;
+	void SetRenderTarget(IRenderTarget *target) override;
+	void ClearRenderTarget(float r, float g, float b, float a) override;
+	void CopySceneColor() override;
+	void DrawInstanced(int dt, int index, int count, int instanceCount) override;
+	void DrawIndexedInstanced(int dt, int index, int count, int instanceCount) override;
+	void DispatchCompute(VkRenderProgram *program, int gx, int gy, int gz);
+	void MemoryBarrierCompute();
+
 	void BeginFrame();
 	void SetRenderTarget(VkTextureImage *image, VulkanImageView *depthStencilView, int width, int height, VkFormat Format, VkSampleCountFlagBits samples);
 	void Bind(int bindingpoint, uint32_t offset);
 	void EndRenderPass();
 	void EndFrame();
 
-	// External pipelines (the levelmesh): see vk_renderstate.cpp.
-	struct ExternalTarget
-	{
-		VulkanRenderPass *renderPass = nullptr;	// compatible render pass for pipeline creation
-		int drawBuffers = 1;
-		VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-		bool depthStencil = false;
-		VulkanImageView *depthStencilView = nullptr;	// the attachment (identifies the depth buffer)
-		int x = 0, y = 0, width = 0, height = 0;	// current viewport
-		bool depthTest = false, depthWrite = false, depthClamp = true, stencilTest = false;
-		int depthFunc = 0, stencilOp = 0, colorMask = 15;
-	};
-	ExternalTarget GetExternalTarget();
-	VulkanCommandBuffer *BeginExternalDraw(VulkanPipelineLayout *layout, PushConstants &pc);
-	void EndExternalDraw();
-
 protected:
 	void Apply(int dt);
+	bool ApplyProgram(int dt);
+	void LeaveProgramMode();
+	bool PrepareProgramResources(VkRenderProgram *program, bool compute);
+	VulkanDescriptorSet *UpdateProgramDescriptorSet(VkRenderProgram *program, std::vector<uint32_t> &dynamicOffsets, bool compute);
+	bool WriteProgramUniforms(const void *data, size_t size, uint32_t &offset);
+	int ProgramTargetWidth() const;
+	int ProgramTargetHeight() const;
+	void BeginProgramTargetRenderPass(VulkanCommandBuffer *cmdbuffer);
 	void ApplyRenderPass(int dt);
 	void ApplyStencilRef();
 	void ApplyDepthBias();
@@ -150,6 +155,36 @@ protected:
 	bool mLastTextureMatrixEnabled = true;
 
 	int mApplyCount = 0;
+
+	// Render program mode
+	bool mInProgramMode = false;
+	VkProgramRenderTarget *mUserTarget = nullptr;
+	float mClearColor[4] = { 0, 0, 0, 0 };
+	bool mClearColorCustom = false;
+
+	std::unique_ptr<VulkanBuffer> mProgramUniformRing;
+	size_t mProgramUniformRingPos = 0;
+	size_t mProgramUniformRingSize = 0;
+	uint8_t *mProgramUniformRingMap = nullptr;
+
+	std::unique_ptr<VulkanDescriptorPool> mProgramDescriptorPool;
+	int mProgramDescriptorSetsLeft = 0;
+	std::unique_ptr<VulkanBuffer> mProgramNullTexelBuffer;
+	std::unique_ptr<IHardwareTexture> mProgramNullArray;	// view of array samplers that have no texture bound
+	VkBufferView mProgramNullTexelView = VK_NULL_HANDLE;
+	VkProgramRenderTarget *mProgramUserTargetLast = nullptr;
+
+	VulkanDescriptorSet *mProgramSet = nullptr;		// last set bound by a draw (owned by the delete list)
+	std::vector<uintptr_t> mProgramSetSignature;
+	VkRenderProgram *mProgramSetProgram = nullptr;
+	int mProgramSetGeneration = -1;
+	VulkanPipeline *mLastProgramPipeline = nullptr;
+	IVertexBuffer *mProgramLastVB = nullptr, *mProgramLastInstanceVB = nullptr;
+	int mProgramLastVBOffset = -1, mProgramLastInstanceOffset = -1;
+
+	VkTextureImage mSceneCopy;
+	int mSceneCopyWidth = 0, mSceneCopyHeight = 0;
+	bool mSceneDepthSampled = false;
 
 	struct RenderTarget
 	{

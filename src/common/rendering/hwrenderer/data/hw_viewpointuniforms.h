@@ -18,7 +18,6 @@
 
 #include "matrix.h"
 
-struct HWDrawInfo;
 
 enum class ELightBlendMode : uint8_t
 {

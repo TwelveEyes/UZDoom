@@ -1195,6 +1195,14 @@ public:
 
 // interaction info
 	FBlockNode		*BlockNode;			// links in blocks (if needed)
+	// Helion render blockmap links (transient, not serialized; see RenderBlockMap::RenderLink).
+	// renderBlock is the render block index + 1, 0 = not linked, so zeroed memory means unlinked.
+	AActor			*renderBlockNext, *renderBlockPrev;
+	int				renderBlock;
+	// Helion render state (transient): BlockmapCount (visit stamp of WorldStatic::CheckCounter), RenderDistanceSquared and LastRenderGametick.
+	int				renderCheckCount = 0;
+	int				lastRenderGametick = 0;
+	double			renderDistanceSquared = 0;
 	struct sector_t	*Sector;
 	subsector_t *		subsector;
 	FSection *			section;

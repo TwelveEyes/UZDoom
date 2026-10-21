@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Acceptance policy, Perf bars.
 **Type:** task
-**Status:** ready-for-agent
+**Status:** wontfix
 **Blocked by:** 03, 20
 
 ## What to build
@@ -36,3 +36,4 @@
 - [ ] User declares PROVEN; default flip and settings entry shipped together.
 
 ## Comments
+- 2026-10-20 (wontfix): superseded by .scratch/helion-render (ADR 0004).

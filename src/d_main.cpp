@@ -23,6 +23,8 @@
 
 // HEADER FILES ------------------------------------------------------------
 
+#include "rendering/helion/Entrypoint.h"
+#include "rendering/helion/OpenGL/Shader/ProgramRegistry.h"
 #include "c_cvars.h"
 #include "i_net.h"
 #include "i_soundinternal.h"
@@ -74,7 +76,6 @@
 #include "gstrings.h"
 #include "hu_stuff.h"
 #include "hw_clock.h"
-#include "hwrenderer/scene/hw_drawinfo.h"
 #include "i_interface.h"
 #include "i_sound.h"
 #include "i_soundinternal.h"
@@ -582,6 +583,7 @@ void D_Render(std::function<void()> action, bool interpolate)
 			Level->HasDynamicLights = Level->lights || Level->LightProbes.Size() > 0;
 		}
 		else Level->HasDynamicLights = false;	// lights are off so effectively we have none.
+		// The renderer interpolates sector planes on the GPU (plan D12), so their CPU interpolation is skipped.
 		if (interpolate) Level->interpolator.DoInterpolations(I_GetTimeFrac());
 		P_FindParticleSubsectors(Level);
 		PO_LinkToSubsectors(Level);
@@ -3921,7 +3923,11 @@ static int D_InitGame(const FIWADInfo* iwad_info, std::vector<FileSys::ResourceN
 	// replacement widget framework, or clean up the code to handle
 	// swapping between multiple GL contexts)
 	if (!(restart || norun))
+	{
+		// The Helion render programs are compiled through the video backend's shader progress hook (plan D22).
+		HelionProgramRegistry_Register();
 		V_Init2();
+	}
 
 	if (!(batchrun || norun)) Printf ("V_Init: allocate screen.\n");
 	if (!(restart || norun))
@@ -4442,6 +4448,7 @@ void D_Cleanup()
 	M_SaveDefaults(NULL);			// save config before the restart
 
 	// delete all data that cannot be left until reinitialization
+	Helion_ShutdownRenderer();
 	V_ClearFonts();					// must clear global font pointers
 	ColorSets.Clear();
 	PainFlashes.Clear();

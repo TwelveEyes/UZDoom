@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-abtest.py — levelmesh A/B capture + pixel-diff driver (v2).
+abtest.py — A/B capture + pixel-diff driver (v2).
 
-Effort: .scratch/levelmesh-impl/map.md (Acceptance policy);
-policy: docs/adr/0002-delta-class-acceptance.md; ticket 03.
+Effort: .scratch/levelmesh-impl/map.md (Acceptance policy), now used by
+.scratch/helion-render; policy: docs/adr/0002-delta-class-acceptance.md;
+ticket 03.
 
 Drives the engine's always-compiled A/B capture mode (r_ab_capture,
 src/d_abcapture.cpp: synthetic clock, one sim tic per rendered frame) and
 compares the composed frames of two fresh-level-load launches per
-map x mode x backend: path A gl_uselevelmesh 0 (classic) vs path B
-gl_uselevelmesh 1 (levelmesh). The levelmesh is Vulkan-only, so the
-default backend is Vulkan (manifest "ab_backends"); --backend gl33 is kept
-for classic-only checks.
+map x mode x backend: path A vs path B, which differ only by their
+--set-a / --set-b cvar pins (e.g. 'r_dynlights 1'). The default backend is
+Vulkan (manifest "ab_backends"); --backend gl33 selects OpenGL.
 
 Comparator (per tick PNG pair):
   - a pixel differs if its max per-channel |A-B| exceeds the manifest
@@ -476,10 +476,8 @@ set vid_fixgamma 0
 set vid_contrast 1
 set vid_saturation 1
 set vid_preferbackend {backend}
-set gl_uselevelmesh {cvar}
-// Dynamic lights pinned off on BOTH paths: levelmesh dynlights are a
-// separate clustered forward+ design (.scratch/levelmesh-impl/issues/
-// 19-dynamic-lights.md); remove this pin when 19 lands.
+// Dynamic lights pinned off on BOTH paths by default; override per path
+// with --set-a / --set-b 'r_dynlights 1'.
 set r_dynlights 0
 set r_ab_fullbright {fullbright}
 set r_ab_gamestate {gamestate}
@@ -513,7 +511,7 @@ def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir
                 fullbright=int(args.fullbright), gamestate=int(args.gamestate),
                 ticks=",".join(str(t) for t in ticks), outdir=outdir))
             # Per-path pins (--set-a / --set-b) come last, so they override
-            # the template, gl_uselevelmesh included.
+            # the template.
             extra = (getattr(args, f"set_{path_tag}", None) or []) if path_tag in ("a", "b") else []
             for pin in extra:
                 f.write(f"set {pin}\n")
@@ -558,11 +556,6 @@ def launch(args, manifest, mp, mode, backend, cvar_value, ticks, outdir, workdir
         return False, "llvmpipe in stdout (software GL — run unsandboxed)", elapsed
     if backend == "vulkan" and "Initialization of Vulkan failed" in stdout:
         return False, "vulkan init failed (fell back to GL)", elapsed
-    # A levelmesh that fails to build its shaders or scatter falls back to the
-    # classic path, which would make a classic-vs-levelmesh pair trivially pass.
-    for line in stdout.splitlines():
-        if line.startswith("Levelmesh: ") and "failed" in line:
-            return False, f"levelmesh fallback: {line[:160]}", elapsed
     if proc.returncode != 0:
         extra = " (ABCAPTURE incomplete)" if "ABCAPTURE incomplete" in stdout else ""
         return False, f"exit {proc.returncode}{extra}", elapsed
@@ -944,7 +937,7 @@ def main():
     p = sub.add_parser("run", help="launch capture pairs and compare")
     p.add_argument("--set-a", action="append", metavar="'CVAR VALUE'",
                    help="extra cvar pin on path A only (repeatable; overrides the template, "
-                        "e.g. 'gl_uselevelmesh 1' for a levelmesh-vs-levelmesh A/B)")
+                        "e.g. 'r_dynlights 1')")
     p.add_argument("--set-b", action="append", metavar="'CVAR VALUE'",
                    help="extra cvar pin on path B only (repeatable)")
     p.add_argument("--determinism", action="store_true",

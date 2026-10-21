@@ -591,7 +591,6 @@ file( GLOB HEADER_FILES
 	rendering/*.h
 	rendering/2d/*.h
 	rendering/hwrenderer/*.h
-	rendering/hwrenderer/scene/*.h
 	*.h
 
 	${CMAKE_BINARY_DIR}/gitinfo.h
@@ -633,23 +632,6 @@ set( FASTMATH_SOURCES
 	common/textures/hires/xbr/xbrz.cpp
 	common/textures/hires/xbr/xbrz_old.cpp
 	common/rendering/gl_load/gl_load.c
-	rendering/hwrenderer/hw_dynlightdata.cpp
-	rendering/hwrenderer/scene/hw_bsp.cpp
-	rendering/hwrenderer/scene/hw_fakeflat.cpp
-	rendering/hwrenderer/scene/hw_decal.cpp
-	rendering/hwrenderer/scene/hw_drawinfo.cpp
-	rendering/hwrenderer/scene/hw_drawlist.cpp
-	rendering/hwrenderer/scene/hw_clipper.cpp
-	rendering/hwrenderer/scene/hw_flats.cpp
-	rendering/hwrenderer/scene/hw_portal.cpp
-	rendering/hwrenderer/scene/hw_renderhacks.cpp
-	rendering/hwrenderer/scene/hw_sky.cpp
-	rendering/hwrenderer/scene/hw_skyportal.cpp
-	rendering/hwrenderer/scene/hw_sprites.cpp
-	rendering/hwrenderer/scene/hw_spritelight.cpp
-	rendering/hwrenderer/scene/hw_walls.cpp
-	rendering/hwrenderer/scene/hw_walls_vertex.cpp
-	rendering/hwrenderer/scene/hw_weapon.cpp
 	common/utility/matrix.cpp
 )
 
@@ -662,11 +644,11 @@ set (VULKAN_SOURCES
 	common/rendering/vulkan/renderer/vk_renderstate.cpp
 	common/rendering/vulkan/renderer/vk_renderpass.cpp
 	common/rendering/vulkan/renderer/vk_streambuffer.cpp
+	common/rendering/vulkan/renderer/vk_renderprogram.cpp
+	common/rendering/vulkan/renderer/vk_renderstate_program.cpp
 	common/rendering/vulkan/renderer/vk_postprocess.cpp
 	common/rendering/vulkan/renderer/vk_pprenderstate.cpp
 	common/rendering/vulkan/renderer/vk_descriptorset.cpp
-	common/rendering/vulkan/renderer/vk_levelmesh.cpp
-	common/rendering/vulkan/renderer/vk_levelmeshrenderer.cpp
 	common/rendering/vulkan/renderer/vk_raytrace.cpp
 	common/rendering/vulkan/shaders/vk_shader.cpp
 	common/rendering/vulkan/shaders/vk_ppshader.cpp
@@ -682,6 +664,9 @@ set (VULKAN_SOURCES
 if (HAVE_VULKAN)
 	list (APPEND FASTMATH_SOURCES ${VULKAN_SOURCES})
 endif()
+
+# Helion-style scene renderer (ADR 0004); mirrors Helion's Core/Render tree.
+file( GLOB_RECURSE HELION_SOURCES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} rendering/helion/*.cpp )
 
 set (FASTMATH_SOURCES ${FASTMATH_SOURCES})
 
@@ -824,21 +809,8 @@ set (PCH_SOURCES
 	g_statusbar/sbar_mugshot.cpp
 	g_statusbar/shared_sbar.cpp
 	rendering/2d/v_blend.cpp
-	rendering/hwrenderer/hw_entrypoint.cpp
-	rendering/hwrenderer/hw_vertexbuilder.cpp
 	rendering/hwrenderer/doom_aabbtree.cpp
-	rendering/hwrenderer/doom_levelmesh.cpp
-	rendering/hwrenderer/hw_levelmeshbake.cpp
-	rendering/hwrenderer/hw_levelmeshclusters.cpp
-	rendering/hwrenderer/hw_levelmeshfeedback.cpp
-	rendering/hwrenderer/hw_levelmeshresources.cpp
-	rendering/hwrenderer/hw_levelmeshshade.cpp
-	rendering/hwrenderer/hw_levelmeshstate.cpp
-	rendering/hwrenderer/hw_models.cpp
-	rendering/hwrenderer/hw_precache.cpp
-	rendering/hwrenderer/scene/hw_lighting.cpp
-	rendering/hwrenderer/scene/hw_drawlistadd.cpp
-	rendering/hwrenderer/scene/hw_setcolor.cpp
+	${HELION_SOURCES}
 	maploader/edata.cpp
 	maploader/specials.cpp
 	maploader/maploader.cpp
@@ -1059,7 +1031,6 @@ set (PCH_SOURCES
 	common/rendering/stb_include.cpp
 	common/rendering/hwrenderer/hw_draw2d.cpp
 	common/rendering/hwrenderer/data/hw_clock.cpp
-	common/rendering/hwrenderer/data/hw_skydome.cpp
 	common/rendering/hwrenderer/data/flatvertices.cpp
 	common/rendering/hwrenderer/data/hw_viewpointbuffer.cpp
 	common/rendering/hwrenderer/data/hw_modelvertexbuffer.cpp
@@ -1070,6 +1041,7 @@ set (PCH_SOURCES
 	common/rendering/hwrenderer/data/hw_aabbtree.cpp
 	common/rendering/hwrenderer/data/hw_shadowmap.cpp
 	common/rendering/hwrenderer/data/hw_shaderpatcher.cpp
+	common/rendering/hwrenderer/data/hw_renderprogram.cpp
 	common/rendering/hwrenderer/postprocessing/hw_postprocessshader.cpp
 	common/rendering/hwrenderer/postprocessing/hw_postprocess.cpp
 	common/rendering/hwrenderer/postprocessing/hw_postprocess_cvars.cpp
@@ -1088,6 +1060,8 @@ set (PCH_SOURCES
 	common/rendering/gl/gl_samplers.cpp
 	common/rendering/gl/gl_shader.cpp
 	common/rendering/gl/gl_shaderprogram.cpp
+	common/rendering/gl/gl_renderprogram.cpp
+	common/rendering/gl/gl_renderstate_program.cpp
 	common/scripting/core/maps.cpp
 	common/scripting/core/dictionary.cpp
 	common/scripting/core/dynarrays.cpp
@@ -1301,6 +1275,7 @@ include_directories(
 	gamedata/fonts
 	rendering
 	rendering/hwrenderer
+	rendering/helion
 	rendering/2d
 	r_data
 	sound
@@ -1490,7 +1465,7 @@ source_group("Playsim\\Map Thinkers" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE
 source_group("Rendering" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/rendering/.+")
 source_group("Rendering\\2D" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/rendering/2d/.+")
 source_group("Rendering\\Hardware Renderer" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/gl/.+")
-source_group("Rendering\\Hardware Renderer\\Scene" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/rendering/hwrenderer/scene/.+")
+source_group("Rendering\\Helion" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/rendering/helion/.+")
 source_group("Render Data" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/r_data/.+")
 source_group("Render Interface" FILES r_defs.h r_renderer.h r_sky.cpp r_sky.h r_state.h r_utility.cpp r_utility.h)
 source_group("Platforms\\POSIX Files" REGULAR_EXPRESSION "^${CMAKE_CURRENT_SOURCE_DIR}/posix/.+")

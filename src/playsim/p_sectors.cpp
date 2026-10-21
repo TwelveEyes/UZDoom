@@ -759,7 +759,6 @@ void SetColor(sector_t *sector, int color, int desat)
 	sector->Colormap.LightColor = color;
 	sector->Colormap.Desaturation = desat;
 	P_RecalculateAttachedLights(sector);
-	LevelMesh_SectorChanged(sector);
 }
 
 //=====================================================================================
@@ -772,7 +771,6 @@ void SetFade(sector_t *sector, int color)
 {
 	sector->Colormap.FadeColor = color;
 	P_RecalculateAttachedLights(sector);
-	LevelMesh_SectorChanged(sector);
 }
 
 //=====================================================================================

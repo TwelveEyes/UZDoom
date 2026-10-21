@@ -44,7 +44,7 @@ VkSampleCountFlagBits VkRenderBuffers::GetBestSampleCount()
 	const auto &limits = fb->device->PhysicalDevice.Properties.Properties.limits;
 	VkSampleCountFlags deviceSampleCounts = limits.sampledImageColorSampleCounts & limits.sampledImageDepthSampleCounts & limits.sampledImageStencilSampleCounts;
 
-	int requestedSamples = clamp((int)gl_multisample, 0, 64);
+	int requestedSamples = clamp(HW_GetMultisample(), 0, 64);
 
 	int samples = 1;
 	VkSampleCountFlags bit = VK_SAMPLE_COUNT_1_BIT;

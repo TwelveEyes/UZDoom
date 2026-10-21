@@ -43,8 +43,6 @@
 #include "p_visualthinker.h"
 #include "m_round.h"
 
-#include "hwrenderer/scene/hw_drawstructs.h"
-
 #ifdef _MSC_VER
 #pragma warning(disable: 6011) // dereference null pointer in thinker iterator
 #endif

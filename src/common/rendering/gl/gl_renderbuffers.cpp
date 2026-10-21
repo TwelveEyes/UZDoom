@@ -141,7 +141,7 @@ void FGLRenderBuffers::Setup(int width, int height, int sceneWidth, int sceneHei
 	if (width <= 0 || height <= 0)
 		I_FatalError("Requested invalid render buffer sizes: screen = %dx%d", width, height);
 
-	int samples = clamp((int)gl_multisample, 0, mMaxSamples);
+	int samples = clamp(HW_GetMultisample(), 0, mMaxSamples);
 	bool needsSceneTextures = (gl_ssao != 0);
 
 	GLint activeTex;
@@ -656,8 +656,25 @@ void FGLRenderBuffers::CreateShadowMap()
 //
 //==========================================================================
 
+//==========================================================================
+//
+// Copies a rectangle of the scene colour buffer to the origin of another framebuffer and leaves that one bound
+// (the camera texture of OpenGLFrameBuffer::RenderTextureView). A multisampled scene needs equal rectangles,
+// which holds for the camera texture bounds (left = top = 0).
+//
+//==========================================================================
+
+void FGLRenderBuffers::BlitSceneToFramebuffer(unsigned int fbo, int x, int y, int width, int height)
+{
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, mSceneFB.handle);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+	glBlitFramebuffer(x, y, x + width, y + height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+}
+
 void FGLRenderBuffers::BindSceneFB(bool sceneData)
 {
+	mLastSceneData = sceneData;
 	glBindFramebuffer(GL_FRAMEBUFFER, sceneData ? mSceneDataFB.handle : mSceneFB.handle);
 }
 

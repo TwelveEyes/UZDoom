@@ -36,7 +36,6 @@
 #include "gl_samplers.h"
 #include "hw_clock.h"
 #include "hw_vrmodes.h"
-#include "hw_skydome.h"
 #include "hw_viewpointbuffer.h"
 #include "hw_lightbuffer.h"
 #include "hw_bonebuffer.h"
@@ -48,6 +47,8 @@
 #include "v_draw.h"
 #include "printf.h"
 #include "gl_hwtexture.h"
+#include "gl_renderprogram.h"
+#include "gl_renderstate.h"
 
 #include "flatvertices.h"
 #include "hw_cvars.h"
@@ -91,7 +92,6 @@ OpenGLFrameBuffer::~OpenGLFrameBuffer()
 	PPResource::ResetAll();
 
 	if (mVertexData != nullptr) delete mVertexData;
-	if (mSkyData != nullptr) delete mSkyData;
 	if (mViewpoints != nullptr) delete mViewpoints;
 	if (mLights != nullptr) delete mLights;
 	if (mBones != nullptr) delete mBones;
@@ -159,7 +159,6 @@ void OpenGLFrameBuffer::InitializeState()
 	SetViewportRects(nullptr);
 
 	mVertexData = new FFlatVertexBuffer(GetWidth(), GetHeight(), screen->mPipelineNbr);
-	mSkyData = new FSkyVertexBuffer;
 	mViewpoints = new HWViewpointBuffer(screen->mPipelineNbr);
 	mLights = new FLightBuffer(screen->mPipelineNbr);
 	mBones = new BoneBuffer(screen->mPipelineNbr);
@@ -230,6 +229,13 @@ void OpenGLFrameBuffer::RenderTextureView(FCanvasTexture* tex, std::function<voi
 
 	tex->SetUpdated(true);
 	static_cast<OpenGLFrameBuffer*>(screen)->camtexcount++;
+}
+
+void OpenGLFrameBuffer::BlitSceneToTextureView(const IntRect& bounds)
+{
+	if (bounds.width <= 0 || bounds.height <= 0)
+		return;
+	GLRenderer->mBuffers->BlitSceneToFramebuffer(GLRenderer->mFBID, bounds.left, bounds.top, bounds.width, bounds.height);
 }
 
 //===========================================================================
@@ -350,6 +356,55 @@ IIndexBuffer *OpenGLFrameBuffer::CreateIndexBuffer()
 IDataBuffer *OpenGLFrameBuffer::CreateDataBuffer(int bindingpoint, bool ssbo, bool needsresize)
 {
 	return new GLDataBuffer(bindingpoint, ssbo);
+}
+
+IRenderProgram *OpenGLFrameBuffer::CreateRenderProgram(const RenderProgramDesc &desc)
+{
+	return new GLRenderProgram(desc);
+}
+
+IDataBuffer *OpenGLFrameBuffer::CreateTexelBuffer(int format)
+{
+	return new GLTexelBuffer(format);
+}
+
+IHardwareTexture *OpenGLFrameBuffer::CreateTextureArray(int width, int height, int layers, int numchannels, bool integer, bool mipmap, const char *name)
+{
+	if (layers > GetMaxTextureArrayLayers())
+		I_FatalError("CreateTextureArray %s: %d layers requested, the device supports %d", name, layers, GetMaxTextureArrayLayers());
+	return new GLTextureArray(width, height, layers, numchannels, integer, mipmap, name);
+}
+
+IRenderTarget *OpenGLFrameBuffer::CreateRenderTarget(const RenderTargetDesc &desc)
+{
+	return new GLRenderTarget(desc);
+}
+
+int OpenGLFrameBuffer::GetMaxTextureArrayLayers()
+{
+	GLint layers = 0;
+	glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &layers);
+	return max((int)layers, 256);
+}
+
+bool OpenGLFrameBuffer::SupportsCompute()
+{
+	return !!(gl.flags & RFL_COMPUTE_SHADER);
+}
+
+void OpenGLFrameBuffer::DispatchCompute(IRenderProgram *prog, int gx, int gy, int gz)
+{
+	if (!SupportsCompute() || !prog || !prog->IsValid()) return;
+	auto glprog = static_cast<GLRenderProgram*>(prog);
+	glUseProgram(glprog->Handle());
+	gl_RenderState.ApplyProgramResources(glprog);
+	glDispatchCompute(gx, gy, gz);
+}
+
+void OpenGLFrameBuffer::MemoryBarrierCompute()
+{
+	if (SupportsCompute())
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_UNIFORM_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
 }
 
 void OpenGLFrameBuffer::BlurScene(float amount)
@@ -559,7 +614,14 @@ void OpenGLFrameBuffer::PostProcessScene(int fixedcm, float flash, const std::fu
 
 bool OpenGLFrameBuffer::CompileNextShader()
 {
-	return GLRenderer->mShaderManager->CompileNextShader();
+	static bool tableShadersDone = false;
+	if (!tableShadersDone)
+	{
+		tableShadersDone = GLRenderer->mShaderManager->CompileNextShader();
+		if (!tableShadersDone) return false;
+		return !(CompileNextExtraShader && ExtraShaderCount && ExtraShaderCount() > 0);
+	}
+	return CompileNextExtraShader ? CompileNextExtraShader() : true;
 }
 
 //==========================================================================

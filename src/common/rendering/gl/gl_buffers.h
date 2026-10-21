@@ -59,6 +59,7 @@ protected:
 	void GPUWaitSync();
 public:
 	void Bind();
+	unsigned int BufferId() const { return mBufferId; }
 };
 
 

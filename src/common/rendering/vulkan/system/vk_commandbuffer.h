@@ -61,6 +61,7 @@ public:
 		std::vector<std::unique_ptr<VulkanDescriptorSet>> Descriptors;
 		std::vector<std::unique_ptr<VulkanShader>> Shaders;
 		std::vector<std::unique_ptr<VulkanCommandBuffer>> CommandBuffers;
+		std::vector<std::shared_ptr<void>> Generic;	// objects with a custom deleter (declared last: destroyed first)
 		size_t TotalSize = 0;
 
 		void Add(std::unique_ptr<VulkanBuffer> obj) { if (obj) { TotalSize += obj->size; Buffers.push_back(std::move(obj)); } }
@@ -73,12 +74,14 @@ public:
 		void Add(std::unique_ptr<VulkanDescriptorSet> obj) { if (obj) { Descriptors.push_back(std::move(obj)); } }
 		void Add(std::unique_ptr<VulkanCommandBuffer> obj) { if (obj) { CommandBuffers.push_back(std::move(obj)); } }
 		void Add(std::unique_ptr<VulkanShader> obj) { if (obj) { Shaders.push_back(std::move(obj)); } }
+		void AddGeneric(std::shared_ptr<void> obj) { if (obj) { Generic.push_back(std::move(obj)); } }
 	};
 
 	std::unique_ptr<DeleteList> TransferDeleteList = std::make_unique<DeleteList>();
 	std::unique_ptr<DeleteList> DrawDeleteList = std::make_unique<DeleteList>();
 
 	void DeleteFrameObjects(bool uploadOnly = false);
+	int DeleteGeneration = 0;	// incremented whenever the draw delete list is flushed (cached descriptor sets die with it)
 
 private:
 	void FlushCommands(VulkanCommandBuffer** commands, size_t count, bool finish, bool lastsubmit);

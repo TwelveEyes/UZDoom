@@ -106,6 +106,9 @@ public:
 	bool OkForLocalization(FTextureID texnum, const char *substitute, int locnum);
 
 	void FlushAll();
+	// Incremented by FlushAll: renderers that keep their own copies of the texture images (the Helion texture
+	// arrays) rebuild them when it changes (hqresize / hires settings, flushtextures).
+	unsigned FlushCount() const { return flushCount; }
 	void Listaliases();
 	FTextureID GetFrontSkyLayer(FTextureID);
 	FTextureID GetRawTexture(FTextureID tex, bool dontlookup = false);
@@ -260,6 +263,7 @@ private:
 	TArray<int> FirstTextureForFile;
 	TArray<TArray<uint8_t> > BuildTileData;
 	TArray<int> Translation;
+	unsigned flushCount = 0;
 
 	TMap<FName, TextureManipulation> tmanips;
 	TMap<FName, int> aliases;

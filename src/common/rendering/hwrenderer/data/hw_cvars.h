@@ -53,6 +53,9 @@ EXTERN_CVAR(Float, gl_mask_threshold)
 EXTERN_CVAR(Float, gl_mask_sprite_threshold)
 
 EXTERN_CVAR(Int, gl_multisample)
+// The scene is never multisampled (render program targets cannot share a multisampled depth buffer, see
+// rendering/helion/Entrypoint.cpp); gl_multisample itself is left alone.
+inline int HW_GetMultisample() { return 0; }
 
 EXTERN_CVAR(Bool, gl_bloom)
 EXTERN_CVAR(Float, gl_bloom_amount)

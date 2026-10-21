@@ -137,6 +137,7 @@ void DPillar::Construct(sector_t *sector, EPillar type, double speed, double flo
 	sector->floordata = sector->ceilingdata = this;
 	m_Interp_Floor = sector->SetInterpolation(sector_t::FloorMove, true);
 	m_Interp_Ceiling = sector->SetInterpolation(sector_t::CeilingMove, true);
+	RenderMoveStart((1 << sector_t::floor) | (1 << sector_t::ceiling));
 
 	m_Type = type;
 	m_Crush = crush;

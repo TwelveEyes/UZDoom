@@ -47,13 +47,6 @@ glcycle_t MTWait, WTTotal;
 int vertexcount, flatvertices, flatprimitives;
 
 int rendered_lines,rendered_flats,rendered_sprites,render_vertexsplit,render_texsplit,rendered_decals, rendered_portals, rendered_commandbuffers;
-int rendered_levelmesh;
-LevelMeshStateStats lmStateStats;
-glcycle_t LevelMeshStateTime;
-LevelMeshGatherStats lmGatherStats;
-glcycle_t LevelMeshGatherTime;
-LevelMeshExposureStats lmExposureStats;
-glcycle_t LevelMeshExposureTime;
 int iter_dlightf, iter_dlight, draw_dlight, draw_dlightf;
 
 void ResetProfilingData()
@@ -78,13 +71,6 @@ void ResetProfilingData()
 
 	flatvertices=flatprimitives=vertexcount=0;
 	render_texsplit=render_vertexsplit=rendered_lines=rendered_flats=rendered_sprites=rendered_decals=rendered_portals = 0;
-	rendered_levelmesh = 0;
-	lmStateStats = {};
-	LevelMeshStateTime.Reset();
-	lmGatherStats = {};
-	LevelMeshGatherTime.Reset();
-	lmExposureStats = {};
-	LevelMeshExposureTime.Reset();
 }
 
 //-----------------------------------------------------------------------------
@@ -232,9 +218,8 @@ void  checkBenchActive()
 // Per-frame performance log (r_perflog)
 //
 // Exposes the per-frame profiling timers above to a file: one line per
-// frame plus one summary line per loaded level. Used by the levelmesh
-// verification tooling (tools/abtest) to collect the classic baseline and
-// the later levelmesh comparison runs. Enable with: r_perflog <path>
+// frame plus one summary line per loaded level. Used by the verification
+// tooling (tools/abtest). Enable with: r_perflog <path>
 // Disable by setting it back to "". The file is flushed per frame so the
 // data survives the I_FatalError exit that ends a timedemo.
 //
@@ -269,15 +254,7 @@ static void PerfLogHeader(FILE *f)
 		"fl=<flat count> fp=<flat primitives> fv=<flat vertices> sp=<sprite count> "
 		"dec=<decal count> portals=<portal draw count> cbuf=<command buffer count> "
 		"wall=<wall-clock ms since the previous logged frame: the whole main-loop iteration, "
-		"incl. sim tics and input; 0 on the first frame> "
-		"[lm=<levelmesh draws this frame> lmsc=<state records compared> lmss=<sector records uploaded> lmsd=<side tier records uploaded> lmsx=<plane xform records uploaded> "
-		"lmsk=<cluster z-ranges uploaded> lmsb=<state bytes uploaded> lmsms=<state update CPU ms> lmgv=<views that gathered actors from the GPU visibility> "
-		"lmgc=<gathered clusters> lmga=<of those, adjacent-only> lmgs=<gathered subsectors> lmgsec=<gathered sectors> lmgms=<actor gather CPU ms> "
-		"lmxv=<views that applied GPU exposure> lmxl=<subsectors newly marked> lmxn=<lines newly marked> lmxms=<exposure apply CPU ms> and, once a levelmesh draw completed on the GPU (lagged by "
-		"the frames in flight): lmcm=<cull mode: 0 none, 1 frustum, 2 Hi-Z> lmdm=<draw mode: 0 compact, "
-		"1 per cluster> lmcl1/lmcl2=<clusters drawn, phase 1 / Hi-Z phase 2> lmtri1/lmtri2=<triangles> "
-		"lmfc=<clusters frustum-culled> lmocc=<clusters Hi-Z-occluded> lmc1/lmr1/lmd1=<phase 1 cull / shading resolve / draw GPU ms> "
-		"lmhz=<Hi-Z build GPU ms> lmc2/lmr2/lmd2=<phase 2 cull / shading resolve / draw GPU ms> lmmk=<mark pass GPU ms> lmgpu=<levelmesh total GPU ms> lmpv=<portal views drawn by the levelmesh> lmpgpu=<their GPU ms>]\n");
+		"incl. sim tics and input; 0 on the first frame>\n");
 	fprintf(f, "# L map=<name> sectors=<n> lines=<n> subsectors=<n> sprites=<n> polyobjs=<n> "
 		"lineportals=<n> portalgroups=<n> ffloors=<n>\n");
 }
@@ -367,25 +344,6 @@ void PerfLogUpdate()
 		ProcessAll.TimeMS(), drawcalls.TimeMS(), rendered_lines, render_vertexsplit,
 		vertexcount, rendered_flats, flatprimitives, flatvertices, rendered_sprites,
 		rendered_decals, rendered_portals, rendered_commandbuffers, wallMS);
-	LevelMeshPerfStats lm;
-	bool lmStats = screen->GetLevelMeshStats(lm);
-	if (rendered_levelmesh > 0 || lmStats)
-	{
-		fprintf(PerfLogFile, " lm=%d lmsc=%u lmss=%u lmsd=%u lmsx=%u lmsk=%u lmsb=%zu lmsms=%.3f", rendered_levelmesh, lmStateStats.candidates,
-			lmStateStats.sectors, lmStateStats.sides, lmStateStats.xforms, lmStateStats.clusters, lmStateStats.bytes, LevelMeshStateTime.TimeMS());
-		fprintf(PerfLogFile, " lmgv=%u lmgc=%u lmga=%u lmgs=%u lmgsec=%u lmgms=%.3f", lmGatherStats.views, lmGatherStats.clusters, lmGatherStats.adjacent,
-			lmGatherStats.subsectors, lmGatherStats.sectors, LevelMeshGatherTime.TimeMS());
-		fprintf(PerfLogFile, " lmxv=%u lmxl=%u lmxn=%u lmxms=%.3f", lmExposureStats.views, lmExposureStats.leaves, lmExposureStats.lines,
-			LevelMeshExposureTime.TimeMS());
-		if (lmStats)
-		{
-			fprintf(PerfLogFile, " lmcm=%d lmdm=%d lmcl1=%u lmcl2=%u lmtri1=%u lmtri2=%u lmfc=%u lmocc=%u "
-				"lmc1=%.3f lmr1=%.3f lmd1=%.3f lmhz=%.3f lmc2=%.3f lmr2=%.3f lmd2=%.3f lmmk=%.3f lmgpu=%.3f lmpv=%u lmpgpu=%.3f",
-				lm.cullMode, lm.drawMode, lm.clusters[0], lm.clusters[1], lm.triangles[0], lm.triangles[1],
-				lm.frustumCulled, lm.occluded, lm.cullMs[0], lm.resolveMs[0], lm.drawMs[0], lm.hizMs, lm.cullMs[1], lm.resolveMs[1],
-				lm.drawMs[1], lm.markMs, lm.totalMs, lm.portalViews, lm.portalMs);
-		}
-	}
 	fprintf(PerfLogFile, "\n");
 	fflush(PerfLogFile);
 }

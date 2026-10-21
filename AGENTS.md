@@ -63,7 +63,7 @@ Two-layer layout: the classic ZDoom top level in `src/` plus a newer platform-ne
   - `common/audio`, `common/console` (cvars, command console), `common/menu`, `common/statusbar`, `common/textures`, `common/fonts`, `common/models`, `common/2d`
 - `src/gamedata/` — WAD-level game data: actors (`a_*.cpp`), MAPINFO/UMAPINFO parsing, Dehacked, fonts, keys, xlat parser, gametypes.
 - `src/maploader/` — map loading: UDMF, USDF, node building (`glnodes`), specials, legacy-format compatibility. `specs/` holds the UDMF/USDF specs the loader implements.
-- `src/rendering/` — `swrenderer` (software), `hwrenderer` (OpenGL/Vulkan scene graph), `2d`.
+- `src/rendering/` — `helion` (the hardware scene renderer: a C++ port of Helion's `Core/Render`, drawing through the GL/Vulkan backend layer in `common/rendering`; see `docs/adr/0004-helion-style-render-pipeline.md`), `hwrenderer/doom_aabbtree.*` (line AABB tree for shadowmaps), `2d`. There is no software renderer.
 - `src/widgets/` — modern ZWidget-based UI (launcher window, settings, error window).
 - `src/intermission/`, `src/g_statusbar/` — modernized intermission and HUD/status bar.
 - `src/scripting/` — game-side scripting glue; `src/posix/` and `src/win32/` are legacy platform code (much moved to `common/platform`); `src/unused` is dead code, not built.

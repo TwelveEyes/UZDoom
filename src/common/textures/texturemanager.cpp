@@ -107,6 +107,7 @@ void FTextureManager::DeleteAll()
 
 void FTextureManager::FlushAll()
 {
+	flushCount++;
 	for (int i = TexMan.NumTextures() - 1; i >= 0; i--)
 	{
 		for (int j = 0; j < 2; j++)

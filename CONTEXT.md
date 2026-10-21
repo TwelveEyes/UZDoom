@@ -148,3 +148,11 @@ _Avoid_: stable, done
 The human-driven in-game checklist run with the levelmesh on (ticket 21): campaigns, mod tours, a
 save/load and automap walk, deathmatch, and a stability watch of 1 h or more.
 _Avoid_: stress test, playtesting (too generic)
+
+## Helion render pipeline
+
+The hardware scene renderer is a C++ port of Helion's renderer in `src/rendering/helion/`
+(namespaces `Helion::Render::...`, files mirror Helion `Core/Render`), drawing through the unchanged
+backend layer on GL and Vulkan. The classic `HWDrawInfo` pipeline and the levelmesh were deleted at
+the cutover (ticket 08); the levelmesh terms above are historical. See
+`docs/adr/0004-helion-style-render-pipeline.md` and `.scratch/helion-render/map.md`.

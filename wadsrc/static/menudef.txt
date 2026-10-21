@@ -1241,6 +1241,19 @@ OptionValue "Particles"
 	2, "$OPTVAL_SMOOTH_2"
 }
 
+OptionValue "ColorModes"
+{
+	0, "$OPTVAL_TRUECOLOR"
+	1, "$OPTVAL_PALETTE"
+}
+
+OptionValue "RenderModes"
+{
+	0, "$OPTVAL_STATICBLOCKMAP"
+	1, "$OPTVAL_BSPWALK"
+	2, "$OPTVAL_ADAPTIVE"
+}
+
 OptionValue "HqResizeModes"
 {
 	0, "$OPTVAL_OFF"
@@ -1347,7 +1360,6 @@ OptionMenu "GLTextureGLOptions" protected
 	Option "$GLTEXMNU_RESIZEFNT",    gl_texture_hqresize_fonts,     OnOff
 	Option "$GLTEXMNU_RESIZESKN",    gl_texture_hqresize_skins,     OnOff
 	Option "$GLTEXMNU_PRECACHETEX",  gl_precache,                   YesNo
-	Option "$GLTEXMNU_SORTDRAWLIST", gl_sort_textures,              YesNo
 	Class "GLTextureGLOptions"
 }
 
@@ -1384,7 +1396,6 @@ OptionMenu "OpenGLOptions" protected
 	Option "$GLPREFMNU_FOGMODE",                gl_fogmode,                FogMode
 	Option "$GLPREFMNU_FOGFORCEFULLBRIGHT",     gl_brightfog,              YesNo
 	Slider "$GLPREFMNU_WPNLIGHTSTR",            gl_weaponlight,            0,32, 2
-//	Option "$GLPREFMNU_WPNPURELIGHT",           gl_weapon_purelightlevel,  OnOff
 	Option "$GLPREFMNU_ENVIRONMENTMAPMIRROR",   gl_mirror_envmap,          OnOff
 	Option "$GLPREFMNU_ENV",                    gl_enhanced_nightvision,   OnOff
 	Option "$GLPREFMNU_ENVSTEALTH",             gl_enhanced_nv_stealth,    EnhancedStealth
@@ -1397,6 +1408,19 @@ OptionMenu "OpenGLOptions" protected
 	Option "$GLPREFMNU_PARTICLESTYLE",          gl_particles_style,        Particles
 	Option "$GLPREFMNU_RENDERQUALITY",          gl_seamless,               Precision
 //	Option "$GLPREFMNU_CORONAS",                gl_coronas,                OnOff
+	Option "$GLPREFMNU_COLORMODE",              vid_colormode,             ColorModes
+	Option "$GLPREFMNU_RENDERMODE",             gl_rendermode,             RenderModes
+	Slider "$GLPREFMNU_RENDERMODE_TIMETHRESHOLD", gl_rendermode_timethreshold, 100, 10000, 100, 0, gl_rendermode, 2, GrayInv
+	Slider "$GLPREFMNU_RENDERMODE_HYSTERESIS",  gl_rendermode_hysteresis,  0.01, 0.5, 0.01, 2, gl_rendermode, 2, GrayInv
+	Slider "$GLPREFMNU_RENDERMODE_SEGTHRESHOLD", gl_rendermode_segthreshold, 1000, 30000, 500, 0, gl_rendermode, 2, GrayInv
+	Slider "$GLPREFMNU_RENDERMODE_TIMEWINDOW",  gl_rendermode_timewindow,  4, 32, 1, 0, gl_rendermode, 2, GrayInv
+	Option "$GLPREFMNU_VANILLARENDER",          gl_vanillarender,          OnOff
+	Slider "$GLPREFMNU_VANILLADOWNSCALE",       gl_vanillarender_downscale, 1.0, 8.0, 0.5, 1, gl_vanillarender
+	Option "$GLPREFMNU_PIXELGAPCORRECTION",     gl_pixelgapcorrection,     OnOff
+	Slider "$GLPREFMNU_FUZZAMOUNT",             gl_fuzzamount,             0.25, 4.0, 0.25, 2
+	Option "$GLPREFMNU_ALTINVULNOVERLAY",       gl_altinvulnoverlay,       OnOff
+	ColorPicker "$GLPREFMNU_ALTINVULNCOLOR",    gl_altinvulncolor, "gl_altinvulnoverlay"
+	Option "$GLPREFMNU_EMULATEINVULNCOLORMAP",  gl_emulateinvulncolormap,  OnOff
 	StaticText " "
 	Slider "$GLPREFMNU_MENUBLUR",               gl_menu_blur,              0, 5.0, 0.5, 2, vid_shadersupport, 0, Hide
 	StaticText " ",                                                        -1, vid_shadersupport

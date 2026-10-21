@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Acceptance policy.
 **Type:** research
-**Status:** needs-triage
+**Status:** wontfix
 **Blocked by:** —
 
 ## Question
@@ -29,3 +29,4 @@ separate visibility from drawing.
   were polyobject origin subsectors baked as map-wide flats; fixed in ticket 25. With that
   fix, the myhouse MAP01 A/B fails 5 of 87 (run `20261016T185931Z-ab`). 930 / 960 (sky, over
   1M px) are still open; 1350 / 1440 / 1470 are small (4–642 px).
+- 2026-10-20 (wontfix): superseded by .scratch/helion-render (ADR 0004).

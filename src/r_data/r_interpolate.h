@@ -61,6 +61,9 @@ public:
 	virtual void Interpolate(double smoothratio) = 0;
 	// The sector whose plane this interpolation moves (sector plane interpolations only).
 	virtual sector_t *MovedSector() const { return nullptr; }
+	// Called by DoInterpolations instead of Interpolate for sector planes, which the renderer interpolates on the GPU:
+	// only removes a finished interpolation, like Interpolate does.
+	virtual void InterpolationSkipped() {}
 
 	virtual void Serialize(FSerializer &arc);
 };
@@ -83,6 +86,8 @@ public:
 	void UpdateInterpolations();
 	void AddInterpolation(DInterpolation *);
 	void RemoveInterpolation(DInterpolation *);
+	// Sector plane interpolations are left alone (the renderer interpolates them on the GPU from
+	// R_GetPlaneInterpolationOldTexZ); everything else (scrollers, polyobjects) is interpolated.
 	void DoInterpolations(double smoothratio);
 	void RestoreInterpolations();
 	void ClearInterpolations();
@@ -95,6 +100,10 @@ public:
 		}
 	}
 };
+
+// Previous-tic texture Z (sector_t::GetPlaneTexZ) of a sector plane that has a plane interpolation
+// (pos = sector_t::floor / sector_t::ceiling). Returns false when the plane is not interpolated.
+bool R_GetPlaneInterpolationOldTexZ(sector_t *sector, int pos, double &oldtexz);
 
 
 #endif

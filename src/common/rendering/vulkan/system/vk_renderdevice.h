@@ -31,6 +31,7 @@ struct FRenderViewpoint;
 class VkSamplerManager;
 class VkBufferManager;
 class VkTextureManager;
+class VkTextureImage;
 class VkShaderManager;
 class VkCommandBufferManager;
 class VkDescriptorSetManager;
@@ -43,8 +44,6 @@ class VkHardwareDataBuffer;
 class VkHardwareTexture;
 class VkRenderBuffers;
 class VkPostprocess;
-class VkLevelMesh;
-class VkLevelMeshRenderer;
 
 class VulkanRenderDevice : public SystemBaseFrameBuffer
 {
@@ -63,7 +62,6 @@ public:
 	VkDescriptorSetManager* GetDescriptorSetManager() { return mDescriptorSetManager.get(); }
 	VkRenderPassManager *GetRenderPassManager() { return mRenderPassManager.get(); }
 	VkRaytrace* GetRaytrace() { return mRaytrace.get(); }
-	VkLevelMesh* GetLevelMesh() { return mLevelMesh.get(); }
 	VkRenderState *GetRenderState() { return mRenderState.get(); }
 	VkPostprocess *GetPostprocess() { return mPostprocess.get(); }
 	VkRenderBuffers *GetBuffers() { return mActiveRenderBuffers; }
@@ -92,16 +90,6 @@ public:
 	void AmbientOccludeScene(float m5) override;
 	void SetSceneRenderTarget(bool useSSAO) override;
 	void SetLevelMesh(hwrenderer::LevelMesh* mesh) override;
-	bool SupportsLevelMesh(bool report) override;
-	void SetLevelMeshData(const LevelMeshUploadData *data) override;
-	size_t UpdateLevelMeshState(const LevelMeshStateUpdate &update) override;
-	bool LevelMeshResident(uint64_t id) override;
-	bool LevelMeshTextureReady(int id) override;
-	void PrintLevelMeshStats() override;
-	bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) override;
-	bool DrawLevelMeshSky(uint32_t config, FRenderState &state) override;
-	bool GetLevelMeshStats(LevelMeshPerfStats &stats) override;
-	bool LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, LevelMeshReadback &out) override;
 	void UpdateShadowMap() override;
 	void SetSaveBuffers(bool yes) override;
 	void ImageTransitionScene(bool unknown) override;
@@ -112,6 +100,15 @@ public:
 	IVertexBuffer *CreateVertexBuffer() override;
 	IIndexBuffer *CreateIndexBuffer() override;
 	IDataBuffer *CreateDataBuffer(int bindingpoint, bool ssbo, bool needsresize) override;
+
+	IRenderProgram *CreateRenderProgram(const RenderProgramDesc &desc) override;
+	IDataBuffer *CreateTexelBuffer(int format) override;
+	IHardwareTexture *CreateTextureArray(int width, int height, int layers, int numchannels, bool integer, bool mipmap, const char *name) override;
+	IRenderTarget *CreateRenderTarget(const RenderTargetDesc &desc) override;
+	int GetMaxTextureArrayLayers() override;
+	bool SupportsCompute() override { return true; }
+	void DispatchCompute(IRenderProgram *prog, int gx, int gy, int gz) override;
+	void MemoryBarrierCompute() override;
 
 	FTexture *WipeStartScreen() override;
 	FTexture *WipeEndScreen() override;
@@ -125,10 +122,11 @@ public:
 
 	void WaitForCommands(bool finish) override;
 
-	bool RaytracingEnabled();
+	bool RaytracingEnabled() override;
 
 private:
 	void RenderTextureView(FCanvasTexture* tex, std::function<void(IntRect &)> renderFunc) override;
+	void BlitSceneToTextureView(const IntRect& bounds) override;
 	void PrintStartupLog();
 	void CopyScreenToBuffer(int w, int h, uint8_t *data) override;
 
@@ -144,9 +142,9 @@ private:
 	std::unique_ptr<VkDescriptorSetManager> mDescriptorSetManager;
 	std::unique_ptr<VkRenderPassManager> mRenderPassManager;
 	std::unique_ptr<VkRaytrace> mRaytrace;
-	std::unique_ptr<VkLevelMesh> mLevelMesh;
-	std::unique_ptr<VkLevelMeshRenderer> mLevelMeshRenderer;
 	std::unique_ptr<VkRenderState> mRenderState;
+	VkTextureImage* mTextureViewImage = nullptr;	// the image of the RenderTextureView in progress
+	bool mTableShadersDone = false;
 
 	VkRenderBuffers *mActiveRenderBuffers = nullptr;
 

@@ -50,10 +50,10 @@
 #include "xlat/xlat.h"
 #include "vm.h"
 #include "texturemanager.h"
-#include "hw_vertexbuilder.h"
-#include "hw_levelmeshbake.h"
 #include "version.h"
 #include "fs_decompress.h"
+#include "rendering/helion/World/Blockmap/RenderBlockMap.h"
+#include "rendering/helion/World/WorldStatic.h"
 
 enum
 {
@@ -3190,6 +3190,10 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 	// Spawn 3d floors - must be done before spawning things so it can't be done in P_SpawnSpecials
 	Spawn3DFloors();
 
+	// Helion render blockmap: needs lines/sections (built) and must exist before things are spawned so they link into it.
+	if (Level->renderBlockmap) delete Level->renderBlockmap;
+	Level->renderBlockmap = new Helion::World::Blockmap::RenderBlockMap(Level);
+
 	SpawnThings(position);
 
 	// Load and link lightmaps - must be done after P_Spawn3DFloors (and SpawnThings? Potentially for baking static model actors?)
@@ -3230,8 +3234,8 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 	}
 
 	InitRenderInfo();				// create hardware independent renderer resources for the level. This must be done BEFORE the PolyObj Spawn!!!
-	Level->ClearDynamic3DFloorData();	// CreateVBO must be run on the plain 3D floor data.
-	CreateVBO(screen->mVertexData, Level->sectors);
+	Level->ClearDynamic3DFloorData();	// start from the plain 3D floor data; P_Recalculate3DFloors below rebuilds the rest.
+	Helion::World::WorldStatic::CaptureFlatVertexPositions(Level);	// before the polyobjects move their lines
 
 	screen->InitLightmap(Level->LMTextureSize, Level->LMTextureCount, Level->LMTextureData);
 
@@ -3249,9 +3253,6 @@ void MapLoader::LoadLevel(MapData *map, const char *lumpname, int position)
 		Level->FinalizePortals();	// finalize line portals after polyobjects have been initialized. This info is needed for properly flagging them.
 
 	Level->aabbTree = new DoomLevelAABBTree(Level);
-	Level->levelMesh = new DoomLevelMesh(*Level);
-	Level->levelMeshBake = LevelMeshBake_Create(Level);
-	LevelMesh_UpdateResources(Level);
 
 	// [DVR] Populate subsector->bbox for alternative space culling in orthographic projection with no fog of war
 	subsector_t* sub = &Level->subsectors[0];

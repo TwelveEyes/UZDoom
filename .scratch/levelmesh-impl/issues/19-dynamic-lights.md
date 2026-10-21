@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Acceptance policy DC4.
 **Type:** task
-**Status:** ready-for-agent
+**Status:** wontfix
 **Blocked by:** 10
 
 ## What to build
@@ -43,4 +43,4 @@ The classic path builds a per-surface light list (`HWWall::SetupLights`, flats l
   The program index selects `defaultshaders[]` (`VkShaderManager::GetLevelMesh`); bucket =
   program * 2 + masked (`LM_Bucket`), so new programs extend `ELevelMeshProgram` and
   `LMB_DRAWN`.
-
+- 2026-10-20 (wontfix): superseded by .scratch/helion-render (ADR 0004).

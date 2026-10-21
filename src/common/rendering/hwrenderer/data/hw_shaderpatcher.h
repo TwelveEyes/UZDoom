@@ -34,6 +34,8 @@
 #include <boost/pfr.hpp>
 #include <qlibs/reflect>
 
+struct FVector4PalEntry;	// hw_renderstate.h; std140 vec4
+
 FString RemoveLegacyUserUniforms(FString code);
 FString RemoveSamplerBindings(FString code, TArray<std::pair<FString, int>> &samplerstobind);	// For GL 3.3 compatibility which cannot declare sampler bindings in the sampler source.
 FString RemoveLayoutLocationDecl(FString code, const char *inoutkeyword);
@@ -107,6 +109,10 @@ namespace ShaderInputsOutputs
 		{
 			return "dvec4";
 		}
+		else if constexpr(std::is_same_v<T, FVector4PalEntry>)
+		{
+			return "vec4";
+		}
 		else if constexpr(std::is_same_v<T, FVector4>)
 		{
 			return "vec4";
@@ -155,6 +161,10 @@ namespace ShaderInputsOutputs
 	  else if constexpr(std::is_same_v<T, DVector4>)
 	  {
 		  return 32;
+	  }
+	  else if constexpr(std::is_same_v<T, FVector4PalEntry>)
+	  {
+		  return 16;
 	  }
 	  else if constexpr(std::is_same_v<T, FVector4>)
 	  {

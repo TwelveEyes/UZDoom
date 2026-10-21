@@ -5369,10 +5369,6 @@ msgid "GLMNU_DYNLIGHT"
 msgstr "Dynamic Light Options"
 
 #, fuzzy
-msgid "GLTEXMNU_SORTDRAWLIST"
-msgstr "Sort draw lists by texture"
-
-#, fuzzy
 msgid "GLLIGHTMNU_TITLE"
 msgstr "Dynamic Lights"
 
@@ -5439,6 +5435,57 @@ msgstr "Sprites face camera"
 #, fuzzy
 msgid "GLPREFMNU_PARTICLESTYLE"
 msgstr "Particle style"
+
+msgid "GLPREFMNU_COLORMODE"
+msgstr "Color mode"
+
+msgid "OPTVAL_TRUECOLOR"
+msgstr "Truecolor"
+
+msgid "GLPREFMNU_RENDERMODE"
+msgstr "Visibility mode"
+
+msgid "OPTVAL_STATICBLOCKMAP"
+msgstr "Static (blockmap)"
+
+msgid "OPTVAL_BSPWALK"
+msgstr "BSP"
+
+msgid "OPTVAL_ADAPTIVE"
+msgstr "Adaptive"
+
+msgid "GLPREFMNU_RENDERMODE_TIMETHRESHOLD"
+msgstr "Adaptive BSP time threshold (us)"
+
+msgid "GLPREFMNU_RENDERMODE_HYSTERESIS"
+msgstr "Adaptive hysteresis"
+
+msgid "GLPREFMNU_RENDERMODE_SEGTHRESHOLD"
+msgstr "Adaptive seg threshold"
+
+msgid "GLPREFMNU_RENDERMODE_TIMEWINDOW"
+msgstr "Adaptive time window"
+
+msgid "GLPREFMNU_VANILLARENDER"
+msgstr "Emulate vanilla rendering"
+
+msgid "GLPREFMNU_VANILLADOWNSCALE"
+msgstr "Downscale vanilla buffer"
+
+msgid "GLPREFMNU_PIXELGAPCORRECTION"
+msgstr "Pixel gap correction"
+
+msgid "GLPREFMNU_FUZZAMOUNT"
+msgstr "Fuzz amount"
+
+msgid "GLPREFMNU_ALTINVULNOVERLAY"
+msgstr "Alternate invulnerability overlay"
+
+msgid "GLPREFMNU_ALTINVULNCOLOR"
+msgstr "Invulnerability overlay color"
+
+msgid "GLPREFMNU_EMULATEINVULNCOLORMAP"
+msgstr "Emulate invulnerability colormap"
 
 #, fuzzy
 msgid "GLPREFMNU_VRMODE"
@@ -6320,10 +6367,6 @@ msgstr "Yellow Key"
 #, fuzzy
 msgid "TAG_CREDKEY"
 msgstr "Red Key"
-
-#, fuzzy
-msgid "GLPREFMNU_WPNPURELIGHT"
-msgstr "Use sector brightness on weapon sprites"
 
 #, fuzzy
 msgid "NET_CONTINUE_MKB"

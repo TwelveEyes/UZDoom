@@ -43,6 +43,8 @@ CVAR(Float, underwater_fade_scalar, 1.0f, CVAR_ARCHIVE) // [Nash] user-settable 
 CVAR( Float, blood_fade_scalar, 1.0f, CVAR_ARCHIVE )	// [SP] Pulled from Skulltag - changed default from 0.5 to 1.0
 CVAR( Float, pickup_fade_scalar, 1.0f, CVAR_ARCHIVE )	// [SP] Uses same logic as blood_fade_scalar except for pickups
 CVAR(Float, powerup_fade_scalar, 1.0f, CVAR_ARCHIVE) // [Sal] Adjust screen fades for all inventory items
+EXTERN_CVAR(Bool, gl_altinvulnoverlay)
+EXTERN_CVAR(Color, gl_altinvulncolor)
 
 // [RH] Amount of red flash for up to 114 damage points. Calculated by hand
 //		using a logarithmic scale and my trusty HP48G.
@@ -221,6 +223,7 @@ FVector4 V_CalcBlend(sector_t* viewsector, PalEntry* modulateColor)
 	float extra_blue;
 	player_t* player = nullptr;
 	bool fullbright = false;
+	bool altInvulnOverlay = false;
 
 	if (modulateColor) *modulateColor = 0xffffffff;
 
@@ -228,7 +231,13 @@ FVector4 V_CalcBlend(sector_t* viewsector, PalEntry* modulateColor)
 	{
 		player = players[consoleplayer].camera->player;
 		if (player)
-			fullbright = (player->fixedcolormap != NOFIXEDCOLORMAP || player->extralight == INT_MIN || player->fixedlightlevel != -1 || player->bForceFullbright);
+		{
+			// Helion AlternativeInvulnerabilityOverlay (gl_altinvulnoverlay): the invulnerability colormap is replaced by a
+			// tint, the view is not fullbright. The palette colour mode draws it too, like every other player blend here
+			// (Helion WorldLayer.DrawHudEffects with its default PaletteTrueColorOverlay).
+			altInvulnOverlay = gl_altinvulnoverlay && player->fixedcolormap == INVERSECOLORMAP;
+			fullbright = ((player->fixedcolormap != NOFIXEDCOLORMAP && !altInvulnOverlay) || player->extralight == INT_MIN || player->fixedlightlevel != -1 || player->bForceFullbright);
+		}
 	}
 
 	// don't draw sector based blends when any fullbright screen effect is active.
@@ -331,6 +340,12 @@ FVector4 V_CalcBlend(sector_t* viewsector, PalEntry* modulateColor)
 
 	if (player)
 	{
+		if (altInvulnOverlay)
+		{
+			// Helion WorldLayer.DrawHudEffects: hud.Clear(box, AlternativeInvulnerabilityColor, 0.15f).
+			const PalEntry color(gl_altinvulncolor);
+			V_AddBlend(color.r / 255.f, color.g / 255.f, color.b / 255.f, 0.15f, blend);
+		}
 		V_AddPlayerBlend(player, blend, 0.5, 175);
 	}
 

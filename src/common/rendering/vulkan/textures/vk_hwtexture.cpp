@@ -34,7 +34,6 @@
 #include "vulkan/textures/vk_texture.h"
 #include "vulkan/renderer/vk_descriptorset.h"
 #include "vulkan/renderer/vk_postprocess.h"
-#include "vulkan/renderer/vk_levelmesh.h"
 #include "vulkan/shaders/vk_shader.h"
 #include "vk_hwtexture.h"
 
@@ -121,7 +120,7 @@ void VkHardwareTexture::CreateImage(FTexture *tex, int translation, int flags)
 		mImage.Image = ImageBuilder()
 			.Format(format)
 			.Size(w, h)
-			.Usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+			.Usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)	// transfer dst: DFrameBuffer::BlitSceneToTextureView
 			.DebugName("VkHardwareTexture.mImage")
 			.Create(fb->device.get());
 
@@ -318,8 +317,6 @@ void VkMaterial::DeleteDescriptors()
 {
 	if (fb)
 	{
-		if (auto levelmesh = fb->GetLevelMesh())
-			levelmesh->MaterialInvalidated(this);
 		auto deleteList = fb->GetCommands()->DrawDeleteList.get();
 		for (auto& it : mDescriptorSets)
 		{

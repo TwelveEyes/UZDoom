@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Acceptance policy.
 **Type:** research
-**Status:** needs-triage
+**Status:** wontfix
 **Blocked by:** —
 
 ## Question
@@ -32,3 +32,6 @@ sheet RUN COMBO TICK` and the game-state set-diff (`--gamestate`).
   1410–1500) and Pirates MAP43 tick 120 (dark blocks above the cliffs) show geometry the classic
   leaves out where its sky shows. No sky wall covers them, so it is this ticket's pattern, not a
   sky rule.
+
+## Comments
+- 2026-10-20 (wontfix): superseded by .scratch/helion-render (ADR 0004).

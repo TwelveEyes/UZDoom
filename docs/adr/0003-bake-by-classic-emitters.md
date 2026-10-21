@@ -1,6 +1,6 @@
 # ADR 0003: Bake geometry by running the classic emitters
 
-Status: accepted (2026-10-11)
+Status: superseded by 0004 (2026-10-20)
 
 ## Context
 

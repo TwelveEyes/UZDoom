@@ -56,6 +56,8 @@ public:
 	void Restore();
 	void Interpolate(double smoothratio);
 	sector_t *MovedSector() const override { return sector; }
+	void InterpolationSkipped() override;
+	double OldTexZ() const { return oldtexz; }
 
 	virtual void Serialize(FSerializer &arc);
 	size_t PropagateMark();
@@ -244,11 +246,13 @@ void FInterpolator::DoInterpolations(double smoothratio)
 
 	didInterp = true;
 
+	// Sector planes are interpolated on the GPU by the renderer (plan D12): they are left alone here.
 	DInterpolation *probe = Head;
 	while (probe != nullptr)
 	{
 		DInterpolation *next = probe->Next;
-		probe->Interpolate(smoothratio);
+		if (probe->MovedSector() != nullptr) probe->InterpolationSkipped();
+		else probe->Interpolate(smoothratio);
 		probe = next;
 	}
 }
@@ -266,6 +270,7 @@ void FInterpolator::RestoreInterpolations()
 		didInterp = false;
 		for (DInterpolation *probe = Head; probe != nullptr; probe = probe->Next)
 		{
+			if (probe->MovedSector() != nullptr) continue;
 			probe->Restore();
 		}
 	}
@@ -499,6 +504,36 @@ void DSectorPlaneInterpolation::Interpolate(double smoothratio)
 		P_RecalculateAttached3DFloors(sector);
 		sector->CheckPortalPlane(pos);
 	}
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+void DSectorPlaneInterpolation::InterpolationSkipped()
+{
+	double height = ceiling ? sector->ceilingplane.fD() : sector->floorplane.fD();
+	if (refcount == 0 && oldheight == height)
+	{
+		UnlinkFromMap();
+		Destroy();
+	}
+}
+
+//==========================================================================
+//
+//
+//
+//==========================================================================
+
+bool R_GetPlaneInterpolationOldTexZ(sector_t *sector, int pos, double &oldtexz)
+{
+	DInterpolation *interp = sector->interpolations[pos == sector_t::ceiling ? sector_t::CeilingMove : sector_t::FloorMove];
+	if (interp == nullptr) return false;
+	oldtexz = static_cast<DSectorPlaneInterpolation*>(interp)->OldTexZ();
+	return true;
 }
 
 //==========================================================================

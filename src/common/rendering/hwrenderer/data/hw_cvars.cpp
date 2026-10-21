@@ -42,13 +42,6 @@ CVAR(Bool,gl_mirrors,true,0)	// This is for debugging only!
 CVAR(Bool,gl_mirror_envmap, true, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
 CVAR(Bool, gl_seamless, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
-// Levelmesh rendering path selector (.scratch/levelmesh-impl): false = the
-// classic BSP traversal path, true = the GPU-driven levelmesh path (Vulkan
-// only; ignored on GL). Kept for the A/B tooling, whose per-run config sets
-// it. Currently a no-op: the levelmesh path is wired in ticket 08, so
-// selecting it still renders through the classic path.
-CVAR(Bool, gl_uselevelmesh, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-
 CUSTOM_CVAR(Int, r_portal_recursions, 4, CVAR_ARCHIVE)
 {
 	if (self > 16) self = 16;

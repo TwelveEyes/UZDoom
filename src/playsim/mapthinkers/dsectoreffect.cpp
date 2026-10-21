@@ -27,6 +27,8 @@
 #include "serialize_obj.h"
 #include "doomstat.h"
 #include "vm.h"
+#include "rendering/helion/World/SectorUpdates.h"
+#include "rendering/helion/World/Static/StaticDataApplier.h"
 
 IMPLEMENT_CLASS(DSectorEffect, false, false)
 
@@ -83,6 +85,7 @@ void DMover::Construct (sector_t *sector)
 
 void DMover::OnDestroy()
 {
+	RenderMoveComplete();
 	StopInterpolation();
 	Super::OnDestroy();
 }
@@ -91,6 +94,52 @@ void DMover::Serialize(FSerializer &arc)
 {
 	Super::Serialize (arc);
 	arc("interpolation", interpolation);
+
+	// The sector's render flags are not saved. Restore them without raising events (no renderer
+	// state exists yet); both planes are flagged since the saved thinker does not say which it moves.
+	if (arc.isReading() && m_Sector != nullptr)
+		RenderMoveStart((1 << sector_t::floor) | (1 << sector_t::ceiling), false);
+}
+
+// Flags the planes as moving. The event is raised first so a subscribed renderer sees the plane
+// switch from static to dynamic; the flag is then set if no subscriber did it.
+void DMover::RenderMoveStart(int planes, bool raiseEvent)
+{
+	using namespace Helion::World;
+	for (int pos = sector_t::floor; pos <= sector_t::ceiling; pos++)
+	{
+		if (!(planes & (1 << pos)) || (m_RenderMovePlanes & (1 << pos)))
+			continue;
+
+		m_RenderMovePlanes |= (1 << pos);
+		if (raiseEvent && !(m_Sector->renderDynamic[pos] & SD_Movement))
+			SectorUpdates::SectorMoveStart(m_Sector, pos);
+		if (!(m_Sector->renderDynamic[pos] & SD_Movement))
+			Static::StaticDataApplier::SetSectorDynamic(m_Sector, 1 << pos, SD_Movement);
+	}
+}
+
+void DMover::RenderMoveComplete()
+{
+	using namespace Helion::World;
+	if (m_Sector == nullptr)
+		return;
+
+	for (int pos = sector_t::floor; pos <= sector_t::ceiling; pos++)
+	{
+		if (!(m_RenderMovePlanes & (1 << pos)))
+			continue;
+
+		m_RenderMovePlanes &= ~(1 << pos);
+		// Another mover may still own this plane.
+		DSectorEffect* other = pos == sector_t::floor ? m_Sector->floordata.Get() : m_Sector->ceilingdata.Get();
+		if (other != nullptr && other != this && dyn_cast<DMover>(other) != nullptr)
+			continue;
+
+		SectorUpdates::SectorMoveComplete(m_Sector, pos);
+		if (m_Sector->renderDynamic[pos] & SD_Movement)
+			Static::StaticDataApplier::ClearSectorDynamicMovement(m_Sector, pos);
+	}
 }
 
 void DMover::StopInterpolation(bool force)
@@ -110,6 +159,7 @@ void DMovingFloor::Construct(sector_t *sector)
 	Super::Construct(sector);
 	sector->floordata = this;
 	interpolation = sector->SetInterpolation(sector_t::FloorMove, true);
+	RenderMoveStart(1 << sector_t::floor);
 }
 
 IMPLEMENT_CLASS(DMovingCeiling, true, false)
@@ -120,6 +170,7 @@ void DMovingCeiling::Construct(sector_t *sector, bool interpolate)
 	Super::Construct(sector);
 	sector->ceilingdata = this;
 	if (interpolate) interpolation = sector->SetInterpolation(sector_t::CeilingMove, true);
+	RenderMoveStart(1 << sector_t::ceiling);
 }
 
 bool sector_t::MoveAttached(int crush, double move, int floorOrCeiling, bool resetfailed, bool instant, bool* crushed)

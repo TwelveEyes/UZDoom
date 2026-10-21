@@ -63,6 +63,7 @@ public:
 
 	VkTextureImage *GetImage(FTexture *tex, int translation, int flags);
 	VkTextureImage *GetDepthStencil(FTexture *tex);
+	VkTextureImage *GetCreatedImage() { return mImage.Image ? &mImage : nullptr; }	// no lazy creation: used by render programs
 
 	VulkanRenderDevice* fb = nullptr;
 	std::list<VkHardwareTexture*>::iterator it;

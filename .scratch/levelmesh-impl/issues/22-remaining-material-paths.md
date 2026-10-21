@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Data model (texture table), Shaders.
 **Type:** task
-**Status:** ready-for-agent
+**Status:** wontfix
 **Blocked by:** 11
 
 ## What to build
@@ -31,3 +31,6 @@ Specular / PBR belong to ticket 19 (they only differ with dynamic lights).
 - [ ] A lightmapped map passes A/B.
 - [ ] A map with a user hardware shader, a camera texture and side / plane colors passes A/B
       with none of them deferred (`lm_statelog`, survey `deferred` column).
+
+## Comments
+- 2026-10-20 (wontfix): superseded by .scratch/helion-render (ADR 0004).

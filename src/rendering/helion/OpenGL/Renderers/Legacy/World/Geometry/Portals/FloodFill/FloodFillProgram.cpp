@@ -1,0 +1,221 @@
+/*
+** FloodFillProgram.cpp
+**
+** Port of Helion.Render.OpenGL.Renderers.Legacy.World.Geometry.Portals.FloodFill.FloodFillProgram.
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+*/
+
+#include "FloodFillProgram.h"
+#include "FloodFillVertex.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/ShaderVars.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/ShaderText.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/VertexFunction.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/FragFunction.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/LightLevel.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/SectorColorMap.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/PlaneClip.h"
+#include "OpenGL/Renderers/Legacy/World/Shader/UzdoomContract.h"
+#include "OpenGL/Vertex/Attributes.h"
+
+namespace Helion::Render::OpenGL::Renderers::Legacy::World::Geometry::Portals::FloodFill
+{
+
+using namespace Shader;
+
+static FString LabelOf(const FString& name)
+{
+	FString label;
+	label << "FloodFill - " << name;
+	return label;
+}
+
+FloodFillProgram::FloodFillProgram(const FString& name) : RenderProgramBase(LabelOf(name))
+{
+}
+
+void FloodFillProgram::ProgramCreated()
+{
+	RenderProgramBase::ProgramCreated();
+	m_cameraLocation = Uniforms.GetLocation("camera");
+	m_cameraDirection = Uniforms.GetLocation("cameraDirection");
+}
+
+void FloodFillProgram::CameraDirection(const ::Helion::Geometry::Vec3F& dir)
+{
+	::Helion::Render::OpenGL::Shader::ProgramUniforms::Set(dir, m_cameraDirection);
+}
+
+void FloodFillProgram::Camera(const ::Helion::Geometry::Vec3F& camera)
+{
+	::Helion::Render::OpenGL::Shader::ProgramUniforms::Set(camera, m_cameraLocation);
+}
+
+const TArray<Vertex::VaoAttribute>* FloodFillProgram::VertexLayout() const
+{
+	return &Vertex::Attributes::ReadStructAttributes<FloodFillVertex>();
+}
+
+FString FloodFillProgram::VertexShader()
+{
+	FString text = R"GLSL(
+        #version 330
+
+        layout(location = 0) in vec3 pos;
+        layout(location = 1) in float planeZ;
+        layout(location = 2) in float minViewZ;
+        layout(location = 3) in float maxViewZ;
+        layout(location = 4) in float prevZ;
+        layout(location = 5) in float prevPlaneZ;
+        layout(location = 6) in float surfaceOptions;
+        layout(location = 7) in float renderOptions;
+        layout(location = 8) in float mapId;
+
+        flat out float planeZFrag;
+        out vec3 vertexPosFrag;
+        out float dist2D;
+        flat out float distanceOffsetFrag;
+        flat out float colorMapIndexFrag;
+        flat out float uvFlags;
+        flat out float vertexLightLevelFrag;
+        flat out float mapIdFrag;
+        flat out float upperFrag;
+        flat out float lowerFrag;
+        flat out float boundTextureIndex;
+        out float depthFrag;
+
+        ${SectorColorMapVertexFragVariables}
+        ${LightLevelVertexVariables}
+        ${VertexLightBufferVariables}
+        ${SectorColorMapVertexUniformVariables}
+
+        uniform mat4 mvp;
+        uniform vec4 helionClipPlane;
+        uniform vec3 camera;
+        uniform vec3 cameraDirection;
+        uniform float timeFrac;
+        uniform int useSectorColor;
+        uniform int useSectorFog;
+
+        void main()
+        {
+            vec3 prevPos = vec3(pos.x, pos.y, prevZ);
+            planeZFrag = mix(prevPlaneZ, planeZ, timeFrac);
+            vertexPosFrag = mix(prevPos, pos, timeFrac);
+            mapIdFrag = mapId;
+
+            float alphaFrag;
+            float addAlphaFrag;
+            ${VertexOptionsSet}
+            ${ColorMapAndLightLevelSet}
+
+            ${SectorColorMapVertexFunction}
+            ${VertexLightBuffer}
+
+            // Match doom behavior to not render flood view when camera is above/below ceiling/floor
+            vec3 worldPos = mix(vertexPosFrag + cameraDirection * 0.001,
+                vec3(0.0, 0.0, 0.0),
+                float(camera.z <= minViewZ || camera.z >= maxViewZ));
+
+            gl_Position = mvp * vec4(worldPos, 1.0);
+            gl_ClipDistance[0] = dot(helionClipPlane, vec4(vertexPosFrag, 1.0));
+            depthFrag = gl_Position.z;
+            #ifdef VULKAN_COORDINATE_SYSTEM
+            gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
+            #endif
+        }
+    )GLSL";
+
+	text = Replace(text, "${LightLevelVertexVariables}", LightLevel::VertexVariables(LightLevelOptions::NoDist));
+	text = Replace(text, "${VertexLightBufferVariables}", LightLevel::VertexLightBufferVariables());
+	text = Replace(text, "${VertexLightBuffer}", LightLevel::VertexLightBuffer(VertexLightBufferOptions::Default));
+	text = Replace(text, "${SectorColorMapVertexFragVariables}", SectorColorMap::VertexFragVariables());
+	text = Replace(text, "${SectorColorMapVertexUniformVariables}", SectorColorMap::VertexUniformVariables());
+	text = Replace(text, "${SectorColorMapVertexFunction}", SectorColorMap::VertexFunctionWorld());
+	text = Replace(text, "${VertexOptionsSet}", VertexFunction::VertexOptionsSet());
+	text = Replace(text, "${ColorMapAndLightLevelSet}", VertexFunction::ColorMapAndLightLevelSet());
+	return text;
+}
+
+std::optional<FString> FloodFillProgram::FragmentShader()
+{
+	if (dynamic_cast<const FloodFillWallClipProgram*>(this) != nullptr)
+		return PlaneClip::WriteWallFragFunction(WallClipFragOptions::DiscardNegativeMapId);
+
+	// UZDoom-only: like the Helion array programs, the truecolor program follows gl_lightmode through the contract light stage.
+	bool uzdoomLightMode = !ShaderVars::PaletteColorMode;
+
+	FString text = R"GLSL(
+            #version 330
+
+            flat in float planeZFrag;
+            flat in float mapIdFrag;
+            flat in float upperFrag;
+            flat in float lowerFrag;
+            flat in float boundTextureIndex;
+            in vec3 vertexPosFrag;
+            in float dist2D;
+
+            out vec4 fragColor;
+
+            uniform sampler2DArray boundTexture;
+            uniform sampler2DArray brightmapTexture;
+            uniform vec3 camera;
+            uniform mat4 mvpNoPitch;
+            uniform mat4 mvp;
+            uniform int hasInvulnerability;
+            uniform vec3 colorMix;
+            uniform int paletteIndex;
+            uniform int colormapIndex;
+            uniform int useBrightmaps;
+            uniform int useSectorFog;
+
+            ${LightLevelFragVariables}
+            ${SectorColorMapFragVariables}
+            ${UzdoomPrelude}
+
+            void main()
+            {
+                vec3 planeNormal = vec3(0, 0, 1);
+                vec3 pointOnPlane = vec3(0, 0, planeZFrag);
+                vec3 lookDir = normalize(vertexPosFrag - camera);
+                float planeDot = dot(pointOnPlane - camera, planeNormal) / dot(lookDir, planeNormal);
+                vec3 planePos = camera + (lookDir * planeDot);
+                vec2 texDim = textureSize(boundTexture, 0).xy;
+                vec2 uvFrag = vec2(planePos.x / texDim.x, planePos.y / texDim.y);
+
+                uvFrag.y = -uvFrag.y; // Vanilla textures are drawn top-down.
+
+                float dist2D = (mvpNoPitch * vec4(planePos, 1.0)).z;
+                float dist3D = (mvp * vec4(planePos, 1.0)).z;
+                vec3 worldPosFrag = vec3(planePos.x, planePos.z, planePos.y);
+                ${DynamicLightDepth}
+                ${LightLevelFragFunction}
+                ${SectorColorMapFragFunction}
+                ${FragColorFunction}
+            }
+        )GLSL";
+
+	FragColorFunctionOptions options = FragColorFunctionOptions::Colormap | FragColorFunctionOptions::Brightmaps;
+	if (uzdoomLightMode)
+		options = options | FragColorFunctionOptions::UzdoomLightMode | FragColorFunctionOptions::DynamicLights;
+
+	// Plan D25: the lit point is on the flooded plane behind the drawn quad, so its cluster slice comes from its own depth.
+	text = Replace(text, "${DynamicLightDepth}", uzdoomLightMode ? "helionViewDepth = (mvp * vec4(planePos, 1.0)).w;" : "");
+	text = Replace(text, "${LightLevelFragFunction}", LightLevel::FragFunction());
+	text = Replace(text, "${LightLevelFragVariables}", LightLevel::FragVariables(LightLevelOptions::NoDist));
+	text = Replace(text, "${FragColorFunction}", FragFunction::FragColorFunction(options));
+	text = Replace(text, "${SectorColorMapFragVariables}", SectorColorMap::FragVariables());
+	text = Replace(text, "${SectorColorMapFragFunction}", SectorColorMap::FragFunction());
+	text = Replace(text, "${UzdoomPrelude}", uzdoomLightMode ? UzdoomContract::LightModePrelude(true) : FString());
+	return text;
+}
+
+}

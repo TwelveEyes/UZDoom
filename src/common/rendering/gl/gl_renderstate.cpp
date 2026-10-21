@@ -27,6 +27,8 @@
 #include "gl_renderbuffers.h"
 #include "gl_hwtexture.h"
 #include "gl_buffers.h"
+#include "gl_renderprogram.h"
+#include "gl_samplers.h"
 #include "hw_clock.h"
 #include "hwrenderer/data/hw_viewpointbuffer.h"
 #include "texturemanager.h"
@@ -291,6 +293,12 @@ void FGLRenderState::ApplyBuffers()
 
 void FGLRenderState::Apply()
 {
+	if (mProgram)
+	{
+		ApplyProgram();
+		return;
+	}
+	if (mInProgramMode) LeaveProgramMode();
 	ApplyState();
 	ApplyBuffers();
 	ApplyShader();

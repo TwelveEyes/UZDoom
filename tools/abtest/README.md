@@ -1,18 +1,17 @@
-# levelmesh A/B & baseline tooling
+# A/B & baseline tooling
 
-Tooling for the levelmesh effort (`.scratch/levelmesh-impl/map.md`): the
-classic performance baseline and the A/B capture + comparison driver.
-The old wayfinder ticket numbers (09/10) below are historical; the current
-work is tickets 02 (perf baseline v2) and 03 (A/B tooling v2) in
-`.scratch/levelmesh-impl/issues/`. This directory is the
-committed home for demos, manifests, allowlists, and scripts; large perf
+Tooling first written for the levelmesh effort (`.scratch/levelmesh-impl/map.md`, superseded
+by ADR 0004 and `.scratch/helion-render/`): the performance baseline and the A/B capture +
+comparison driver. The ticket numbers below are those of `.scratch/levelmesh-impl/issues/`.
+This directory is the committed home for demos, manifests, allowlists, and scripts; large perf
 logs stay local (`logs/`, `runs/` are gitignored).
 
-## A/B tooling v2 (current; ticket 03 of `.scratch/levelmesh-impl/`)
+## A/B tooling v2 (ticket 03 of `.scratch/levelmesh-impl/`)
 
-`../abtest.py` compares classic (`gl_uselevelmesh 0`) with levelmesh (`1`) frames captured
-in the engine's A/B capture mode. There are two fresh level loads per map × mode, Vulkan only
-(manifest `ab_backends`).
+`../abtest.py` compares the frames of two paths captured in the engine's A/B capture mode; the
+paths differ only by their `--set-a` / `--set-b` pins. There are two fresh level loads per
+map × mode; the default backend is Vulkan (manifest `ab_backends`), `--backend gl33` selects
+OpenGL.
 
 - **Manifest:** `ab_manifest.json` (`ab-manifest/2`).
   - Demo mode replays the tour demos from `demos/v2/`; captures are every 30 tics plus the
@@ -22,9 +21,9 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   record → review → promote workflow).
 - **Commands:**
   ```sh
-  abtest.py run --determinism            # classic vs classic, strict
+  abtest.py run --determinism            # A vs A, strict
   abtest.py run [--only MAP] [--mode M]  # A/B; failing clusters cropped to <run>/<combo>/report/
-  abtest.py calibrate --mode static      # classic stats: Vulkan x3 launches, GL33 vs Vulkan
+  abtest.py calibrate --mode static      # A vs A stats: Vulkan x3 launches, GL33 vs Vulkan
   abtest.py diff | statediff | record | promote | validate
   ```
 - **Inspecting a run:** `ab_sheet.py` (run id, path or `latest`):
@@ -41,30 +40,16 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   - `--gamestate` sets `r_ab_gamestate 1`: each capture also writes `<map>_<tick>.gstate`
     (per-subsector `SSECMF_DRAWN`, per-line `ML_MAPPED`), and the two paths are set-diffed.
   - `--fullbright` sets `r_ab_fullbright 1`: every view renders as a plain fullbright scene
-    (no light levels, fog, dynamic lights or special colormaps), for geometry/visibility A/B
-    before levelmesh lighting exists (ticket 08).
+    (no light levels, fog, dynamic lights or special colormaps), for geometry/visibility A/B.
   - `--set-a 'CVAR VALUE'` / `--set-b 'CVAR VALUE'` (repeatable) add a pin to one path only,
-    written after the template, so they also override `gl_uselevelmesh`. Levelmesh-vs-levelmesh
-    A/B, e.g. Hi-Z against frustum-only (ticket 08):
-    `--set-a 'gl_uselevelmesh 1' --set-a 'lm_cullmode 1' --set-b 'lm_cullmode 2'`.
-- **Levelmesh debug cvars** (not saved): `lm_draw 0` skips the levelmesh draw (the classic
-  lists keep everything); `lm_cullmode` 0 none / 1 frustum / 2 two-phase Hi-Z (default);
-  `lm_drawmode` 0 compacted indices (default) / 1 one indirect command per cluster;
-  `lm_backfacecull 0` disables back-face culling. Dirty state stream (ticket 09):
-  `lm_stateupdate 0` freezes the GPU state at the load values, `lm_statefull 1` compares
-  every sector every frame instead of the candidates, `lm_statesweep N` sets the backstop
-  sweep (sectors per frame, default 512), `lm_clusterz 0` stops the cluster z refresh.
-  `lm_cluster_budget` (default 256) is read at level setup; 16 gives tight cluster boxes.
+    written after the template, e.g. `--set-a 'r_dynlights 0' --set-b 'r_dynlights 1'` or
+    `--set-b 'gl_rendermode 1'` (static against BSP visibility).
 - **Moving sectors (ticket 09):** `ab_manifest_movers.json` replays `demos/movers/`
   (DOOM2 MAP01 / MAP07 / MAP30, made with `make_demo.py --path script`: warps, turns, use
   presses and `DEM_RUNSPECIAL` line specials that open doors, run lifts and crushers),
   captured every 5 tics. Use it with `--manifest tools/abtest/ab_manifest_movers.json`:
-  - classic vs levelmesh: `run --mode demo --fullbright`. MAP30 fails throughout on its
-    animated walls and flats (ticket 11); MAP01 / MAP07 pass.
-  - culling holes: levelmesh vs levelmesh, no cull against Hi-Z,
-    `--set-a 'gl_uselevelmesh 1' --set-a 'lm_cullmode 0' --set-b 'lm_cullmode 2'`, also
-    with `lm_cluster_budget 16` on both paths. Adding `--set-b 'lm_clusterz 0'` is the
-    negative control: MAP01 then fails while its door opens.
+  - `run --mode demo --fullbright --set-b 'gl_rendermode 1'` compares the static and the BSP
+    render modes while the sectors move.
 - **Shading resolve (ticket 10):** `ab_manifest_lighttest.json` replays `demos/lighttest/`
   over `wads/lighttest.wad`, a generated map (`make_lighttest.py`; copy the wad into the
   build's `wads/` too) with one room per light-chain feature: colored light and
@@ -74,33 +59,19 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   smoothlighting and forcefakecontrast; MAP03 a fade table. Run it without `--fullbright`
   (the point is the light). Sweep a cvar on both paths with `--set-a X --set-b X`. The tours
   fire the pistol (`make_demo.py` step `attack@T`) so weapon flashes reach some captures.
-  A run whose stdout reports a levelmesh fallback (`Levelmesh: ... failed`) fails.
-  `lm_shading 0` is the debug switch that draws the levelmesh with the render state's
-  fullbright light instead of the resolve.
 - **Runtime texture state (ticket 11):** `ab_manifest_texturetest.json` replays
   `demos/texturetest/` over `wads/texturetest.wad` (`make_texturetest.py`; copy the wad into
   the build's `wads/` too): animated wall + flat, a wall and a floor scroller, a switch, a floor
   texture change (`Floor_LowerToLowestTxTy`), `Line_SetTextureOffset`, `Line_SetTextureScale`
-  (a state the bake cannot express: the tier goes to the classic path and back) and an
-  unwrapped mid texture's y offset (classic path). `--set-b 'lm_statelog 1'` prints every
-  tier / plane that switches between the levelmesh and the classic path, and every swap that
-  waits a frame for an unresolved texture, to the run's stdout.
-  Rooms 7 / 8 add warped textures (the levelmesh warp material programs) and GLDEFS
-  brightmaps. `lm_programs N` (bit per program: 1 default, 2 warp, 4 warp2; read at level
-  setup) sends the other material programs back to the classic path, to bisect a
-  material-shader difference.
+  and an unwrapped mid texture's y offset. Rooms 7 / 8 add warped textures and GLDEFS
+  brightmaps.
 - **3D floors (ticket 12):** `ab_manifest_3dfloortest.json` replays `demos/3dfloortest/` over
   `wads/3dfloortest.wad`. `make_3dfloortest.py` writes both (copy the wad into the build's
   `wads/` too). 14 rooms: solid boxes with the sector's and with another 3D light, whole-room
   light layers (walls split per layer), a sloped light plane across the walls (banded walls),
   stacked layers with `FF_DOUBLESHADOW`, a moving 3D floor, masked sides, light / color changes
   on a control sector, translucent and fog 3D floors (classic, ticket 16), `ExtraFloor_LightOnly`,
-  `FF_UPPERTEXTURE` and an opaque swimmable floor the camera is inside. With every 3D surface
-  on the classic path, 24 of 107 ticks fail only on DC2 texel speckle along the far
-  `CEIL3_5` grid lines (max delta 6). With opaque 3D sides and planes on the levelmesh
-  (ticket 12-C) 44 fail: the 20 new ones are 1-row edge specks (4-8 px) where a 3D plane cuts
-  a wall (DC2). Compare later runs with `ab_sheet.py failsets`; `lm_3dfloors` (1 sides, 2
-  planes, level setup) bisects them.
+  `FF_UPPERTEXTURE` and an opaque swimmable floor the camera is inside.
 - **Polyobjects (ticket 13):** `ab_manifest_polytest.json` replays `demos/polytest/` over
   `wads/polytest.wad`. `make_polytest.py` writes both (copy the wad into the build's `wads/`
   too). 12 rooms, one polyobject each (two in the mirror room):
@@ -114,19 +85,7 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
     `ExtraFloor_LightOnly` room;
   - `Line_SetTextureOffset` on a polyobject side.
 
-  Room 1 turns the camera so the box's bake position leaves the view while the box does not:
-  the culling test of the polyobject's cluster box.
-
-  - classic vs levelmesh: `run --manifest tools/abtest/ab_manifest_polytest.json --mode demo`
-    fails 158 of 227 ticks, all on edge specks (at most 391 px, max delta 30). Before ticket
-    13, with polyobjects classic on both sides, it was 155 of 216 at up to 449 px / delta 53
-    (older demo).
-  - culling holes: `--set-a 'gl_uselevelmesh 1' --set-a 'lm_cullmode 0' --set-b 'lm_cullmode 2'`
-    (or `1`) passes. Adding `--set-b 'lm_polybox 0'` is the negative control: ticks 120-145
-    lose room 1's box.
-  - `lm_polyobjs 0` (level setup) leaves every polyobject classic. `lm_statelog 1` prints each
-    polyobject that leaves or re-enters the sector it was baked in (it is drawn classic
-    meanwhile).
+  Room 1 turns the camera so the box's spawn position leaves the view while the box does not.
 - **Sky (ticket 14):** `ab_manifest_skytest.json` replays `demos/skytest/` over
   `wads/skytest.wad`. `make_skytest.py` writes both (copy the wad into the build's `wads/`
   too). 9 separate courtyards, each showing one sky rule; the camera looks up (or down) in
@@ -145,17 +104,8 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   sector fog and `forcenoskystretch`. `r_skymode` is a cvar: add `--set-a 'r_skymode 1'
   --set-b 'r_skymode 1'` for the other mode.
 
-  Before ticket 14 (the classic draws the sky on both sides): MAP01 / MAP02 / MAP03 pass, 0 /
-  0 / 0 of 173 ticks failing (run `20261016T223301Z-ab`). With ticket 14: 0 / 1 / 0 (MAP02's is a
-  4-px speck; run `20261017T001759Z-ab`).
-  - isolate the sky change: `--set-a 'gl_uselevelmesh 1' --set-a 'lm_sky 0'` (the classic sky
-    walls) against the default. Negative control: `--set-b 'lm_skydraw 0'` (the levelmesh skips
-    its sky surfaces but the classic copies stay skipped) fails 149 of 173 ticks on MAP01.
   - stencil path: add `gl_no_skyclear 1` to both sides (every sky portal through the stencil;
     the default draws the main sky before the scene without one).
-  - `lm_skylog 1` prints each main view's sky portals, skipped lines and sky sources (`2` also
-    the classic lines); `lm_skyside N` lists the bake's sky walls of side N (with
-    `lm_keepgeometry 1`: their vertices).
 - **Portals (ticket 15):** `ab_manifest_portaltest.json` replays `demos/portaltest/` over
   `wads/portaltest.wad`. `make_portaltest.py` writes both (copy the wad into the build's
   `wads/` too). 12 separate rooms, each with one portal type and, where the portal leads
@@ -174,19 +124,6 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
 
   MAP01 is plain, MAP02 has fog on every sector.
 
-  Classic against levelmesh, both maps fail many ticks with scattered single-shade specks on
-  the main view's ceilings and floors. They predate ticket 15: the same ticks fail with the
-  portal views on the classic path. Isolate the portal views instead:
-  - `--set-a 'gl_uselevelmesh 1' --set-a 'lm_portals 0'` (portal views classic) against the
-    default: MAP01 / MAP02 fail 4 / 1 of 217, specks and a delta-5 band in the plane-mirror
-    room (run `20261017T130234Z-ab`).
-  - Negative control: `--set-b 'lm_portaldraw 0'` (the levelmesh skips portal views while the
-    classic lists still drop what it owns) fails 115 of 217 on MAP01.
-  - `lm_portalrect 0` culls portal views against the whole screen instead of the window's
-    rectangle. `lm_portallog 1` prints every portal view the levelmesh draws (type, depth, cull
-    rectangle, drawn).
-  - Perflog `v7` adds `lmpv` (portal views the levelmesh drew in the frame) and `lmpgpu`
-    (their GPU ms), lagged like `lmgpu`.
 - **Translucency, fog boundaries, hack fills (ticket 16):** `ab_manifest_transtest.json` replays
   `demos/transtest/` over `wads/transtest.wad`. `make_transtest.py` writes both (copy the wad
   into the build's `wads/` too). It has 9 rooms:
@@ -207,9 +144,6 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
     the fake planes, and the eye above (floor) or below (ceiling) the filled plane for the
     floods. The pillars in the pit and the pool, and the barrel on the bridge, show that each
     one fired.
-  - Classic against levelmesh, MAP01 / MAP02 fail 12 / 15 of 171 ticks: specks (≤ 182 px)
-    in rooms 2, 3 and 8 (run `20261017T171549Z-ab`). Before the run-time translucency fix,
-    room 4 failed with up to 640k px.
 - **Actor / particle gather (ticket 17):** `ab_manifest_gathertest.json` replays
   `demos/gathertest/` over `wads/gathertest.wad`. `make_gathertest.py` writes both and the
   manifest (copy the wad into the build's `wads/` too). Every monster is a `dormant` thing:
@@ -233,17 +167,8 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   - The latency probes (doorway, fast turn, jumps) are captured every tic: `demo_ticks.dense`
     in the manifest lists the ranges, every other tick is every 5. A map's own `demo_ticks`
     replaces the manifest's (`abtest.py` `demo_tick_list`).
-  - At the default cluster budget (256) MAP01 bakes 2 clusters and every gather takes all of
-    it; `--set-a 'lm_cluster_budget 16' --set-b 'lm_cluster_budget 16'` (36 clusters) makes
-    the rooms separate clusters, so pop-in can show.
-  - Isolation pair: `--set-a 'gl_uselevelmesh 1' --set-a 'lm_gather 0'` (the walk gathers)
-    against the default. At budget 256 every tick is identical (run `20261018T222821Z-ab`); at
-    budget 16 MAP01 fails one tick (573, the second jump into room B: its monsters appear one
-    frame late; run `20261018T223707Z-ab`).
   - `ab_manifest_gather_monsters.json` replays the DOOM2 MAP01 / MAP23 and SOS MAP32 tours of
     `ab_manifest.json` with monsters kept (identical on both paths under `-rngseed`).
-  - Perflog `v8` adds the gather columns `lmgv` (views that gathered), `lmgc` / `lmga` (clusters
-    / of those only adjacent), `lmgs` / `lmgsec` (subsectors / sectors) and `lmgms` (CPU ms).
 - **Game-logic feedback (ticket 18):** `ab_manifest_oobtest.json` replays `demos/oobtest/` over
   `wads/oobtest.wad`. `make_oobtest.py` writes both and the manifest (copy the wad into the
   build's `wads/` too; `run_matrix.sh` mounts it for `OOBTEST_*`). One layout, three views set
@@ -253,36 +178,24 @@ in the engine's A/B capture mode. There are two fresh level loads per map × mod
   it (dither target), a pit, an undiscovered secret sector (`special` 1024) the demos never
   enter, a window sill into a far room, a line portal. Every demo holds still for 40 tics at
   the end, so the one-frame exposure latency never reaches the last game-state dump.
-  - Cvars (not saved): `lm_exposure 0` keeps the walk marking `SSECMF_DRAWN` / `ML_MAPPED` and
-    latching the cullcolor (the A side); `lm_exposurelog 1` prints each view's newly marked
-    subsectors / lines (`LMEXPOSE`); `lm_oobmask 0` draws and gathers out-of-body views without
-    the classic rules' leaf mask (secret sectors, radar, ortho viewbox). Dither in the
-    levelmesh follows `r_dithertransparency` in out-of-body views (`LMVF_DITHER`).
-  - Exposure isolation (the marks come from the GPU mark pass, pixels never change):
-    `run --mode demo --gamestate --manifest tools/abtest/ab_manifest_oobtest.json --set-a
-    'gl_uselevelmesh 1' --set-a 'lm_exposure 0' --set-b 'gl_uselevelmesh 1'`; the same pair
-    with `--only DOOM2_MAP01 --only DOOM2_MAP27 --only MYHOUSE_20PAM` on `ab_manifest.json`.
-  - Out-of-body rules: classic against levelmesh on MAP01 / MAP02, with and without
-    `r_radarclipper 1` on both sides; `--set-b 'lm_oobmask 0'` is the negative control.
-  - Dither: MAP01 with `r_dithertransparency 1` on both sides, A `gl_uselevelmesh 0`.
-  - Perflog `v9` adds `lmxv` (views whose marks came from the GPU), `lmxl` / `lmxn` (subsectors
-    / lines newly marked), `lmxms` (exposure apply CPU ms) and `lmmk` (mark pass GPU ms).
+  - Out-of-body rules: `r_radarclipper 1` and `r_dithertransparency 1` on one or both sides,
+    with `--gamestate` for the exposure marks.
 - **Pitch in scripted demos:** `make_demo.py` `pitch:DEG@T` steps only work in a demo built
   with `pitch_limit=(up, down)`. The engine clamps the view pitch to limits that a client
   normally sends (`DEM_SETPITCHLIMIT`); a synthetic demo has none, so every pitch is clamped
   to 0.
 - **Shader timer in captures:** `P_SetupLevel` stamps `ShaderStartTime` on the real clock, and
   `CheckTimer` restarts the material shader timer until the synthetic `FrameTime` passes it,
-  so before 2026-10-15 the warp / shader timer base depended on load time (a slower levelmesh
-  bake shifted warped flats by whole tics). The capture now restamps it on the first captured
+  so before 2026-10-15 the warp / shader timer base depended on load time (a slower level load
+  shifted warped flats by whole tics). The capture now restamps it on the first captured
   frame of the map (`d_abcapture.cpp`).
 - **Never pass `+set vk_debug 1` without a scratch `-config`:** `vk_debug` is archived, so it
   persists into the user's ini and silently puts the validation layer into every later perf
-  run. The A/B driver and `lm_bake_survey.py` already use fresh configs; `run_matrix.sh` does
+  run. The A/B driver already uses fresh configs; `run_matrix.sh` does
   not, so its `--set` values persist too (e.g. `gl_multisample`).
 - **Pins** (every run): `show_messages 0`. Notify lines tick through real-time startup tics,
-  so the tour demos' cheat messages made captures non-deterministic. `r_dynlights 0` stays
-  until ticket 19.
+  so the tour demos' cheat messages made captures non-deterministic. `r_dynlights 0` is the
+  template default; override it per path.
 
 ## Perf baseline v2 (current; ticket 02 of `.scratch/levelmesh-impl/`)
 
@@ -294,13 +207,8 @@ changes listed here.
 - **Pacing:** `baseline.cfg` pins `r_ticstability 0`. The engine default busy-waits on every
   frame without a new sim tic.
 - **Perflog:** `r_perflog v2` adds `wall`, the real interval between logged frames. Use it, not
-  `total`, as the frame time. `v3` (ticket 08) adds the levelmesh columns `lm`, `lmcm`, `lmdm`,
-  `lmcl1/2`, `lmtri1/2`, `lmfc`, `lmocc` and the GPU times `lmc1`, `lmd1`, `lmhz`, `lmc2`, `lmd2`,
-  `lmgpu` (see the log header). They lag by the frames in flight and appear only once a
-  levelmesh draw has completed. `v4` (ticket 09) adds the dirty state stream of the frame
-  (not lagged): `lmsc` sector records compared, `lmss` sector records uploaded, `lmsk`
-  cluster z-ranges uploaded, `lmsb` staging bytes, `lmsms` CPU ms. `lm_state_stats.py
-  'logs/<tag>_*.perflog'` summarizes those columns (p50 / p95 / max) per log.
+  `total`, as the frame time. The levelmesh columns of `v3`–`v9` (`lm*`) were removed with the
+  levelmesh (ADR 0004); the header still says `v9`.
 - **Demos:** `make_demo.py --path tour` (default) warps the camera to 26 stops in the map's main
   playable area, with a 360° pan per stop; god + noclip. Output is in `demos/v2/`. `--path
   vantage --at x,y --turn N` holds a single view. The v1 spiral (`--path spiral`, `demos/*.lmp`)

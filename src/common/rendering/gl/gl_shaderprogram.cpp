@@ -35,8 +35,8 @@ namespace OpenGLRenderer
 {
 
 bool IsShaderCacheActive();
-TArray<uint8_t> LoadCachedProgramBinary(const FString &vertex, const FString &fragment, uint32_t &binaryFormat);
-void SaveCachedProgramBinary(const FString &vertex, const FString &fragment, const TArray<uint8_t> &binary, uint32_t binaryFormat);
+TArray<uint8_t> LoadCachedProgramBinary(const FString &vertex, const FString &fragment, uint32_t &binaryFormat, const char *name = nullptr);
+void SaveCachedProgramBinary(const FString &vertex, const FString &fragment, const TArray<uint8_t> &binary, uint32_t binaryFormat, const char *name = nullptr);
 
 FShaderProgram::FShaderProgram()
 {

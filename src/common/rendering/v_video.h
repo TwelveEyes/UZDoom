@@ -36,24 +36,20 @@
 #include "v_2ddrawer.h"
 #include "vectors.h"
 
-struct FPortalSceneState;
-struct LevelMeshUploadData;
-struct LevelMeshStateUpdate;
-struct LevelMeshView;
-struct LevelMeshPerfStats;
-struct LevelMeshReadback;
-class FSkyVertexBuffer;
 class IIndexBuffer;
 class IVertexBuffer;
 class IDataBuffer;
 class FFlatVertexBuffer;
 class HWViewpointBuffer;
 class FLightBuffer;
-struct HWDrawInfo;
 class FMaterial;
 class FGameTexture;
 class FRenderState;
 class BoneBuffer;
+class IRenderProgram;
+class IRenderTarget;
+struct RenderProgramDesc;
+struct RenderTargetDesc;
 
 enum EHWCaps
 {
@@ -70,6 +66,7 @@ enum EHWCaps
 	RFL_DEBUG = 128,
 	RFL_ATI_MEM = 256,
 	RFL_NV_MEM = 512,
+	RFL_COMPUTE_SHADER = 1024,	// GL >= 4.3: compute shaders, SSBOs and image load/store in render programs
 };
 
 enum {
@@ -148,7 +145,6 @@ public:
 	unsigned int uniformblockalignment = 256;	// Hardware dependent uniform buffer alignment.
 	unsigned int maxuniformblock = 65536;
 	const char *vendorstring;					// We have to account for some issues with particular vendors.
-	FSkyVertexBuffer *mSkyData = nullptr;		// the sky vertex buffer
 	FFlatVertexBuffer *mVertexData = nullptr;	// Global vertex data
 	HWViewpointBuffer *mViewpoints = nullptr;	// Viewpoint render data.
 	FLightBuffer *mLights = nullptr;			// Dynamic lights
@@ -173,6 +169,11 @@ public:
 	virtual bool IsPoly() { return false; }
 	virtual int GetShaderCount();
 	virtual bool CompileNextShader() { return true; }
+	// Extra startup shader compilation (render programs of src/rendering/helion). Both null by default.
+	// ExtraShaderCount() is added to GetShaderCount(); CompileNextExtraShader() is called by the backend's
+	// CompileNextShader() once the table shaders are done, and returns true when everything is compiled.
+	static int (*ExtraShaderCount)();
+	static bool (*CompileNextExtraShader)();
 	virtual bool HasNVidiaVRAMExt() { return false; }
 	virtual bool HasATIVRAMExt() { return false; }
 	virtual bool HasVulkanVRAMExt() { return false; }
@@ -180,31 +181,8 @@ public:
 	{
 		mShadowMap.SetAABBTree(tree);
 	}
+	// The wall mesh the ray traced light shadows of the Vulkan backend trace against (ShadowMesh of the renderer).
 	virtual void SetLevelMesh(hwrenderer::LevelMesh *mesh) { }
-	// GPU-driven levelmesh (Vulkan only). SupportsLevelMesh(report) prints the
-	// missing features once per device when report is set.
-	virtual bool SupportsLevelMesh(bool report) { return false; }
-	virtual void SetLevelMeshData(const LevelMeshUploadData *data) { }	// nullptr releases
-	// Streams dirty state records into the resident levelmesh; returns the bytes uploaded.
-	virtual size_t UpdateLevelMeshState(const LevelMeshStateUpdate &update) { return 0; }
-	virtual bool LevelMeshResident(uint64_t id) { return false; }
-	// True when the texture id's translation table entry is resolved; otherwise
-	// queues it for the next frame start and returns false.
-	virtual bool LevelMeshTextureReady(int id) { return true; }
-	virtual void PrintLevelMeshStats() { }
-	// Draws the levelmesh for the current view into the scene (opaque and
-	// masked buckets). False = nothing drawn: the classic lists draw everything.
-	virtual bool DrawLevelMesh(const LevelMeshView &view, FRenderState &state) { return false; }
-	// Draws the sky surfaces of a sky configuration (LevelMeshView::
-	// skySources) the last DrawLevelMesh of this frame culled, with the render
-	// state's current depth / stencil / color mask. False = not drawn.
-	virtual bool DrawLevelMeshSky(uint32_t config, FRenderState &state) { return false; }
-	virtual bool GetLevelMeshStats(LevelMeshPerfStats &stats) { return false; }
-	// What the view (LevelMeshView::viewKey) found visible in the previous
-	// rendered frame: its cluster visibility bitset (ticket 17 actor gather)
-	// and its mark pass's leaf / line bits (ticket 18 exposure). False = no
-	// readback. Valid for the current frame.
-	virtual bool LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, LevelMeshReadback &out) { return false; }
 	bool allowSSBO() const
 	{
 #ifndef HW_BLOCK_SSBO
@@ -275,6 +253,19 @@ public:
 	virtual IVertexBuffer *CreateVertexBuffer() { return nullptr; }
 	virtual IIndexBuffer *CreateIndexBuffer() { return nullptr; }
 	virtual IDataBuffer *CreateDataBuffer(int bindingpoint, bool ssbo, bool needsresize) { return nullptr; }
+
+	// Render program API (hw_renderprogram.h), used by src/rendering/helion.
+	virtual IRenderProgram *CreateRenderProgram(const RenderProgramDesc &desc) { return nullptr; }
+	// Texel buffer backing a samplerBuffer / usamplerBuffer / isamplerBuffer; format is an ERenderProgramFormat.
+	virtual IDataBuffer *CreateTexelBuffer(int format) { return nullptr; }
+	// 2D array texture; fill layers with IHardwareTexture::UploadLayer. numchannels 4 = BGRA8, 1 = R8 (UI when integer).
+	virtual IHardwareTexture *CreateTextureArray(int width, int height, int layers, int numchannels, bool integer, bool mipmap, const char *name) { return nullptr; }
+	virtual int GetMaxTextureArrayLayers() { return 256; }	// GL: GL_MAX_ARRAY_TEXTURE_LAYERS, Vulkan: maxImageArrayLayers (both >= 256)
+	virtual IRenderTarget *CreateRenderTarget(const RenderTargetDesc &desc) { return nullptr; }
+	virtual bool SupportsCompute() { return false; }	// GL: >= 4.3; Vulkan: true
+	virtual bool RaytracingEnabled() { return false; }	// Vulkan: vk_raytrace with ray queries (TopLevelAS of the light shadows)
+	virtual void DispatchCompute(IRenderProgram *prog, int gx, int gy, int gz) {}	// uses the render state's program slots
+	virtual void MemoryBarrierCompute() {}
 	bool BuffersArePersistent() { return !!(hwcaps & RFL_BUFFER_STORAGE); }
 
 	// This is overridable in case Vulkan does it differently.
@@ -299,6 +290,9 @@ public:
 	virtual void CopyScreenToBuffer(int width, int height, uint8_t* buffer)	{ memset(buffer, 0, width* height); }
 	virtual bool FlipSavePic() const { return false; }
 	virtual void RenderTextureView(FCanvasTexture* tex, std::function<void(IntRect&)> renderFunc) {}
+	// Inside a RenderTextureView callback: copies the bounds of the scene colour buffer into the texture being rendered (renderers
+	// that draw the view into the scene buffers first, like the Helion renderer).
+	virtual void BlitSceneToTextureView(const IntRect& bounds) {}
 	virtual void SetActiveRenderTarget() {}
 
 	// Screen wiping

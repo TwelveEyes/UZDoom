@@ -72,7 +72,8 @@
 #include "texturemanager.h"
 #include "p_lnspec.h"
 #include "d_main.h"
-#include "hw_levelmeshbake.h"
+#include "rendering/helion/World/Blockmap/RenderBlockMap.h"
+#include "rendering/helion/Entrypoint.h"
 
 extern AActor *SpawnMapThing (int index, FMapThing *mthing, int position);
 
@@ -376,15 +377,10 @@ void FLevelLocals::ClearLevelData(bool fullgc)
 	Behaviors.UnloadModules();
 	localEventManager->Shutdown();
 	if (aabbTree) delete aabbTree;
-	if (levelMesh) delete levelMesh;
-	if (levelMeshBake)
-	{
-		LevelMesh_ReleaseResources(this);
-		delete levelMeshBake;
-	}
-	levelMeshBake = nullptr;
+	Helion_LevelDestroyed(this);
+	if (renderBlockmap) delete renderBlockmap;
+	renderBlockmap = nullptr;
 	aabbTree = nullptr;
-	levelMesh = nullptr;
 	VisualThinkerHead = nullptr;
 	ActorBehaviors.Clear();
 	ClientSideActorBehaviors.Clear();

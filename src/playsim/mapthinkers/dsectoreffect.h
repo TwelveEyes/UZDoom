@@ -50,6 +50,12 @@ protected:
 public:
 	void StopInterpolation(bool force = false);
 
+	// Helion render pipeline: Movement flag / SectorMoveStart+Complete events for the planes
+	// (bit sector_t::floor / bit sector_t::ceiling) this mover is moving. Transient, not serialized.
+	uint8_t m_RenderMovePlanes = 0;
+	void RenderMoveStart(int planes, bool raiseEvent = true);
+	void RenderMoveComplete();
+
 protected:
 
 	void Serialize(FSerializer &arc);

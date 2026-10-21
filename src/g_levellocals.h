@@ -44,9 +44,8 @@
 #include "r_data/r_canvastexture.h"
 #include "r_data/r_interpolate.h"
 #include "doom_aabbtree.h"
-#include "doom_levelmesh.h"
 
-class LevelMeshBake;
+namespace Helion::World::Blockmap { class RenderBlockMap; }
 #include "p_visualthinker.h"
 #include <memory>
 
@@ -528,8 +527,7 @@ public:
 	FCanvasTextureInfo canvasTextureInfo;
 	EventManager *localEventManager = nullptr;
 	DoomLevelAABBTree* aabbTree = nullptr;
-	DoomLevelMesh* levelMesh = nullptr;
-	LevelMeshBake* levelMeshBake = nullptr;	// levelmesh path only (gl_uselevelmesh on Vulkan)
+	Helion::World::Blockmap::RenderBlockMap* renderBlockmap = nullptr;	// Helion render blockmap, built in MapLoader::LoadLevel after Spawn3DFloors
 
 	// [ZZ] Destructible geometry information
 	TMap<int, FHealthGroup> healthGroups;

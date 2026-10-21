@@ -37,8 +37,6 @@
 struct particle_t;
 class FCanvasTexture;
 class FFlatVertexBuffer;
-class FSkyVertexBuffer;
-class HWPortal;
 class FLightBuffer;
 class DPSprite;
 class FGLRenderBuffers;

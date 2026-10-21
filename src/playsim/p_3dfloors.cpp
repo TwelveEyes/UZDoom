@@ -32,6 +32,7 @@
 #include "p_spec.h"
 #include "g_levellocals.h"
 #include "actorinlines.h"
+#include "rendering/helion/World/Static/StaticDataApplier.h"
 
 //==========================================================================
 //
@@ -100,6 +101,9 @@ void P_Add3DFloor(sector_t* sec, sector_t* sec2, line_t* master, int flags, int 
 		for(i = 0; i < sec2->e->XFloor.attached.Size(); i++) if(sec2->e->XFloor.attached[i] == sec) return;
 		sec2->e->XFloor.attached.Push(sec);
 	}
+
+	// Helion render pipeline: the target sector's geometry depends on the control sector's heights.
+	Helion::World::Static::StaticDataApplier::SetSectorDynamic(sec, Helion::World::Static::SectorPlanes_Both, SD_TransferHeights);
 
 	//Add the floor
 	ffloor = new F3DFloor;

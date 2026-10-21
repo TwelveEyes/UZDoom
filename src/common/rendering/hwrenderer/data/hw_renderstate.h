@@ -22,6 +22,7 @@
 #include "texmanip.h"
 #include "version.h"
 #include "i_interface.h"
+#include "hw_renderprogram.h"
 
 struct FColormap;
 class IVertexBuffer;
@@ -38,11 +39,7 @@ enum EClearTarget
 enum ERenderEffect
 {
 	EFF_NONE = -1,
-	EFF_FOGBOUNDARY,
-	EFF_SPHEREMAP,
 	EFF_BURN,
-	EFF_STENCIL,
-	EFF_DITHERTRANS,
 	MAX_EFFECTS
 };
 
@@ -262,6 +259,14 @@ protected:
 	IIndexBuffer *mIndexBuffer;
 
 	EPassType mPassType = NORMAL_PASS;
+
+	IRenderProgram* mProgram = nullptr;
+	bool mProgramChanged = false;
+	FProgramBindingSlot mProgramSlots[MaxProgramBindings];
+	TArray<uint8_t> mProgramUniformData;
+	FCustomBlendState mCustomBlend;
+	IVertexBuffer* mInstanceBuffer = nullptr;
+	int mInstanceOffset = 0;
 
 public:
 
@@ -734,6 +739,173 @@ public:
 	{
 		mColorMapSpecial = cm;
 		mColorMapFlash = flash;
+	}
+
+	// Render program mode (hw_renderprogram.h). While a program is set, Apply() binds it and the
+	// program slots instead of the table shaders; the stream data / material state is ignored.
+	// Backend notification before the program changes (leaving program mode restores the table shader state).
+	virtual void OnSetProgram(IRenderProgram* prog) {}
+
+	void SetProgram(IRenderProgram* prog)
+	{
+		OnSetProgram(prog);
+		mProgram = prog;
+		mProgramChanged = true;
+		if (prog == nullptr)
+		{
+			for (auto& slot : mProgramSlots) slot = {};
+			mProgramUniformData.Clear();
+			mCustomBlend = {};
+		}
+	}
+
+	IRenderProgram* GetProgram() const
+	{
+		return mProgram;
+	}
+
+	void SetProgramBuffer(int binding, IBuffer* buf, size_t offset = 0, size_t size = 0)
+	{
+		auto& slot = mProgramSlots[binding];
+		slot = {};
+		slot.type = FProgramBindingSlot::Buffer;
+		slot.buffer = buf;
+		slot.offset = offset;
+		slot.size = size;
+		mProgramChanged = true;
+	}
+
+	// Per-draw uniform block data; copied, the backend streams it before the next draw.
+	void SetProgramUniforms(int binding, const void* data, size_t size)
+	{
+		auto& slot = mProgramSlots[binding];
+		if (slot.type != FProgramBindingSlot::Uniforms || slot.uniformsSize != (int)size)
+		{
+			slot = {};
+			slot.type = FProgramBindingSlot::Uniforms;
+			slot.uniformsOffset = mProgramUniformData.Size();
+			slot.uniformsSize = (int)size;
+			mProgramUniformData.Resize(mProgramUniformData.Size() + (unsigned)size);
+		}
+		memcpy(&mProgramUniformData[slot.uniformsOffset], data, size);
+		mProgramChanged = true;
+	}
+
+	void SetProgramTexture(int binding, IHardwareTexture* tex, int clampmode, int filter = 0)
+	{
+		auto& slot = mProgramSlots[binding];
+		slot = {};
+		slot.type = FProgramBindingSlot::Texture;
+		slot.texture = tex;
+		slot.clampmode = clampmode;
+		slot.filter = filter;
+		mProgramChanged = true;
+	}
+
+	void SetProgramRenderTargetTexture(int binding, IRenderTarget* target, int attachment)
+	{
+		auto& slot = mProgramSlots[binding];
+		slot = {};
+		slot.type = FProgramBindingSlot::RenderTargetTexture;
+		slot.target = target;
+		slot.attachment = attachment;
+		mProgramChanged = true;
+	}
+
+	// Binds a copy of the scene colour taken by CopySceneColor() / the scene depth buffer.
+	void SetProgramSceneTexture(int binding, bool depth)
+	{
+		auto& slot = mProgramSlots[binding];
+		slot = {};
+		slot.type = depth ? FProgramBindingSlot::SceneDepthTexture : FProgramBindingSlot::SceneColorTexture;
+		mProgramChanged = true;
+	}
+
+	// Binds the light shadow map (IShadowMap, the texture UpdateShadowMap renders; nearest filtering, clamped).
+	void SetProgramShadowMapTexture(int binding)
+	{
+		auto& slot = mProgramSlots[binding];
+		slot = {};
+		slot.type = FProgramBindingSlot::ShadowMapTexture;
+		mProgramChanged = true;
+	}
+
+	void SetProgramTexelBuffer(int binding, IDataBuffer* buf)
+	{
+		auto& slot = mProgramSlots[binding];
+		slot = {};
+		slot.type = FProgramBindingSlot::TexelBuffer;
+		slot.buffer = buf;
+		mProgramChanged = true;
+	}
+
+	void SetCustomBlend(int srcRGB, int dstRGB, int srcA, int dstA, int equationRGB = RBE_Add, int equationA = RBE_Add)
+	{
+		mCustomBlend.enabled = true;
+		mCustomBlend.blend = true;
+		mCustomBlend.srcRGB = srcRGB;
+		mCustomBlend.dstRGB = dstRGB;
+		mCustomBlend.srcA = srcA;
+		mCustomBlend.dstA = dstA;
+		mCustomBlend.equationRGB = equationRGB;
+		mCustomBlend.equationA = equationA;
+		mCustomBlend.numAttachments = 0;
+	}
+
+	// Blend of one colour attachment (multi render target programs). Attachments never set use the
+	// blend of SetCustomBlend / DisableBlend (or the render style when no custom blend is set).
+	void SetCustomBlendAttachment(int attachment, int srcRGB, int dstRGB, int srcA, int dstA, int equationRGB = RBE_Add, int equationA = RBE_Add, bool blend = true)
+	{
+		if (!mCustomBlend.enabled) mCustomBlend.enabled = true;
+		if (mCustomBlend.numAttachments <= attachment)
+		{
+			// attachments below that were not set use the base state
+			for (int i = mCustomBlend.numAttachments; i < attachment; i++)
+			{
+				auto& a = mCustomBlend.attachment[i];
+				a.blend = mCustomBlend.blend;
+				a.srcRGB = mCustomBlend.srcRGB; a.dstRGB = mCustomBlend.dstRGB;
+				a.srcA = mCustomBlend.srcA; a.dstA = mCustomBlend.dstA;
+				a.equationRGB = mCustomBlend.equationRGB; a.equationA = mCustomBlend.equationA;
+			}
+			mCustomBlend.numAttachments = attachment + 1;
+		}
+		auto& a = mCustomBlend.attachment[attachment];
+		a.blend = blend;
+		a.srcRGB = srcRGB; a.dstRGB = dstRGB; a.srcA = srcA; a.dstA = dstA;
+		a.equationRGB = equationRGB; a.equationA = equationA;
+	}
+
+	void DisableBlend()
+	{
+		mCustomBlend.enabled = true;
+		mCustomBlend.blend = false;
+		mCustomBlend.numAttachments = 0;
+	}
+
+	void ClearCustomBlend()
+	{
+		mCustomBlend = {};
+	}
+
+	void SetPolygonOffset(float factor, float units)
+	{
+		SetDepthBias(factor, units);
+	}
+
+	// Render target for subsequent draws; nullptr = the scene framebuffer.
+	virtual void SetRenderTarget(IRenderTarget* target) = 0;
+	// Clears the colour attachments of the current render target to the given colour.
+	virtual void ClearRenderTarget(float r, float g, float b, float a) = 0;
+	// Copies the scene colour buffer into the texture bound by SetProgramSceneTexture(.., false).
+	virtual void CopySceneColor() = 0;
+	virtual void DrawInstanced(int dt, int index, int count, int instanceCount) = 0;
+	virtual void DrawIndexedInstanced(int dt, int index, int count, int instanceCount) = 0;
+	// Second vertex stream (binding point 1) for instanced programs.
+	void SetInstanceBuffer(IVertexBuffer* vb, int offset)
+	{
+		mInstanceBuffer = vb;
+		mInstanceOffset = offset;
 	}
 
 	// API-dependent render interface

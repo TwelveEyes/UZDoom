@@ -44,6 +44,8 @@
 #include "actor.h"
 #include "actorinlines.h"
 #include "m_round.h"
+#include "g_levellocals.h"
+#include "rendering/helion/World/Blockmap/RenderBlockMap.h"
 
 // State.
 #include "po_man.h"
@@ -256,6 +258,19 @@ void P_LineOpening (FLineOpening &open, AActor *actor, const line_t *linedef, co
 void AActor::UnlinkFromWorld (FLinkContext *ctx)
 {
 	if (ctx != nullptr) ctx->sector_list = nullptr;
+	// Helion render blockmap
+	if (renderBlock != 0)
+	{
+		if (Level->renderBlockmap != nullptr)
+		{
+			Level->renderBlockmap->RemoveRenderLink(this);
+		}
+		else
+		{
+			renderBlock = 0;
+			renderBlockNext = renderBlockPrev = nullptr;
+		}
+	}
 	if (!(flags & MF_NOSECTOR))
 	{
 		// invisible things don't need to be in sector list
@@ -529,6 +544,9 @@ void AActor::LinkToWorld(FLinkContext *ctx, bool spawningmapthing, sector_t *sec
 			}
 		}
 	}
+
+	// Helion render blockmap (every actor, independent of MF_NOBLOCKMAP / MF_NOSECTOR)
+	if (Level->renderBlockmap != nullptr) Level->renderBlockmap->RenderLink(this);
 	// Portal links cannot be done unless the level is fully initialized.
 	if (!spawningmapthing) UpdateRenderSectorList();
 }

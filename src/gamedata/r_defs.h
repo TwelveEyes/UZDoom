@@ -51,17 +51,53 @@ struct sector_t;
 class AActor;
 struct FSection;
 struct FLevelLocals;
+struct side_t;
 
-// Levelmesh dirty state stream: a sector's GPU-visible state changed
-// (hw_levelmeshstate.cpp; a no-op unless the level has a levelmesh).
-void LevelMesh_SectorChanged(sector_t *sec);
-// ... a sector plane's texture transform or texture changed.
-void LevelMesh_PlaneChanged(sector_t *sec, int pos);
-// ... a side tier's texture, offsets, scales or colors changed (tier -1: all three).
-void LevelMesh_SideChanged(struct side_t *side, int tier);
-// ... a sector's special / additive colors or texture manipulation changed
-// (its planes and the walls that may inherit them).
-void LevelMesh_SectorColorsChanged(sector_t *sec);
+// Helion render pipeline dynamic-state flags. Transient (never serialized); mirrors Helion's
+// SectorDynamic enum (World/Static/SectorDynamic.cs). Unscoped with an SD_ prefix so the
+// values can be or'ed into the uint8_t renderDynamic members of sector_t / side_t.
+enum ESectorDynamic : uint8_t
+{
+	SD_None = 0,
+	SD_Movement = 1,
+	SD_TransferHeights = 2,
+	SD_Scroll = 4,
+	SD_ScrollY = 8,
+	SD_Polyobject = 16,
+	// UZDoom-only: a plane with a sector portal or a reflection (portal driver, plan M5.2). Never in the static cache.
+	SD_Portal = 32,
+};
+
+// Helion world events (src/rendering/helion/World/SectorUpdates.cpp). Raised from the
+// playsim/setters; the Helion static cache geometry renderer subscribes to them.
+// Plane indices are sector_t::floor / sector_t::ceiling; -1 means both planes.
+namespace Helion::World::SectorUpdates
+{
+	void SectorMoveStart(sector_t *sec, int pos);
+	void SectorMoveComplete(sector_t *sec, int pos);
+	void PlaneTransformed(sector_t *sec, int pos);
+	void PlaneTextureChanged(sector_t *sec, int pos, FTextureID newTexture, FTextureID previousTexture);
+	void SideTextureChanged(side_t *side, int which, FTextureID newTexture, FTextureID previousTexture);
+}
+
+// Per-sector state compared every frame by the Helion renderer to catch direct writes
+// that raised no event. Transient.
+struct FSectorRenderSignature
+{
+	double floorD, ceilD;
+	int floorTex, ceilTex;
+	int16_t light;
+	uint32_t color, fade;
+	float xoff[2], yoff[2], xscale[2], yscale[2], angle[2];
+};
+
+struct FSideRenderSignature
+{
+	int tex[3];
+	float xoff[3], yoff[3], xscale[3], yscale[3];
+	uint32_t flags;
+	int16_t light;
+};
 
 struct LightmapSurface;
 struct LightProbe;
@@ -728,6 +764,11 @@ struct sector_t
 
 	bool HasLightmaps = false;		// Sector has lightmaps, each subsector vertex needs its own unique lightmap UV data
 
+	// Helion render pipeline state (transient, not serialized).
+	// renderDynamic[plane] holds ESectorDynamic bits per plane (sector_t::floor / sector_t::ceiling), like Helion's SectorPlane.Dynamic.
+	uint8_t renderDynamic[2] = { 0, 0 };
+	FSectorRenderSignature renderSignature = {};
+
 	// Below are all properties which are not used by the renderer.
 
 	TObjPtr<AActor*> SoundTarget;
@@ -837,13 +878,13 @@ public:
 	void SetXOffset(int pos, double o)
 	{
 		planes[pos].xform.xOffs = o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	void AddXOffset(int pos, double o)
 	{
 		planes[pos].xform.xOffs += o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	double GetXOffset(int pos) const
@@ -854,13 +895,13 @@ public:
 	void SetYOffset(int pos, double o)
 	{
 		planes[pos].xform.yOffs = o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	void AddYOffset(int pos, double o)
 	{
 		planes[pos].xform.yOffs += o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	double GetYOffset(int pos, bool addbase = true) const
@@ -878,7 +919,7 @@ public:
 	void SetXScale(int pos, double o)
 	{
 		planes[pos].xform.xScale = o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	double GetXScale(int pos) const
@@ -889,7 +930,7 @@ public:
 	void SetYScale(int pos, double o)
 	{
 		planes[pos].xform.yScale = o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	double GetYScale(int pos) const
@@ -900,7 +941,7 @@ public:
 	void SetAngle(int pos, DAngle o)
 	{
 		planes[pos].xform.Angle = o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	DAngle GetAngle(int pos, bool addbase = true) const
@@ -919,7 +960,7 @@ public:
 	{
 		planes[pos].xform.baseyOffs = y;
 		planes[pos].xform.baseAngle = o;
-		LevelMesh_PlaneChanged(this, pos);
+		Helion::World::SectorUpdates::PlaneTransformed(this, pos);
 	}
 
 	void SetAlpha(int pos, double o)
@@ -972,13 +1013,11 @@ public:
 	void SetGlowHeight(int pos, float height)
 	{
 		planes[pos].GlowHeight = height;
-		LevelMesh_SectorChanged(this);
 	}
 
 	void SetGlowColor(int pos, PalEntry color)
 	{
 		planes[pos].GlowColor = color;
-		LevelMesh_SectorChanged(this);
 	}
 
 	FTextureID GetTexture(int pos) const
@@ -991,6 +1030,7 @@ public:
 		FTextureID old = planes[pos].Texture;
 		planes[pos].Texture = tex;
 		if (floorclip && pos == floor && tex != old) AdjustFloorClip();
+		if (tex != old) Helion::World::SectorUpdates::PlaneTextureChanged(this, pos, tex, old);
 	}
 
 	double GetPlaneTexZ(int pos) const
@@ -1025,13 +1065,11 @@ public:
 	void ChangeLightLevel(int newval)
 	{
 		lightlevel = ClampLight(lightlevel + newval);
-		LevelMesh_SectorChanged(this);
 	}
 
 	void SetLightLevel(int newval)
 	{
 		lightlevel = ClampLight(newval);
-		LevelMesh_SectorChanged(this);
 	}
 
 	int GetLightLevel() const
@@ -1091,7 +1129,6 @@ public:
 	{
 		SpecialColors[slot] = PalEntry(255, r, g, b);
 		if ((slot == sector_t::wallbottom || slot == sector_t::walltop) && SpecialColors[slot] != 0xffffffff) CheckExColorFlag();
-		LevelMesh_SectorColorsChanged(this);
 	}
 
 	void SetSpecialColor(int slot, PalEntry rgb)
@@ -1099,7 +1136,6 @@ public:
 		rgb.a = 255;
 		SpecialColors[slot] = rgb;
 		if ((slot == sector_t::wallbottom || slot == sector_t::walltop) && rgb != 0xffffffff) CheckExColorFlag();
-		LevelMesh_SectorColorsChanged(this);
 	}
 
 	void SetAdditiveColor(int slot, PalEntry rgb)
@@ -1107,7 +1143,6 @@ public:
 		rgb.a = 255;
 		AdditiveColors[slot] = rgb;
 		if ((slot == sector_t::walltop) && AdditiveColors[slot] != 0xffffffff) CheckExColorFlag(); // Wallbottom of this is not used.
-		LevelMesh_SectorColorsChanged(this);
 	}
 
 	// TextureFX parameters
@@ -1116,7 +1151,6 @@ public:
 	{
 		if (tm) planes[slot].TextureFx = *tm;	// this is for getting the data from a texture.
 		else planes[slot].TextureFx = {};
-		LevelMesh_SectorColorsChanged(this);
 	}
 
 
@@ -1147,6 +1181,7 @@ public:
 	void SetAllVerticesDirty()
 	{
 		SetVerticesDirty();
+		Helion::World::SectorUpdates::PlaneTransformed(this, -1);
 		for (unsigned i = 0; i < e->FakeFloor.Sectors.Size(); i++) e->FakeFloor.Sectors[i]->SetVerticesDirty();
 		for (unsigned i = 0; i < e->XFloor.attached.Size(); i++) e->XFloor.attached[i]->SetVerticesDirty();
 	}
@@ -1295,6 +1330,11 @@ struct side_t
 
 	int dithertranscount;
 
+	// Helion render pipeline state (transient, not serialized). ESectorDynamic bits.
+	uint8_t renderDynamic = 0;
+	FSideRenderSignature renderSignature = {};
+
+
 	int GetLightLevel (bool foggy, int baselight, int which, bool is3dlight=false, int *pfakecontrast_usedbygzdoom=NULL) const;
 	// Fake-contrast relative light of this side's line, smooth or classic variant (see GetLightLevel).
 	int GetFakeContrastRel(bool smooth) const;
@@ -1337,14 +1377,14 @@ struct side_t
 	}
 	void SetTexture(int which, FTextureID tex)
 	{
+		FTextureID old = textures[which].texture;
 		textures[which].texture = tex;
-		LevelMesh_SideChanged(this, which);
+		if (tex != old) Helion::World::SectorUpdates::SideTextureChanged(this, which, tex, old);
 	}
 
 	void SetTextureXOffset(int which, double offset)
 	{
 		textures[which].xOffset = offset;;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureXOffset(double offset)
@@ -1352,7 +1392,6 @@ struct side_t
 		textures[top].xOffset =
 		textures[mid].xOffset =
 		textures[bottom].xOffset = offset;
-		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureXOffset(int which) const
@@ -1363,13 +1402,11 @@ struct side_t
 	void AddTextureXOffset(int which, double delta)
 	{
 		textures[which].xOffset += delta;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYOffset(int which, double offset)
 	{
 		textures[which].yOffset = offset;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYOffset(double offset)
@@ -1377,7 +1414,6 @@ struct side_t
 		textures[top].yOffset =
 		textures[mid].yOffset =
 		textures[bottom].yOffset = offset;
-		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureYOffset(int which) const
@@ -1388,19 +1424,16 @@ struct side_t
 	void AddTextureYOffset(int which, double delta)
 	{
 		textures[which].yOffset += delta;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureXScale(int which, double scale)
 	{
 		textures[which].xScale = scale == 0 ? 1. : scale;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureXScale(double scale)
 	{
 		textures[top].xScale = textures[mid].xScale = textures[bottom].xScale = scale == 0 ? 1. : scale;
-		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureXScale(int which) const
@@ -1411,19 +1444,16 @@ struct side_t
 	void MultiplyTextureXScale(int which, double delta)
 	{
 		textures[which].xScale *= delta;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYScale(int which, double scale)
 	{
 		textures[which].yScale = scale == 0 ? 1. : scale;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureYScale(double scale)
 	{
 		textures[top].yScale = textures[mid].yScale = textures[bottom].yScale = scale == 0 ? 1. : scale;
-		LevelMesh_SideChanged(this, -1);
 	}
 
 	double GetTextureYScale(int which) const
@@ -1434,7 +1464,6 @@ struct side_t
 	void MultiplyTextureYScale(int which, double delta)
 	{
 		textures[which].yScale *= delta;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	int GetTextureFlags(int which)
@@ -1446,7 +1475,6 @@ struct side_t
 	{
 		textures[which].flags &= ~And;
 		textures[which].flags |= Or;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetSpecialColor(int which, int slot, int r, int g, int b, bool useown = true)
@@ -1455,7 +1483,6 @@ struct side_t
 		if (useown) textures[which].flags |= part::UseOwnSpecialColors;
 		else  textures[which].flags &= ~part::UseOwnSpecialColors;
 		Flags |= WALLF_EXTCOLOR;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetSpecialColor(int which, int slot, PalEntry rgb, bool useown = true)
@@ -1465,7 +1492,6 @@ struct side_t
 		if (useown) textures[which].flags |= part::UseOwnSpecialColors;
 		else  textures[which].flags &= ~part::UseOwnSpecialColors;
 		Flags |= WALLF_EXTCOLOR;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	// Note that the sector being passed in here may not be the actual sector this sidedef belongs to
@@ -1490,14 +1516,12 @@ struct side_t
 		{
 			textures[which].flags &= (~flag);
 		}
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetAdditiveColor(int which, PalEntry rgb)
 	{
 		rgb.a = 255;
 		textures[which].AdditiveColor = rgb;
-		LevelMesh_SideChanged(this, which);
 	}
 
 	void SetTextureFx(int slot, const TextureManipulation* tm)
@@ -1511,7 +1535,6 @@ struct side_t
 		{
 			textures[slot].TextureFx = {};
 		}
-		LevelMesh_SideChanged(this, slot);
 	}
 
 	PalEntry GetAdditiveColor(int which, sector_t *frontsector) const

@@ -89,6 +89,8 @@
 #include "fragglescript/t_script.h"
 
 #include "texturemanager.h"
+#include "rendering/helion/World/Blockmap/RenderBlockMap.h"
+#include "rendering/helion/Entrypoint.h"
 
 void STAT_StartNewGame(const char *lev);
 void STAT_ChangeLevel(const char *newl, FLevelLocals *Level);
@@ -1919,6 +1921,8 @@ FLevelLocals::~FLevelLocals()
 {
 	if (localEventManager) delete localEventManager;
 	if (aabbTree) delete aabbTree;
+	Helion_LevelDestroyed(this);
+	if (renderBlockmap) delete renderBlockmap;
 }
 
 //==========================================================================

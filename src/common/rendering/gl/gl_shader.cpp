@@ -69,7 +69,7 @@ bool IsShaderCacheActive()
 	return active;
 }
 
-static FString CalcProgramBinaryChecksum(const FString &vertex, const FString &fragment)
+static FString CalcProgramBinaryChecksum(const FString &vertex, const FString &fragment, const char *name = nullptr)
 {
 	const GLubyte *vendor = glGetString(GL_VENDOR);
 	const GLubyte *renderer = glGetString(GL_RENDERER);
@@ -81,6 +81,7 @@ static FString CalcProgramBinaryChecksum(const FString &vertex, const FString &f
 	md5.Update(renderer, (unsigned int)strlen((const char*)renderer));
 	md5.Update(version, (unsigned int)strlen((const char*)version));
 	md5.Update((const uint8_t *)vertex.GetChars(), (unsigned int)vertex.Len());
+	if (name) md5.Update((const uint8_t *)name, (unsigned int)strlen(name));
 	md5.Update((const uint8_t *)fragment.GetChars(), (unsigned int)fragment.Len());
 	md5.Final(digest);
 
@@ -173,11 +174,11 @@ static void SaveShaders()
 	}
 }
 
-TArray<uint8_t> LoadCachedProgramBinary(const FString &vertex, const FString &fragment, uint32_t &binaryFormat)
+TArray<uint8_t> LoadCachedProgramBinary(const FString &vertex, const FString &fragment, uint32_t &binaryFormat, const char *name = nullptr)
 {
 	LoadShaders();
 
-	auto it = ShaderCache.find(CalcProgramBinaryChecksum(vertex, fragment));
+	auto it = ShaderCache.find(CalcProgramBinaryChecksum(vertex, fragment, name));
 	if (it != ShaderCache.end())
 	{
 		binaryFormat = it->second->format;
@@ -190,9 +191,9 @@ TArray<uint8_t> LoadCachedProgramBinary(const FString &vertex, const FString &fr
 	}
 }
 
-void SaveCachedProgramBinary(const FString &vertex, const FString &fragment, const TArray<uint8_t> &binary, uint32_t binaryFormat)
+void SaveCachedProgramBinary(const FString &vertex, const FString &fragment, const TArray<uint8_t> &binary, uint32_t binaryFormat, const char *name = nullptr)
 {
-	auto &entry = ShaderCache[CalcProgramBinaryChecksum(vertex, fragment)];
+	auto &entry = ShaderCache[CalcProgramBinaryChecksum(vertex, fragment, name)];
 	entry.reset(new ProgramBinary());
 	entry->format = binaryFormat;
 	entry->data = binary;

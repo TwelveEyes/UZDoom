@@ -33,6 +33,7 @@
 #include "g_levellocals.h"
 #include "maploader/maploader.h"
 #include "p_spec_thinkers.h"
+#include "rendering/helion/World/Static/StaticDataApplier.h"
 
 IMPLEMENT_CLASS(DScroller, false, true)
 
@@ -78,6 +79,9 @@ void DScroller::Serialize(FSerializer &arc)
 		.Array("interpolations", m_Interpolations, 3);
 
 	if (arc.isReading() && m_Affect == 0) m_Affect = SCROLL_All;
+
+	// The render flags are not saved.
+	if (arc.isReading()) ApplyRenderFlags();
 }
 
 //-----------------------------------------------------------------------------
@@ -318,6 +322,33 @@ void DScroller::Construct (EScroll type, double dx, double dy,  sector_t *ctrl, 
 	default:
 		break;
 	}
+
+	ApplyRenderFlags();
+}
+
+void DScroller::ApplyRenderFlags()
+{
+	using namespace Helion::World::Static;
+	switch (m_Type)
+	{
+	case EScroll::sc_side:
+		if (m_Side != nullptr)
+			StaticDataApplier::SetSideScroll(m_Side, m_dy != 0 || m_Controller != nullptr || m_Accel != 0);
+		break;
+
+	case EScroll::sc_floor:
+		if (m_Sector != nullptr)
+			StaticDataApplier::SetSectorDynamic(m_Sector, SectorPlanes_Floor, SD_Scroll);
+		break;
+
+	case EScroll::sc_ceiling:
+		if (m_Sector != nullptr)
+			StaticDataApplier::SetSectorDynamic(m_Sector, SectorPlanes_Ceiling, SD_Scroll);
+		break;
+
+	default:
+		break;
+	}
 }
 
 void DScroller::OnDestroy ()
@@ -383,6 +414,8 @@ void DScroller::Construct(double dx, double dy, const line_t *l, sector_t * cont
 	{
 		m_Interpolations[2] = m_Side->SetInterpolation(side_t::bottom);
 	}
+
+	ApplyRenderFlags();
 }
 
 //-----------------------------------------------------------------------------

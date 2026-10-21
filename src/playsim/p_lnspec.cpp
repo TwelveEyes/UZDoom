@@ -3147,9 +3147,6 @@ FUNC(LS_TranslucentLine)
 		{
 			Printf ("Unknown translucency type used with TranslucentLine\n");
 		}
-		// The levelmesh draws opaque mid textures; a translucent one is the classic's.
-		for (auto side : Level->lines[linenum].sidedef)
-			if (side) LevelMesh_SideChanged(side, side_t::mid);
 	}
 
 	return true;
@@ -3431,8 +3428,6 @@ FUNC(LS_Sector_SetPlaneReflection)
 		sector_t * s = &Level->sectors[secnum];
 		if (!s->floorplane.isSlope()) s->reflect[sector_t::floor] = arg1 / 255.f;
 		if (!s->ceilingplane.isSlope()) Level->sectors[secnum].reflect[sector_t::ceiling] = arg2 / 255.f;
-		LevelMesh_PlaneChanged(s, sector_t::floor);
-		LevelMesh_PlaneChanged(s, sector_t::ceiling);
 	}
 
 	return true;

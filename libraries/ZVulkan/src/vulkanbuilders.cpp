@@ -1194,12 +1194,12 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::AddFragmentShader(VulkanShader
 	return *this;
 }
 
-GraphicsPipelineBuilder& GraphicsPipelineBuilder::AddVertexBufferBinding(int index, size_t stride)
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::AddVertexBufferBinding(int index, size_t stride, bool instanced)
 {
 	VkVertexInputBindingDescription desc = {};
 	desc.binding = index;
 	desc.stride = (uint32_t)stride;
-	desc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+	desc.inputRate = instanced ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX;
 	vertexInputBindings.push_back(desc);
 
 	vertexInputInfo.vertexBindingDescriptionCount = (uint32_t)vertexInputBindings.size();

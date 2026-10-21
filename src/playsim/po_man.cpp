@@ -37,6 +37,7 @@
 #include "g_levellocals.h"
 #include "actorinlines.h"
 #include "v_text.h"
+#include "rendering/helion/World/Static/StaticDataApplier.h"
 
 // TYPES -------------------------------------------------------------------
 
@@ -989,6 +990,8 @@ bool FPolyObj::RotatePolyobj (DAngle angle, bool fromsave)
 
 void FPolyObj::UnLinkPolyobj ()
 {
+	// Helion render blockmap: dynamic sides follow the polyobject
+	Helion::World::Static::StaticDataApplier::UnlinkPolyobjectSides(Sidedefs);
 	polyblock_t *link;
 	int i, j;
 	int index;
@@ -1153,6 +1156,8 @@ bool FPolyObj::CheckMobjBlocking (side_t *sd)
 
 void FPolyObj::LinkPolyobj ()
 {
+	// Helion render blockmap: polyobject sides are always dynamic and linked at their current position
+	Helion::World::Static::StaticDataApplier::LinkPolyobjectSides(Sidedefs);
 	polyblock_t **link;
 	polyblock_t *tempLink;
 	int bmapwidth = Level->blockmap.bmapwidth;

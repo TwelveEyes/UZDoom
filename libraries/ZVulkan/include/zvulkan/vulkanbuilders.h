@@ -392,7 +392,7 @@ public:
 	GraphicsPipelineBuilder& AddVertexShader(VulkanShader *shader);
 	GraphicsPipelineBuilder& AddFragmentShader(VulkanShader *shader);
 
-	GraphicsPipelineBuilder& AddVertexBufferBinding(int index, size_t stride);
+	GraphicsPipelineBuilder& AddVertexBufferBinding(int index, size_t stride, bool instanced = false);
 	GraphicsPipelineBuilder& AddVertexAttribute(int location, int binding, VkFormat format, size_t offset);
 
 	GraphicsPipelineBuilder& AddDynamicState(VkDynamicState state);

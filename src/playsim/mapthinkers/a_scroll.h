@@ -57,7 +57,9 @@ public:
 	bool AffectsWall (side_t * wall) const { return m_Side == wall; }
 	side_t *GetWall () const { return m_Side; }
 	sector_t *GetSector() const { return m_Sector; }
-	void SetRate (double dx, double dy) { m_dx = dx; m_dy = dy; }
+	void SetRate (double dx, double dy) { m_dx = dx; m_dy = dy; ApplyRenderFlags(); }
+	// Helion render pipeline: flag the affected side/sector planes as scrolling (transient, not serialized).
+	void ApplyRenderFlags();
 	bool IsType (EScroll type) const { return type == m_Type; }
 	EScrollPos GetScrollParts() const { return m_Parts; }
 

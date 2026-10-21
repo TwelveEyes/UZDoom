@@ -293,7 +293,7 @@ void AbCapture_FrameComposed ()
 	path.Format("%s/%s_%d.png", OutDir.GetChars(), MapName.GetChars(), AbCaptureTic);
 	M_ScreenShot(path.GetChars());
 	Printf(AbCapturePrint, "ABCAPTURE %s\n", path.GetChars());
-	// The rendered camera, for tools that reproject geometry onto the capture (lm_obj_compare.py).
+	// The rendered camera, for tools that reproject geometry onto the capture.
 	Printf(AbCapturePrint, "ABCAPTURE view %.6f %.6f %.6f yaw %.6f pitch %.6f\n", r_viewpoint.Pos.X, r_viewpoint.Pos.Y, r_viewpoint.Pos.Z,
 		r_viewpoint.Angles.Yaw.Degrees(), r_viewpoint.Angles.Pitch.Degrees());
 	if (r_ab_gamestate && CapturedLevel != nullptr)

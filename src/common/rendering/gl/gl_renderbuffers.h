@@ -138,6 +138,7 @@ public:
 	void BindSceneNormalTexture(int index);
 	void BindSceneDepthTexture(int index);
 	void BlitSceneToTexture();
+	void BlitSceneToFramebuffer(unsigned int fbo, int x, int y, int width, int height);
 
 	void BindCurrentTexture(int index, int filter = GL_NEAREST, int wrap = GL_CLAMP_TO_EDGE);
 	void BindCurrentFB();
@@ -164,6 +165,11 @@ public:
 
 	int GetSceneWidth() const { return mSceneWidth; }
 	int GetSceneHeight() const { return mSceneHeight; }
+
+	// Used by render programs (gl_renderprogram.cpp): render targets share the scene depth/stencil.
+	int GetSamples() const { return mSamples; }
+	GLuint GetSceneDepthStencilHandle(bool &isTexture) const { isTexture = mSceneUsesTextures; return mSceneUsesTextures ? mSceneDepthStencilTex.handle : mSceneDepthStencilBuf.handle; }
+	void RebindSceneFB() { BindSceneFB(mLastSceneData); }
 
 private:
 	void ClearScene();
@@ -212,6 +218,7 @@ private:
 	PPGLFrameBuffer mSceneFB;
 	PPGLFrameBuffer mSceneDataFB;
 	bool mSceneUsesTextures = false;
+	bool mLastSceneData = false;
 
 	// Effect/HUD buffers
 	PPGLTexture mPipelineTexture[NumPipelineTextures];

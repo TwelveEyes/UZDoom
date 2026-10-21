@@ -68,6 +68,7 @@
 #include "c_console.h"
 #include "p_spec_thinkers.h"
 #include "maploader/maploader.h"
+#include "rendering/helion/World/Static/StaticDataApplier.h"
 
 EXTERN_CVAR(Bool, forcewater)
 
@@ -692,6 +693,7 @@ void MapLoader::SpawnSpecials ()
 					sec->e->FakeFloor.Sectors.Push(&Level->sectors[s]);
 					Level->sectors[s].MoreFlags |= (sec->MoreFlags & SECMF_IGNOREHEIGHTSEC);	// copy this to the destination sector for easier checking.
 					Level->sectors[s].AdjustFloorClip();
+					Helion::World::Static::StaticDataApplier::SetSectorDynamic(&Level->sectors[s], Helion::World::Static::SectorPlanes_Both, SD_TransferHeights);
 				}
 				break;
 			}

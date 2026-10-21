@@ -38,6 +38,7 @@
 #include "maploader.h"
 #include "r_utility.h"
 #include "m_round.h"
+#include "rendering/helion/World/Static/StaticDataApplier.h"
 
 //==========================================================================
 //
@@ -370,6 +371,7 @@ void MapLoader::PrepareTransparentDoors(sector_t * sector)
 				{
 					sector->heightsec=nextsec;
 					sector->heightsec->MoreFlags=0;
+					Helion::World::Static::StaticDataApplier::SetSectorDynamic(sector, Helion::World::Static::SectorPlanes_Both, SD_TransferHeights);
 				}
 				sector->transdoor=false;
 			}

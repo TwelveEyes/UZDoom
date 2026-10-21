@@ -33,7 +33,6 @@
 #include "hw_bonebuffer.h"
 #include "hw_clock.h"
 #include "hw_lightbuffer.h"
-#include "hw_skydome.h"
 #include "hwrenderer/data/hw_viewpointbuffer.h"
 #include "m_png.h"
 #include "printf.h"
@@ -44,10 +43,9 @@
 #include "vulkan/renderer/vk_descriptorset.h"
 #include "vulkan/renderer/vk_postprocess.h"
 #include "vulkan/renderer/vk_raytrace.h"
-#include "vulkan/renderer/vk_levelmesh.h"
-#include "vulkan/renderer/vk_levelmeshrenderer.h"
 #include "vulkan/renderer/vk_renderpass.h"
 #include "vulkan/renderer/vk_renderstate.h"
+#include "vulkan/renderer/vk_renderprogram.h"
 #include "vulkan/shaders/vk_shader.h"
 #include "vulkan/system/vk_buffer.h"
 #include "vulkan/system/vk_commandbuffer.h"
@@ -117,9 +115,6 @@ VulkanRenderDevice::VulkanRenderDevice(void *hMonitor, bool fullscreen, std::sha
 {
 	VulkanDeviceBuilder builder;
 	builder.OptionalRayQuery();
-	// Levelmesh requirements (VkLevelMesh checks what was enabled).
-	builder.OptionalDescriptorIndexing();
-	builder.OptionalExtension(VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME);
 	builder.Surface(surface);
 	builder.SelectDevice(vk_device);
 	SupportedDevices = builder.FindDevices(surface->Instance);
@@ -131,7 +126,6 @@ VulkanRenderDevice::~VulkanRenderDevice()
 	vkDeviceWaitIdle(device->device); // make sure the GPU is no longer using any objects before RAII tears them down
 
 	delete mVertexData;
-	delete mSkyData;
 	delete mViewpoints;
 	delete mLights;
 	delete mBones;
@@ -145,8 +139,6 @@ VulkanRenderDevice::~VulkanRenderDevice()
 		mBufferManager->Deinit();
 	if (mShaderManager)
 		mShaderManager->Deinit();
-	mLevelMeshRenderer.reset();
-	mLevelMesh.reset();
 
 	mCommands->DeleteFrameObjects();
 }
@@ -190,11 +182,8 @@ void VulkanRenderDevice::InitializeState()
 	mDescriptorSetManager.reset(new VkDescriptorSetManager(this));
 	mRenderPassManager.reset(new VkRenderPassManager(this));
 	mRaytrace.reset(new VkRaytrace(this));
-	mLevelMesh.reset(new VkLevelMesh(this));
-	mLevelMeshRenderer.reset(new VkLevelMeshRenderer(this));
 
 	mVertexData = new FFlatVertexBuffer(GetWidth(), GetHeight());
-	mSkyData = new FSkyVertexBuffer;
 	mViewpoints = new HWViewpointBuffer;
 	mLights = new FLightBuffer();
 	mBones = new BoneBuffer();
@@ -221,7 +210,6 @@ void VulkanRenderDevice::Update()
 	twod->Clear();
 
 	mRenderState->EndRenderPass();
-	if (mLevelMeshRenderer) mLevelMeshRenderer->EndFrame();
 	mRenderState->EndFrame();
 
 	Flush3D.Unclock();
@@ -240,7 +228,13 @@ void VulkanRenderDevice::Update()
 
 bool VulkanRenderDevice::CompileNextShader()
 {
-	return mShaderManager->CompileNextShader();
+	if (!mTableShadersDone)
+	{
+		mTableShadersDone = mShaderManager->CompileNextShader();
+		if (!mTableShadersDone) return false;
+		return !(CompileNextExtraShader && ExtraShaderCount && ExtraShaderCount() > 0);
+	}
+	return CompileNextExtraShader ? CompileNextExtraShader() : true;
 }
 
 void VulkanRenderDevice::RenderTextureView(FCanvasTexture* tex, std::function<void(IntRect &)> renderFunc)
@@ -263,7 +257,9 @@ void VulkanRenderDevice::RenderTextureView(FCanvasTexture* tex, std::function<vo
 	bounds.width = min(tex->GetWidth(), image->Image->width);
 	bounds.height = min(tex->GetHeight(), image->Image->height);
 
+	mTextureViewImage = image;
 	renderFunc(bounds);
+	mTextureViewImage = nullptr;
 
 	mRenderState->EndRenderPass();
 
@@ -274,6 +270,65 @@ void VulkanRenderDevice::RenderTextureView(FCanvasTexture* tex, std::function<vo
 	mRenderState->SetRenderTarget(&GetBuffers()->SceneColor, GetBuffers()->SceneDepthStencil.View.get(), GetBuffers()->GetWidth(), GetBuffers()->GetHeight(), VK_FORMAT_R16G16B16A16_SFLOAT, GetBuffers()->GetSceneSamples());
 
 	tex->SetUpdated(true);
+}
+
+void VulkanRenderDevice::BlitSceneToTextureView(const IntRect& bounds)
+{
+	if (mTextureViewImage == nullptr || bounds.width <= 0 || bounds.height <= 0)
+		return;
+
+	mRenderState->EndRenderPass();
+
+	auto buffers = GetBuffers();
+	auto cmdbuffer = mCommands->GetDrawCommands();
+	VkTextureImage* source = &buffers->SceneColor;
+
+	// A multisampled scene is resolved into the first post process image first.
+	if (buffers->GetSceneSamples() != VK_SAMPLE_COUNT_1_BIT)
+	{
+		VkImageTransition()
+			.AddImage(&buffers->SceneColor, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, false)
+			.AddImage(&buffers->PipelineImage[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true)
+			.Execute(cmdbuffer);
+
+		VkImageResolve resolve = {};
+		resolve.srcOffset = { bounds.left, bounds.top, 0 };
+		resolve.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		resolve.srcSubresource.layerCount = 1;
+		resolve.dstOffset = { bounds.left, bounds.top, 0 };
+		resolve.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		resolve.dstSubresource.layerCount = 1;
+		resolve.extent = { (uint32_t)bounds.width, (uint32_t)bounds.height, 1 };
+		cmdbuffer->resolveImage(
+			buffers->SceneColor.Image->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			buffers->PipelineImage[0].Image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1, &resolve);
+		source = &buffers->PipelineImage[0];
+	}
+
+	VkImageTransition()
+		.AddImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, false)
+		.AddImage(mTextureViewImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, false)
+		.Execute(cmdbuffer);
+
+	VkImageBlit blit = {};
+	blit.srcOffsets[0] = { bounds.left, bounds.top, 0 };
+	blit.srcOffsets[1] = { bounds.left + bounds.width, bounds.top + bounds.height, 1 };
+	blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blit.srcSubresource.layerCount = 1;
+	blit.dstOffsets[0] = { 0, 0, 0 };
+	blit.dstOffsets[1] = { bounds.width, bounds.height, 1 };
+	blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blit.dstSubresource.layerCount = 1;
+	cmdbuffer->blitImage(
+		source->Image->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		mTextureViewImage->Image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		1, &blit, VK_FILTER_NEAREST);
+
+	VkImageTransition()
+		.AddImage(&buffers->SceneColor, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, false)
+		.AddImage(mTextureViewImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, false)
+		.Execute(cmdbuffer);
 }
 
 void VulkanRenderDevice::PostProcessScene(int fixedcm, float flash, const std::function<void()> &afterBloomDrawEndScene2D)
@@ -334,13 +389,49 @@ IDataBuffer *VulkanRenderDevice::CreateDataBuffer(int bindingpoint, bool ssbo, b
 	return GetBufferManager()->CreateDataBuffer(bindingpoint, ssbo, needsresize);
 }
 
+IRenderProgram *VulkanRenderDevice::CreateRenderProgram(const RenderProgramDesc &desc)
+{
+	return new VkRenderProgram(this, desc);
+}
+
+IDataBuffer *VulkanRenderDevice::CreateTexelBuffer(int format)
+{
+	return new VkTexelBuffer(this, format);
+}
+
+IHardwareTexture *VulkanRenderDevice::CreateTextureArray(int width, int height, int layers, int numchannels, bool integer, bool mipmap, const char *name)
+{
+	if (layers > GetMaxTextureArrayLayers())
+		I_FatalError("CreateTextureArray %s: %d layers requested, the device supports %d", name, layers, GetMaxTextureArrayLayers());
+	return new VkTextureArray(this, width, height, layers, numchannels, integer, mipmap, name);
+}
+
+IRenderTarget *VulkanRenderDevice::CreateRenderTarget(const RenderTargetDesc &desc)
+{
+	return new VkProgramRenderTarget(this, desc);
+}
+
+int VulkanRenderDevice::GetMaxTextureArrayLayers()
+{
+	return max((int)device->PhysicalDevice.Properties.Properties.limits.maxImageArrayLayers, 256);
+}
+
+void VulkanRenderDevice::DispatchCompute(IRenderProgram *prog, int gx, int gy, int gz)
+{
+	if (prog && prog->IsValid()) mRenderState->DispatchCompute(static_cast<VkRenderProgram*>(prog), gx, gy, gz);
+}
+
+void VulkanRenderDevice::MemoryBarrierCompute()
+{
+	mRenderState->MemoryBarrierCompute();
+}
+
 void VulkanRenderDevice::SetTextureFilterMode()
 {
 	if (mSamplerManager)
 	{
 		mDescriptorSetManager->ResetHWTextureSets();
 		mSamplerManager->ResetHWSamplers();
-		mLevelMesh->SamplersChanged();
 	}
 }
 
@@ -476,8 +567,6 @@ void VulkanRenderDevice::BeginFrame()
 	mSaveBuffers->BeginFrame(SAVEPICWIDTH, SAVEPICHEIGHT, SAVEPICWIDTH, SAVEPICHEIGHT);
 	mRenderState->BeginFrame();
 	mDescriptorSetManager->BeginFrame();
-	mLevelMesh->BeginFrame();
-	if (mLevelMeshRenderer) mLevelMeshRenderer->BeginFrame();
 }
 
 void VulkanRenderDevice::InitLightmap(int LMTextureSize, int LMTextureCount, TArray<uint16_t>& LMTextureData)
@@ -544,66 +633,6 @@ void VulkanRenderDevice::PrintStartupLog()
 void VulkanRenderDevice::SetLevelMesh(hwrenderer::LevelMesh* mesh)
 {
 	mRaytrace->SetLevelMesh(mesh);
-}
-
-bool VulkanRenderDevice::SupportsLevelMesh(bool report)
-{
-	return mLevelMesh && mLevelMesh->Supported(report);
-}
-
-void VulkanRenderDevice::SetLevelMeshData(const LevelMeshUploadData *data)
-{
-	if (mLevelMesh)
-		mLevelMesh->SetData(data);
-}
-
-size_t VulkanRenderDevice::UpdateLevelMeshState(const LevelMeshStateUpdate &update)
-{
-	return mLevelMesh ? mLevelMesh->UpdateState(update) : 0;
-}
-
-bool VulkanRenderDevice::LevelMeshResident(uint64_t id)
-{
-	return mLevelMesh && mLevelMesh->IsResident(id);
-}
-
-bool VulkanRenderDevice::LevelMeshTextureReady(int id)
-{
-	return !mLevelMesh || mLevelMesh->TextureReady(id);
-}
-
-bool VulkanRenderDevice::DrawLevelMesh(const LevelMeshView &view, FRenderState &state)
-{
-	// The main scene of the screen only (not the savegame picture buffers).
-	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get() || &state != mRenderState.get()) return false;
-	return mLevelMeshRenderer->Draw(view);
-}
-
-bool VulkanRenderDevice::DrawLevelMeshSky(uint32_t config, FRenderState &state)
-{
-	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get() || &state != mRenderState.get()) return false;
-	return mLevelMeshRenderer->DrawSky(config);
-}
-
-bool VulkanRenderDevice::GetLevelMeshStats(LevelMeshPerfStats &stats)
-{
-	if (!mLevelMeshRenderer || mLevelMeshRenderer->GetStats().serial == 0) return false;
-	stats = mLevelMeshRenderer->GetStats();
-	return true;
-}
-
-bool VulkanRenderDevice::LevelMeshVisibility(uint64_t levelId, uint64_t viewKey, LevelMeshReadback &out)
-{
-	out = {};
-	// The screen's views only (camera textures and save pictures never draw the levelmesh).
-	if (!mLevelMeshRenderer || mActiveRenderBuffers != mScreenBuffers.get()) return false;
-	return mLevelMeshRenderer->GetVisibility(levelId, viewKey, out);
-}
-
-void VulkanRenderDevice::PrintLevelMeshStats()
-{
-	if (mLevelMesh)
-		mLevelMesh->PrintStats();
 }
 
 void VulkanRenderDevice::UpdateShadowMap()

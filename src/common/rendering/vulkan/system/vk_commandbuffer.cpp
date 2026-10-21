@@ -202,7 +202,10 @@ void VkCommandBufferManager::DeleteFrameObjects(bool uploadOnly)
 {
 	TransferDeleteList = std::make_unique<DeleteList>();
 	if (!uploadOnly)
+	{
 		DrawDeleteList = std::make_unique<DeleteList>();
+		DeleteGeneration++;
+	}
 }
 
 void VkCommandBufferManager::PushGroup(const FString& name)

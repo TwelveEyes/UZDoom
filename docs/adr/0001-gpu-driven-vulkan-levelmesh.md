@@ -1,6 +1,6 @@
 # ADR 0001: GPU-driven levelmesh, Vulkan only
 
-Status: accepted (2026-10-11)
+Status: superseded by 0004 (2026-10-20)
 
 ## Context
 

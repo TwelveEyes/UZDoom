@@ -2,7 +2,7 @@
 
 **Map:** `../map.md`: Transitional strategy, Frame model (end state), Perf bars.
 **Type:** task
-**Status:** ready-for-agent
+**Status:** wontfix
 **Blocked by:** 11, 13, 16, 18, 19, 22
 
 ## What to build
@@ -75,3 +75,4 @@ Afterwards, the levelmesh render-CPU window must be independent of level size.
   sees the main view's depth before the portals draw, so geometry the levelmesh draws behind a
   line portal (covered later by the portal's stencil) is exposed too; with the walk gone the
   levelmesh will have to stop at portal lines anyway.
+- 2026-10-20 (wontfix): superseded by .scratch/helion-render (ADR 0004).

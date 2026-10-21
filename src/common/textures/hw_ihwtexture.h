@@ -43,6 +43,11 @@ public:
 	virtual void AllocateBuffer(int w, int h, int texelsize) = 0;
 	virtual uint8_t *MapBuffer() = 0;
 	virtual unsigned int CreateTexture(unsigned char * buffer, int w, int h, int texunit, bool mipmap, const char *name) = 0;
+	// Array textures created by DFrameBuffer::CreateTextureArray: uploads one layer (w/h <= array size,
+	// placed at the layer's origin). Call GenerateMipmaps() once after the last upload when the array was created with mipmap.
+	virtual void UploadLayer(int layer, const unsigned char *buffer, int w, int h) {}
+	// Generates the mip chain of an array texture after all UploadLayer calls (UploadLayer itself never generates mipmaps).
+	virtual void GenerateMipmaps() {}
 
 	void Resize(int swidth, int sheight, int width, int height, unsigned char *src_data, unsigned char *dst_data);
 

@@ -1,6 +1,6 @@
 # ADR 0002: A/B acceptance with tolerance and delta classes
 
-Status: accepted (2026-10-11)
+Status: superseded by 0004 (2026-10-20)
 
 ## Context
 

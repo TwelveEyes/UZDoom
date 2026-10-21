@@ -4131,9 +4131,6 @@ msgstr ""
 msgid "GLMNU_DYNLIGHT"
 msgstr ""
 
-msgid "GLTEXMNU_SORTDRAWLIST"
-msgstr ""
-
 msgid "GLLIGHTMNU_TITLE"
 msgstr ""
 
@@ -4183,6 +4180,57 @@ msgid "GLPREFMNU_SPRBILLFACECAMERA"
 msgstr ""
 
 msgid "GLPREFMNU_PARTICLESTYLE"
+msgstr ""
+
+msgid "GLPREFMNU_COLORMODE"
+msgstr ""
+
+msgid "OPTVAL_TRUECOLOR"
+msgstr ""
+
+msgid "GLPREFMNU_RENDERMODE"
+msgstr ""
+
+msgid "OPTVAL_STATICBLOCKMAP"
+msgstr ""
+
+msgid "OPTVAL_BSPWALK"
+msgstr ""
+
+msgid "OPTVAL_ADAPTIVE"
+msgstr ""
+
+msgid "GLPREFMNU_RENDERMODE_TIMETHRESHOLD"
+msgstr ""
+
+msgid "GLPREFMNU_RENDERMODE_HYSTERESIS"
+msgstr ""
+
+msgid "GLPREFMNU_RENDERMODE_SEGTHRESHOLD"
+msgstr ""
+
+msgid "GLPREFMNU_RENDERMODE_TIMEWINDOW"
+msgstr ""
+
+msgid "GLPREFMNU_VANILLARENDER"
+msgstr ""
+
+msgid "GLPREFMNU_VANILLADOWNSCALE"
+msgstr ""
+
+msgid "GLPREFMNU_PIXELGAPCORRECTION"
+msgstr ""
+
+msgid "GLPREFMNU_FUZZAMOUNT"
+msgstr ""
+
+msgid "GLPREFMNU_ALTINVULNOVERLAY"
+msgstr ""
+
+msgid "GLPREFMNU_ALTINVULNCOLOR"
+msgstr ""
+
+msgid "GLPREFMNU_EMULATEINVULNCOLORMAP"
 msgstr ""
 
 msgid "GLPREFMNU_VRMODE"
@@ -4849,9 +4897,6 @@ msgid "TAG_CYELLOWKEY"
 msgstr ""
 
 msgid "TAG_CREDKEY"
-msgstr ""
-
-msgid "GLPREFMNU_WPNPURELIGHT"
 msgstr ""
 
 msgid "NET_CONTINUE_MKB"

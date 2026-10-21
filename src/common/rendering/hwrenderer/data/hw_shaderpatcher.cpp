@@ -300,11 +300,7 @@ const FDefaultShader defaultshaders[] =
 
 const FEffectShader effectshaders[] =
 {
-	{ "fogboundary", "shaders/glsl/main.vp", "shaders/glsl/fogboundary.fp", nullptr, nullptr, "#define NO_ALPHATEST\n" },
-	{ "spheremap", "shaders/glsl/main.vp", "shaders/glsl/main.fp", "shaders/glsl/func_normal.fp", "shaders/glsl/material_normal.fp", "#define SPHEREMAP\n#define NO_ALPHATEST\n" },
 	{ "burn", "shaders/glsl/main.vp", "shaders/glsl/burn.fp", nullptr, nullptr, "#define SIMPLE\n#define NO_ALPHATEST\n" },
-	{ "stencil", "shaders/glsl/main.vp", "shaders/glsl/stencil.fp", nullptr, nullptr, "#define SIMPLE\n#define NO_ALPHATEST\n" },
-	{ "dithertrans", "shaders/glsl/main.vp", "shaders/glsl/main.fp", "shaders/glsl/func_normal.fp", "shaders/glsl/material_normal.fp", "#define NO_ALPHATEST\n#define DITHERTRANS\n" },
 };
 
 namespace ShaderInputsOutputs
@@ -326,11 +322,7 @@ namespace ShaderInputsOutputs
 		0, //MATSHADER_NoiseFuzz
 		0, //MATSHADER_SmoothNoiseFuzz
 		0, //MATSHADER_SoftwareFuzz
-		0, //EFFSHADER_FogBoundary
-		0, //EFFSHADER_SphereMap
 		ShaderProperty::Simple, //EFFSHADER_Burn
-		ShaderProperty::Simple, //EFFSHADER_Stencil
-		0, //EFFSHADER_Dithertrans
 	};
 
 	TArray<ShaderIOEntry> ShaderFields
@@ -401,10 +393,13 @@ namespace ShaderInputsOutputs
 	}
 }
 
+int (*DFrameBuffer::ExtraShaderCount)() = nullptr;
+bool (*DFrameBuffer::CompileNextExtraShader)() = nullptr;
+
 int DFrameBuffer::GetShaderCount()
 {
 	int i;
 	for (i = 0; defaultshaders[i].ShaderName != nullptr; i++);
 
-	return MAX_PASS_TYPES * (countof(defaultshaders) - 1 + usershaders.Size() + MAX_EFFECTS + SHADER_NoTexture);
+	return MAX_PASS_TYPES * (countof(defaultshaders) - 1 + usershaders.Size() + MAX_EFFECTS + SHADER_NoTexture) + (ExtraShaderCount ? ExtraShaderCount() : 0);
 }

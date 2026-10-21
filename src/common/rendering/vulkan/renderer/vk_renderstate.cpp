@@ -29,8 +29,8 @@
 #include "vulkan/renderer/vk_descriptorset.h"
 #include "vulkan/textures/vk_renderbuffers.h"
 #include "vulkan/textures/vk_hwtexture.h"
+#include "vulkan/renderer/vk_renderprogram.h"
 
-#include "hw_skydome.h"
 #include "hw_viewpointuniforms.h"
 #include "hw_lightbuffer.h"
 #include "hw_cvars.h"
@@ -57,6 +57,13 @@ void VkRenderState::ClearScreen()
 
 void VkRenderState::Draw(int dt, int index, int count, bool apply)
 {
+	if (mProgram)
+	{
+		if (ApplyProgram(dt)) mCommandBuffer->draw(count, 1, index, 0);
+		return;
+	}
+	if (mInProgramMode) LeaveProgramMode();
+
 	if (apply || mNeedApply)
 		Apply(dt);
 
@@ -65,6 +72,13 @@ void VkRenderState::Draw(int dt, int index, int count, bool apply)
 
 void VkRenderState::DrawIndexed(int dt, int index, int count, bool apply)
 {
+	if (mProgram)
+	{
+		if (ApplyProgram(dt)) mCommandBuffer->drawIndexed(count, 1, index, 0, 0);
+		return;
+	}
+	if (mInProgramMode) LeaveProgramMode();
+
 	if (apply || mNeedApply)
 		Apply(dt);
 
@@ -134,7 +148,8 @@ void VkRenderState::EnableClipDistance(int num, bool state)
 
 void VkRenderState::Clear(int targets)
 {
-	mClearTargets = targets;
+	// Accumulate: a clear that has not begun its render pass yet must not lose an earlier pending one (GL clears immediately).
+	mClearTargets |= targets;
 	EndRenderPass();
 }
 
@@ -180,6 +195,8 @@ void VkRenderState::EnableLineSmooth(bool on)
 
 void VkRenderState::Apply(int dt)
 {
+	if (mInProgramMode) LeaveProgramMode();
+
 	drawcalls.Clock();
 
 	mApplyCount++;
@@ -286,10 +303,10 @@ void VkRenderState::ApplyScissor()
 		VkRect2D scissor;
 		if (mScissorWidth >= 0)
 		{
-			int x0 = clamp(mScissorX, 0, mRenderTarget.Width);
-			int y0 = clamp(mScissorY, 0, mRenderTarget.Height);
-			int x1 = clamp(mScissorX + mScissorWidth, 0, mRenderTarget.Width);
-			int y1 = clamp(mScissorY + mScissorHeight, 0, mRenderTarget.Height);
+			int x0 = clamp(mScissorX, 0, ProgramTargetWidth());
+			int y0 = clamp(mScissorY, 0, ProgramTargetHeight());
+			int x1 = clamp(mScissorX + mScissorWidth, 0, ProgramTargetWidth());
+			int y1 = clamp(mScissorY + mScissorHeight, 0, ProgramTargetHeight());
 
 			scissor.offset.x = x0;
 			scissor.offset.y = y0;
@@ -300,8 +317,8 @@ void VkRenderState::ApplyScissor()
 		{
 			scissor.offset.x = 0;
 			scissor.offset.y = 0;
-			scissor.extent.width = mRenderTarget.Width;
-			scissor.extent.height = mRenderTarget.Height;
+			scissor.extent.width = ProgramTargetWidth();
+			scissor.extent.height = ProgramTargetHeight();
 		}
 		mCommandBuffer->setScissor(0, 1, &scissor);
 		mScissorChanged = false;
@@ -324,8 +341,8 @@ void VkRenderState::ApplyViewport()
 		{
 			viewport.x = 0.0f;
 			viewport.y = 0.0f;
-			viewport.width = (float)mRenderTarget.Width;
-			viewport.height = (float)mRenderTarget.Height;
+			viewport.width = (float)ProgramTargetWidth();
+			viewport.height = (float)ProgramTargetHeight();
 		}
 		viewport.minDepth = mViewportDepthMin;
 		viewport.maxDepth = mViewportDepthMax;
@@ -472,6 +489,8 @@ void VkRenderState::WaitForStreamBuffers()
 {
 	fb->WaitForCommands(false);
 	mApplyCount = 0;
+	mProgramUniformRingPos = 0;
+	mProgramSet = nullptr;
 	mStreamBufferWriter.Reset();
 	mMatrixBufferWriter.Reset();
 }
@@ -498,6 +517,11 @@ void VkRenderState::EndRenderPass()
 		mCommandBuffer->endRenderPass();
 		mCommandBuffer = nullptr;
 		mPipelineKey = {};
+		mLastProgramPipeline = nullptr;
+		mProgramSet = nullptr;
+		mProgramSetProgram = nullptr;
+		mProgramLastVB = nullptr;
+		mProgramLastInstanceVB = nullptr;
 
 		mLastViewpointOffset = 0xffffffff;
 		mLastVertexBuffer = nullptr;
@@ -506,21 +530,6 @@ void VkRenderState::EndRenderPass()
 		mLastTextureMatrixEnabled = true;
 	}
 }
-
-//==========================================================================
-//
-// External pipelines (the levelmesh)
-//
-// An external pipeline layout must be compatible with the classic one for
-// sets 0 (fixed) and 1 (HW buffers) and the push constant range. The classic
-// per-draw state (stream data, matrices, viewport, scissor, stencil
-// reference, depth bias, push constants) is applied as for a classic draw,
-// then the caller binds its own pipeline and remaining sets. Compute work
-// between external draws ends the render pass with EndRenderPass(); the next
-// BeginExternalDraw (or classic Apply) resumes it with the attachments
-// loaded. The first pass of a scene consumes the pending clear.
-//
-//==========================================================================
 
 VkRenderPassSetup *VkRenderState::GetRenderPassSetup()
 {
@@ -532,82 +541,9 @@ VkRenderPassSetup *VkRenderState::GetRenderPassSetup()
 	return fb->GetRenderPassManager()->GetRenderPass(key);
 }
 
-VkRenderState::ExternalTarget VkRenderState::GetExternalTarget()
-{
-	ExternalTarget t;
-	t.renderPass = GetRenderPassSetup()->GetRenderPass(0);
-	t.drawBuffers = mRenderTarget.DrawBuffers;
-	t.samples = mRenderTarget.Samples;
-	t.depthStencil = mRenderTarget.DepthStencil != nullptr;
-	t.depthStencilView = mRenderTarget.DepthStencil;
-	if (mViewportWidth >= 0)
-	{
-		t.x = mViewportX;
-		t.y = mViewportY;
-		t.width = mViewportWidth;
-		t.height = mViewportHeight;
-	}
-	else
-	{
-		t.x = 0;
-		t.y = 0;
-		t.width = mRenderTarget.Width;
-		t.height = mRenderTarget.Height;
-	}
-	t.depthTest = mDepthTest;
-	t.depthWrite = mDepthTest && mDepthWrite;
-	t.depthFunc = mDepthFunc;
-	t.depthClamp = mDepthClamp;
-	t.stencilTest = mStencilTest;
-	t.stencilOp = mStencilOp;
-	t.colorMask = mColorMask;
-	return t;
-}
-
-VulkanCommandBuffer *VkRenderState::BeginExternalDraw(VulkanPipelineLayout *layout, PushConstants &pc)
-{
-	drawcalls.Clock();
-	ApplyStreamData();
-	ApplyMatrices();
-
-	if (!mCommandBuffer)
-	{
-		mCommandBuffer = fb->GetCommands()->GetDrawCommands();
-		BeginRenderPass(mCommandBuffer);
-	}
-	mScissorChanged = true;
-	mViewportChanged = true;
-	mStencilRefChanged = true;
-	mBias.mChanged = true;
-	ApplyScissor();
-	ApplyViewport();
-	ApplyStencilRef();
-	ApplyDepthBias();
-
-	FillPushConstants();
-	pc = mPushConstants;
-
-	uint32_t offsets[3] = { mViewpointOffset, mMatrixBufferWriter.Offset(), mStreamBufferWriter.StreamDataOffset() };
-	auto descriptors = fb->GetDescriptorSetManager();
-	mCommandBuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, descriptors->GetFixedDescriptorSet());
-	mCommandBuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, descriptors->GetHWBufferDescriptorSet(), 3, offsets);
-	drawcalls.Unclock();
-	return mCommandBuffer;
-}
-
-void VkRenderState::EndExternalDraw()
-{
-	// Everything the external pipeline may have replaced is rebound by the next Apply.
-	mPipelineKey = {};
-	mLastViewpointOffset = 0xffffffff;
-	mLastVertexBuffer = nullptr;
-	mLastIndexBuffer = nullptr;
-	mMaterial.mChanged = true;
-	mNeedApply = true;
-}
-
 void VkRenderState::EndFrame()
 {
+	mProgramUniformRingPos = 0;
 	mMatrixBufferWriter.Reset();
 	mStreamBufferWriter.Reset();
 }
@@ -624,6 +560,7 @@ void VkRenderState::EnableDrawBuffers(int count, bool apply)
 void VkRenderState::SetRenderTarget(VkTextureImage *image, VulkanImageView *depthStencilView, int width, int height, VkFormat format, VkSampleCountFlagBits samples)
 {
 	EndRenderPass();
+	mUserTarget = nullptr;
 
 	mRenderTarget.Image = image;
 	mRenderTarget.DepthStencil = depthStencilView;
@@ -635,6 +572,23 @@ void VkRenderState::SetRenderTarget(VkTextureImage *image, VulkanImageView *dept
 
 void VkRenderState::BeginRenderPass(VulkanCommandBuffer *cmdbuffer)
 {
+	if (mUserTarget)
+	{
+		BeginProgramTargetRenderPass(cmdbuffer);
+		return;
+	}
+
+	// The scene depth may have been transitioned for sampling by a render program
+	if (mSceneDepthSampled)
+	{
+		PipelineBarrier()
+			.AddImage(fb->GetBuffers()->SceneDepthStencil.Image.get(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+				VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+				VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)
+			.Execute(cmdbuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+		mSceneDepthSampled = false;
+	}
+
 	VkRenderPassKey key = {};
 	key.DrawBufferFormat = mRenderTarget.Format;
 	key.Samples = mRenderTarget.Samples;
@@ -669,7 +623,11 @@ void VkRenderState::BeginRenderPass(VulkanCommandBuffer *cmdbuffer)
 	beginInfo.RenderPass(mPassSetup->GetRenderPass(mClearTargets));
 	beginInfo.RenderArea(0, 0, mRenderTarget.Width, mRenderTarget.Height);
 	beginInfo.Framebuffer(framebuffer.get());
-	beginInfo.AddClearColor(screen->mSceneClearColor[0], screen->mSceneClearColor[1], screen->mSceneClearColor[2], screen->mSceneClearColor[3]);
+	if (mClearColorCustom)
+		beginInfo.AddClearColor(mClearColor[0], mClearColor[1], mClearColor[2], mClearColor[3]);
+	else
+		beginInfo.AddClearColor(screen->mSceneClearColor[0], screen->mSceneClearColor[1], screen->mSceneClearColor[2], screen->mSceneClearColor[3]);
+	mClearColorCustom = false;
 	if (key.DrawBuffers > 1)
 		beginInfo.AddClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 	if (key.DrawBuffers > 2)
@@ -685,6 +643,11 @@ void VkRenderState::BeginRenderPass(VulkanCommandBuffer *cmdbuffer)
 
 void VkRenderStateMolten::Draw(int dt, int index, int count, bool apply)
 {
+	if (mProgram)
+	{
+		VkRenderState::Draw(dt, index, count, apply);
+		return;
+	}
 	if (dt == DT_TriangleFan)
 	{
 		IIndexBuffer *oldIndexBuffer = mIndexBuffer;

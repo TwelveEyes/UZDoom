@@ -30,6 +30,8 @@ namespace OpenGLRenderer
 {
 
 class FShader;
+class GLRenderProgram;
+class GLRenderTarget;
 struct HWSectorPlane;
 
 class FGLRenderState final : public FRenderState
@@ -67,8 +69,32 @@ class FGLRenderState final : public FRenderState
 	int mCurrentVertexOffsets[2];	// one per binding point
 	IIndexBuffer *mCurrentIndexBuffer;
 
+	// Render program mode (hw_renderprogram.h)
+	bool mInProgramMode = false;
+	bool mProgramBlendActive = false;
+	bool mProgramBufferSetupValid = false;
+	IVertexBuffer *mProgramVertexBuffer = nullptr;
+	IVertexBuffer *mProgramInstanceBuffer = nullptr;
+	int mProgramVertexOffset = 0, mProgramInstanceOffset = 0;
+	GLRenderProgram *mProgramBound = nullptr;
+	IRenderTarget *mCurrentRenderTarget = nullptr;
+	unsigned int mUniformRing = 0;
+	size_t mUniformRingSize = 0, mUniformRingPos = 0;
+	unsigned int mSceneCopyTex = 0, mSceneCopyFBO = 0;
+	int mSceneCopyWidth = 0, mSceneCopyHeight = 0;
+
+	void ApplyProgram();
+	void ApplyProgramGraphicsState();
+	void ApplyProgramVertexSetup(GLRenderProgram *prog);
+	void ApplyProgramBlend();
+	void LeaveProgramMode();
+	void StreamProgramUniforms(int glBinding, const void *data, size_t size);
+	void BindSceneCopy(int unit);
 
 public:
+
+	// Binds all resources of the program's bindings (graphics and compute).
+	void ApplyProgramResources(GLRenderProgram *prog);
 
 	FGLRenderState()
 	{
@@ -93,6 +119,7 @@ public:
 		// forces rebinding with the next 'apply' call.
 		mCurrentVertexBuffer = nullptr;
 		mCurrentIndexBuffer = nullptr;
+		mProgramBufferSetupValid = false;
 	}
 
 	void SetSpecular(float glossiness, float specularLevel)
@@ -134,6 +161,13 @@ public:
 	void EnableDepthTest(bool on) override;
 	void EnableMultisampling(bool on) override;
 	void EnableLineSmooth(bool on) override;
+
+	void OnSetProgram(IRenderProgram *prog) override;
+	void SetRenderTarget(IRenderTarget *target) override;
+	void ClearRenderTarget(float r, float g, float b, float a) override;
+	void CopySceneColor() override;
+	void DrawInstanced(int dt, int index, int count, int instanceCount) override;
+	void DrawIndexedInstanced(int dt, int index, int count, int instanceCount) override;
 
 
 };

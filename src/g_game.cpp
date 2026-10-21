@@ -52,7 +52,7 @@
 #include "gi.h"
 #include "gstrings.h"
 #include "hu_stuff.h"
-#include "hwrenderer/scene/hw_drawinfo.h"
+#include "rendering/helion/Entrypoint.h"
 #include "i_interface.h"
 #include "i_system.h"
 #include "i_time.h"

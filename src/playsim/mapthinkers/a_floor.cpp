@@ -882,6 +882,7 @@ void DElevator::Construct(sector_t *sec)
 	sec->ceilingdata = this;
 	m_Interp_Floor = sec->SetInterpolation(sector_t::FloorMove, true);
 	m_Interp_Ceiling = sec->SetInterpolation(sector_t::CeilingMove, true);
+	RenderMoveStart((1 << sector_t::floor) | (1 << sector_t::ceiling));
 }
 
 void DElevator::Serialize(FSerializer &arc)
@@ -1280,6 +1281,7 @@ void DFloorWaggle::Construct(sector_t *sec)
 	Super::Construct(sec);
 	sec->floordata = this;
 	interpolation = sec->SetInterpolation(sector_t::FloorMove, true);
+	RenderMoveStart(1 << sector_t::floor);
 }
 
 void DFloorWaggle::Tick ()
@@ -1298,6 +1300,7 @@ void DCeilingWaggle::Construct(sector_t *sec)
 	Super::Construct(sec);
 	sec->ceilingdata = this;
 	interpolation = sec->SetInterpolation(sector_t::CeilingMove, true);
+	RenderMoveStart(1 << sector_t::ceiling);
 }
 
 void DCeilingWaggle::Tick ()

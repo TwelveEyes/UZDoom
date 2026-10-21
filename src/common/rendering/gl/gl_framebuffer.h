@@ -40,6 +40,7 @@ class OpenGLFrameBuffer : public SystemGLFrameBuffer
 	typedef SystemGLFrameBuffer Super;
 
 	void RenderTextureView(FCanvasTexture* tex, std::function<void(IntRect &)> renderFunc) override;
+	void BlitSceneToTextureView(const IntRect& bounds) override;
 
 public:
 
@@ -72,6 +73,15 @@ public:
 	IVertexBuffer *CreateVertexBuffer() override;
 	IIndexBuffer *CreateIndexBuffer() override;
 	IDataBuffer *CreateDataBuffer(int bindingpoint, bool ssbo, bool needsresize) override;
+
+	IRenderProgram *CreateRenderProgram(const RenderProgramDesc &desc) override;
+	IDataBuffer *CreateTexelBuffer(int format) override;
+	IHardwareTexture *CreateTextureArray(int width, int height, int layers, int numchannels, bool integer, bool mipmap, const char *name) override;
+	IRenderTarget *CreateRenderTarget(const RenderTargetDesc &desc) override;
+	int GetMaxTextureArrayLayers() override;
+	bool SupportsCompute() override;
+	void DispatchCompute(IRenderProgram *prog, int gx, int gy, int gz) override;
+	void MemoryBarrierCompute() override;
 
 	void InitLightmap(int LMTextureSize, int LMTextureCount, TArray<uint16_t>& LMTextureData) override;
 
