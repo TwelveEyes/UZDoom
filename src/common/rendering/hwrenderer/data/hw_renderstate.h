@@ -221,6 +221,14 @@ struct StreamData
 	FVector4 padding1, padding2, padding3;
 };
 
+// Ticket 19: how a draw consumes its levelmesh light list (lm_lights.glsl).
+enum ELightListConsumer
+{
+	LMLC_ACTOR = 1,			// actor rules (ShouldLightActor) instead of surface rules (plane side, DontLightMap)
+	LMLC_FORCEATTEN = 2,	// every light attenuated (AddLightToList's forceAttenuate: models)
+	LMLC_POINT = 4,			// evaluated once by the vertex stage at uLightOrigin (GetDynSpriteLight)
+};
+
 class FRenderState
 {
 protected:
@@ -234,6 +242,11 @@ protected:
 	uint8_t mBrightmapEnabled : 1;
 
 	int mLightIndex;
+	// Ticket 19: the levelmesh dynamic light list (Vulkan; ignored by GL).
+	int mLightOwner;
+	int mLightConsumer;
+	int mLightActor;
+	FVector3 mLightOrigin;
 	int mBoneIndexBase;
 	int mSpecialEffect;
 	int mTextureMode;
@@ -296,6 +309,7 @@ public:
 		mLightParms[3] = -1.f;
 		mSpecialEffect = EFF_NONE;
 		mLightIndex = -1;
+		ClearLightOwner();
 		mBoneIndexBase = -1;
 		mStreamData.uInterpolationFactor = 0;
 		mRenderStyle = DefaultRenderStyle();
@@ -585,6 +599,24 @@ public:
 	void SetLightIndex(int index)
 	{
 		mLightIndex = index;
+	}
+
+	// Ticket 19: draw with a levelmesh light list (lm_lights.glsl): owner =
+	// side index, numSides + section index, or an inline list
+	// (LevelMesh_InlineLightList); consumer = LMLC_*; actor = the drawn
+	// actor's LevelMesh_ActorId; origin = the LMLC_POINT evaluation point
+	// (GL order x, z, y).
+	void SetLightOwner(int owner, int consumer = 0, int actor = 0, FVector3 origin = { 0, 0, 0 })
+	{
+		mLightOwner = owner;
+		mLightConsumer = consumer;
+		mLightActor = actor;
+		mLightOrigin = origin;
+	}
+
+	void ClearLightOwner()
+	{
+		SetLightOwner(-1);
 	}
 
 	void SetBoneIndexBase(int index)

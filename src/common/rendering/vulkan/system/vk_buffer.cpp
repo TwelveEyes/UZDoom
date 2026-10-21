@@ -24,6 +24,8 @@
 #include "vk_hwbuffer.h"
 #include "vulkan/renderer/vk_streambuffer.h"
 #include "hwrenderer/data/shaderuniforms.h"
+#include "vk_renderdevice.h"
+#include <zvulkan/vulkanbuilders.h>
 
 VkBufferManager::VkBufferManager(VulkanRenderDevice* fb) : fb(fb)
 {
@@ -39,10 +41,17 @@ void VkBufferManager::Init()
 	StreamBuffer.reset(new VkStreamBuffer(this, sizeof(StreamUBO), 300));
 
 	CreateFanToTrisIndexBuffer();
+
+	NullSSBO = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+		.Size(16)
+		.DebugName("VkBufferManager.NullSSBO")
+		.Create(fb->device.get());
 }
 
 void VkBufferManager::Deinit()
 {
+	NullSSBO.reset();
 	while (!Buffers.empty())
 		RemoveBuffer(Buffers.back());
 }

@@ -51,6 +51,12 @@ void HWDecal::DrawDecal(HWDrawInfo *di, FRenderState &state)
 	state.SetObjectColor(DecalColor);
 
 	state.SetLightIndex(dynlightindex);
+	// The wall's levelmesh light list (ticket 19), with the surface rules.
+	if (lightOwner != -1)
+	{
+		state.SetLightIndex(-1);
+		state.SetLightOwner(lightOwner);
+	}
 
 	// add light probe contribution
 	if (di->Level->LightProbes.Size() > 0)
@@ -121,6 +127,7 @@ void HWDecal::DrawDecal(HWDrawInfo *di, FRenderState &state)
 	state.SetObjectColor(0xffffffff);
 	state.SetFog(fc, -1);
 	state.SetDynLight(0, 0, 0);
+	state.ClearLightOwner();
 }
 
 //==========================================================================
@@ -390,12 +397,14 @@ void HWWall::ProcessDecal(HWDrawInfo *di, DBaseDecal *decal, const FVector3 &nor
 		gldecal->lightlevel = 255;
 		gldecal->rellight = 0;
 		gldecal->dynlightindex = -1;
+		gldecal->lightOwner = -1;
 	}
 	else
 	{
 		gldecal->lightlevel = lightlevel;
 		gldecal->rellight = rellight + getExtraLight();
 		gldecal->dynlightindex = dynlightindex;
+		gldecal->lightOwner = LightOwner(di);
 	}
 
 	gldecal->Colormap = Colormap;

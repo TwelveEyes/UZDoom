@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 
 #include "hw_levelmeshbake.h"
 #include "g_levellocals.h"
@@ -602,6 +603,29 @@ void LevelMeshClusters_Build(FLevelLocals *Level, LevelMeshBake *bake, int budge
 		b.Bake = bake;
 		b.Budget = bake->ClusterStats.budget;
 		b.Build();
+	}
+	// Ticket 19: the cluster whose refined light list a flat reads, if all
+	// its triangles are in that one cluster (the refine tests the cluster's
+	// box); other surfaces read their owner list.
+	{
+		TArray<uint8_t> listed(bake->Surfaces.Size(), true);
+		memset(listed.Data(), 0, listed.Size());
+		for (auto &surf : bake->Surfaces) surf.cluster = LM_LIGHTLIST_END;
+		for (unsigned c = 0; c < bake->Clusters.Size(); c++)
+		{
+			const auto &cl = bake->Clusters[c];
+			for (uint32_t k = cl.firstSurface; k < cl.firstSurface + cl.numSurfaces; k++)
+			{
+				uint32_t s = bake->ClusterSurfaces[k];
+				auto &surf = bake->Surfaces[s];
+				bool first = listed[s] == 0;
+				listed[s] = 1;
+				if (first && (surf.flags & LMSF_KINDMASK) != LMSK_WALL && !(surf.flags & (LMSF_SKY | LMSF_POLYOBJ)) && surf.leaf != 0xffffffffu)
+					surf.cluster = c;
+				else
+					surf.cluster = LM_LIGHTLIST_END;
+			}
+		}
 	}
 	if (bake->PolyClusterStart.Size() != bake->PolyBaked.Size() + 1)
 	{

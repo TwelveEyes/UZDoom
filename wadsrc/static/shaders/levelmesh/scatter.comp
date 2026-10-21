@@ -1,8 +1,8 @@
 /*
 ** scatter.comp
 **
-** Levelmesh dirty state scatter: sector, side, plane-xform, 3D-light and
-** polyobject records and cluster boxes
+** Levelmesh dirty state scatter: sector, side, plane-xform, 3D-light,
+** polyobject and dynamic light records, light list words and cluster boxes
 **
 **---------------------------------------------------------------------------
 **
@@ -16,8 +16,11 @@
 ** buffer holds, at the pushed word offsets, per record kind the indices and
 ** the records (parallel to the indices): sectors (LM_SECTOR_WORDS each),
 ** side tiers (LM_SIDE_WORDS), plane xforms (LM_XFORM_WORDS), 3D lights
-** (LM_LIGHT3D_WORDS), polyobjects (LM_POLYOBJ_WORDS); then the cluster box
-** entries (LevelMeshClusterBox: cluster, bmin[3], bmax[3], reserved).
+** (LM_LIGHT3D_WORDS), polyobjects (LM_POLYOBJ_WORDS), dynamic light slots
+** (LM_LIGHTREC_WORDS); the light list words (LevelMeshLightWord: target |
+** index, value: the owner table, the pool or the light info); then the
+** cluster box entries (LevelMeshClusterBox: cluster, bmin[3], bmax[3],
+** reserved).
 ** Every invocation copies one record word or one cluster box; the indices
 ** of a kind are unique, so no two invocations write the same word.
 */
@@ -30,6 +33,10 @@ layout(set = 0, binding = LMBIND_SIDESTATE, std430) buffer SideWords { uint side
 layout(set = 0, binding = LMBIND_PLANEXFORM, std430) buffer XformWords { uint xformWords[]; };
 layout(set = 0, binding = LMBIND_LIGHTS3D, std430) buffer Light3DWords { uint light3DWords[]; };
 layout(set = 0, binding = LMBIND_POLYOBJS, std430) buffer PolyobjWords { uint polyWords[]; };
+layout(set = 0, binding = LMBIND_LIGHTRECS, std430) buffer LightRecWords { uint lightRecWords[]; };
+layout(set = 0, binding = LMBIND_LIGHTOWNERS, std430) buffer LightOwnerWords { uint lightOwnerWords[]; };
+layout(set = 0, binding = LMBIND_LIGHTPOOL, std430) buffer LightPoolWords { uint lightPoolWords[]; };
+layout(set = 0, binding = LMBIND_LIGHTINFO, std430) buffer LightInfoWords { uint lightInfoWords[]; };
 layout(set = 1, binding = 0, std430) buffer readonly SourceWords { uint src[]; };
 
 // Keep in sync with VkLevelMesh::ScatterConstants.
@@ -52,6 +59,11 @@ layout(push_constant) uniform ScatterConstants
 	uint polyIndices;
 	uint polyRecords;
 	uint numPolys;
+	uint lightRecIndices;
+	uint lightRecRecords;
+	uint numLightRecs;
+	uint lightWords;
+	uint numLightWords;
 	uint padding0;
 	uint padding1;
 	uint padding2;
@@ -64,7 +76,8 @@ void main()
 	uint xformItems = numXforms * LM_XFORM_WORDS;
 	uint light3DItems = numLights3D * LM_LIGHT3D_WORDS;
 	uint polyItems = numPolys * LM_POLYOBJ_WORDS;
-	uint total = sectorItems + sideItems + xformItems + light3DItems + polyItems + numClusters;
+	uint lightRecItems = numLightRecs * LM_LIGHTREC_WORDS;
+	uint total = sectorItems + sideItems + xformItems + light3DItems + polyItems + lightRecItems + numLightWords + numClusters;
 	uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
 	for (uint i = gl_GlobalInvocationID.x; i < total; i += stride)
 	{
@@ -113,6 +126,27 @@ void main()
 			continue;
 		}
 		k -= polyItems;
+		if (k < lightRecItems)
+		{
+			uint record = k / LM_LIGHTREC_WORDS;
+			uint word = k - record * LM_LIGHTREC_WORDS;
+			uint slot = src[lightRecIndices + record];
+			lightRecWords[slot * LM_LIGHTREC_WORDS + word] = src[lightRecRecords + k];
+			continue;
+		}
+		k -= lightRecItems;
+		if (k < numLightWords)
+		{
+			uint target = src[lightWords + k * 2u];
+			uint value = src[lightWords + k * 2u + 1u];
+			uint index = target & LMLW_INDEXMASK;
+			uint kind = target & LMLW_TARGETMASK;
+			if (kind == LMLW_OWNERS) lightOwnerWords[index] = value;
+			else if (kind == LMLW_POOL) lightPoolWords[index] = value;
+			else lightInfoWords[index] = value;
+			continue;
+		}
+		k -= numLightWords;
 		uint e = clusterEntries + k * LM_CLUSTERBOX_WORDS;
 		uint c = src[e];
 		for (uint j = 0u; j < 3u; j++)

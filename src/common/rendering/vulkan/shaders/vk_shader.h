@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 
 #include "vectors.h"
@@ -81,7 +82,14 @@ struct PushConstants
 	int uLevelMeshFlags;	// levelmesh pipelines only (LMVF_*); 0 for classic draws
 	float uLevelMeshTime;	// levelmesh pipelines only: (FrameTime - firstFrame) / 1000, the material timer at speed 1
 	int uLevelMeshView;		// levelmesh mark pass only: word offset of the view's region in LMBIND_EXPOSURE (ticket 18)
+
+	// Ticket 19: the dynamic light list of the draw (lm_lights.glsl).
+	int uLightOwner;		// -1 none; >= 0 owner index; < -1: -(2 + float index in lights[]) of an inline list
+	int uLightConsumer;		// LMLC_*
+	int uLightActor;		// LevelMesh_ActorId of the drawn actor (actor consumers)
+	FVector4 uLightOrigin;	// LMLC_POINT: where the vertex stage evaluates the list (GL order x, z, y)
 };
+static_assert(offsetof(PushConstants, uLightOrigin) == 80 && sizeof(PushConstants) == 96, "PushConstants must match the GLSL block (vk_shader.cpp)");
 
 class VkShaderProgram
 {

@@ -35,6 +35,10 @@ layout(location = LM_SHADE_LOCATION + 1) flat out vec4 vLMFog;		// uFogColor.rgb
 layout(location = LM_SHADE_LOCATION + 2) flat out vec4 vLMGlowTop;	// uGlowTopColor
 layout(location = LM_SHADE_LOCATION + 3) flat out vec4 vLMGlowBottom;	// uGlowBottomColor
 layout(location = LM_SHADE_LOCATION + 4) flat out int vLMFogMode;	// uFogEnabled
+layout(location = LM_LIGHT_LOCATION) flat out ivec4 vLMLightMat;	// light list owner (lm_lights.glsl), refined cluster list (-1: none), glossiness, specular level (float bits)
+
+// The view's shading flags (LevelMeshShading::flags, LMSH_FULLBRIGHT).
+layout(set = LM_SET, binding = LMBIND_SHADING, std430) buffer readonly LMShadingHead { int lmShadingLightMode; uint lmShadingFlags; };
 
 // FRenderState::SetColor / SetFog: a PalEntry channel as a float.
 float LM_Channel(uint c, uint shift)
@@ -207,6 +211,16 @@ void main()
 	vLMGlowBottom = glowBottom;
 
 	vLightmap = vec3(v.lu, v.lv, float(surf.lightmapPage));
+	vDynLight = vec3(0.0);
+
+	// Dynamic lights (ticket 19): the surface's light list, none in a
+	// fullbright scene (the classic sets up lights only !isFullbrightScene()).
+	int lightOwner = -1;
+	if ((uLevelMeshFlags & LMVF_FULLBRIGHT) == 0 && (lmShadingFlags & LMSH_FULLBRIGHT) == 0u)
+		lightOwner = LM_LightOwner(surf);
+	// The texture's Blinn glossiness / specular level (LMP_SPECULAR: the classic uSpecularMaterial).
+	int lightCluster = (lightOwner >= 0 && surf.cluster != LM_LIGHTLIST_END) ? int(surf.cluster) : -1;
+	vLMLightMat = ivec4(lightOwner, lightCluster, floatBitsToInt(tex.glossiness), floatBitsToInt(tex.specularLevel));
 
 	pixelpos.xyz = worldcoord.xyz;
 	pixelpos.w = -eyeCoordPos.z/eyeCoordPos.w;

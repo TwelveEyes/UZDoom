@@ -64,7 +64,8 @@ constexpr size_t MIN_RING_SIZE = 256 * 1024;
 const char *BufferName(int b)
 {
 	static const char *names[] = { "vertices", "indices", "surfaces", "clusters", "cluster sectors", "cluster surfaces", "sector state", "side state", "plane xform", "texture table",
-		"resolved", "shading", "3D lights", "polyobjects", "sky sources", "leaf mask", "exposure" };
+		"resolved", "shading", "3D lights", "polyobjects", "sky sources", "leaf mask", "exposure",
+		"light records", "light owners", "light pool", "light info", "leaf sections", "cluster lights" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "buffer names out of sync");
 	return names[b];
 }
@@ -180,10 +181,13 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 	FString d;
 	d << "#define LEVELMESH\n";
 	d.AppendFormat("#define LM_SET %d\n#define LM_TEXTURE_SET %d\n", lmSet, textureSet);
-	d << "#define LM_MATERIAL_LOCATION 15\n";	// past the generated varyings
-	d << "#define LM_EXPOSURE_LOCATION 16\n";	// the surface's leaf / line (mark pass, ticket 18)
+	// Past the generated varyings (vDynLight is the last, location 10).
+	d << "#define LM_MATERIAL_LOCATION 16\n";
+	d << "#define LM_EXPOSURE_LOCATION 17\n";	// the surface's leaf / line (mark pass, ticket 18)
+	d << "#define LM_LIGHT_LOCATION 18\n";		// the surface's light list owner (ticket 19)
 	static const char *names[] = { "VERTICES", "INDICES", "SURFACES", "CLUSTERS", "CLUSTERSECTORS", "CLUSTERSURFACES",
-		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING", "LIGHTS3D", "POLYOBJS", "SKYSOURCES", "LEAFMASK", "EXPOSURE" };
+		"SECTORSTATE", "SIDESTATE", "PLANEXFORM", "TEXTURETABLE", "RESOLVED", "SHADING", "LIGHTS3D", "POLYOBJS", "SKYSOURCES", "LEAFMASK", "EXPOSURE",
+		"LIGHTRECS", "LIGHTOWNERS", "LIGHTPOOL", "LIGHTINFO", "LEAFSECTION", "CLUSTERLIGHTS" };
 	static_assert(sizeof(names) / sizeof(names[0]) == LMBIND_NUMBUFFERS, "binding names out of sync");
 	for (int b = 0; b < LMBIND_NUMBUFFERS; b++) d.AppendFormat("#define LMBIND_%s %d\n", names[b], b);
 	d.AppendFormat("#define LMBIND_SAMPLERS %d\n#define NUMSAMPLERS %d\n", (int)LMBIND_SAMPLERS, (int)NUMSAMPLERS);
@@ -218,7 +222,13 @@ FString VkLevelMesh::ShaderDefines(int lmSet, int textureSet)
 		(unsigned)LMSH_FULLBRIGHT, (unsigned)LMSH_FADETABLE, (unsigned)LMSH_FORCEFAKECONTRAST, (unsigned)LMSH_SMOOTHLIGHTING);
 	d.AppendFormat("#define LMSH_NOLIGHTFADE %uu\n#define LMSH_BRIGHTFOG %uu\n#define LMSH_INSKYBOX %uu\n#define LMSH_OUTSIDEFOG %uu\n",
 		(unsigned)LMSH_NOLIGHTFADE, (unsigned)LMSH_BRIGHTFOG, (unsigned)LMSH_INSKYBOX, (unsigned)LMSH_OUTSIDEFOG);
-	d << "#define LM_SHADE_LOCATION 10\n";	// 10..14: the resolved shading (levelmesh.vp)
+	d << "#define LM_SHADE_LOCATION 11\n";	// 11..15: the resolved shading (levelmesh.vp)
+	d.AppendFormat("#define LMLI_NUMGROUPS %uu\n#define LMLI_NUMSIDES %uu\n#define LMLI_NUMFFGROUPS %uu\n#define LMLI_HEADER %uu\n#define LM_LIGHTLIST_END 0x%xu\n",
+		(unsigned)LMLI_NUMGROUPS, (unsigned)LMLI_NUMSIDES, (unsigned)LMLI_NUMFFGROUPS, (unsigned)LMLI_HEADER, LM_LIGHTLIST_END);
+	d.AppendFormat("#define LM_CLUSTERLIGHT_WORDS %uu\n#define LM_CLUSTERLIGHT_GROUP %uu\n#define LM_CLUSTERLIGHT_ENTRIES %uu\n#define LM_CLUSTERLIGHT_SLOTMASK 0x%xu\n#define LM_CLUSTERLIGHT_MASKSHIFT %uu\n",
+		(unsigned)LM_CLUSTERLIGHT_WORDS, (unsigned)LM_CLUSTERLIGHT_GROUP, (unsigned)LM_CLUSTERLIGHT_ENTRIES, (unsigned)LM_CLUSTERLIGHT_SLOTMASK, (unsigned)LM_CLUSTERLIGHT_MASKSHIFT);
+	d.AppendFormat("#define LM_REFINE_SECTIONS %uu\n#define LM_REFINE_MAX %uu\n#define LM_REFINE_MIN %uu\n",
+		(unsigned)LM_REFINE_SECTIONS, (unsigned)LM_REFINE_MAX, (unsigned)LM_REFINE_MIN);
 	d.AppendFormat("#define LMCULL_NONE %uu\n#define LMDRAW_COMPACT %uu\n", (unsigned)LMCULL_NONE, (unsigned)LMDRAW_COMPACT);
 	return d;
 }
@@ -315,7 +325,8 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 
 	const unsigned leafWords = std::max((data->numLeaves + 31) / 32, 1u);
 	const unsigned lineWords = std::max((data->numLines + 31) / 32, 1u);
-	struct Src { const void *data; size_t size; unsigned count; VkBufferUsageFlags usage; };
+	struct Src { const void *data; size_t size; unsigned count; VkBufferUsageFlags usage; uint32_t fill = 0; };
+	const unsigned lightSlots = std::max(data->lightSlots, 1u), lightPoolWords = std::max(data->lightPoolWords, 4u);
 	Src src[LMBIND_NUMBUFFERS] = {
 		{ data->vertices.data, data->vertices.size * sizeof(LevelMeshVertex), data->vertices.size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT },
 		{ data->indices.data, data->indices.size * sizeof(uint32_t), data->indices.size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT },
@@ -334,6 +345,13 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		{ nullptr, data->numSkySources * sizeof(uint32_t), data->numSkySources, 0 },
 		{ nullptr, leafWords * sizeof(uint32_t), leafWords, 0 },
 		{ nullptr, (size_t)MaxExposureViews * (leafWords + lineWords) * sizeof(uint32_t), MaxExposureViews * (leafWords + lineWords), VK_BUFFER_USAGE_TRANSFER_SRC_BIT },
+		// Light buffers: the slots and the pool can grow (UpdateState), so they are copy sources too.
+		{ nullptr, lightSlots * sizeof(LevelMeshLightRecord), lightSlots, VK_BUFFER_USAGE_TRANSFER_SRC_BIT },
+		{ nullptr, data->numLightOwners * sizeof(uint32_t), data->numLightOwners, 0, LM_LIGHTLIST_END },
+		{ nullptr, lightPoolWords * sizeof(uint32_t), lightPoolWords, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, LM_LIGHTLIST_END },
+		{ data->lightInfo.data, data->lightInfo.size * sizeof(uint32_t), data->lightInfo.size, 0 },
+		{ data->leafSections.data, data->leafSections.size * sizeof(uint32_t), data->leafSections.size, 0 },
+		{ nullptr, (size_t)data->clusters.size * LM_CLUSTERLIGHT_WORDS * sizeof(uint32_t), data->clusters.size * LM_CLUSTERLIGHT_WORDS, 0, LM_LIGHTLIST_END },
 	};
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();
@@ -357,7 +375,7 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 		}
 		else
 		{
-			cmd->fillBuffer(mBuffers[b]->buffer, 0, VK_WHOLE_SIZE, 0);
+			cmd->fillBuffer(mBuffers[b]->buffer, 0, VK_WHOLE_SIZE, src[b].fill);
 		}
 	}
 	if (anyTransfer)
@@ -398,6 +416,10 @@ void VkLevelMesh::SetData(const LevelMeshUploadData *data)
 	mLineWords = lineWords;
 	mId = data->id;
 	mResident = true;
+	// The classic pipelines read the light buffers through set 1: the set
+	// must not keep the previous level's buffers for the rest of the frame.
+	fb->GetCommands()->WaitForCommands(false);
+	fb->GetDescriptorSetManager()->UpdateHWBufferSet();
 	mUploadMs = I_msTimeF() - t0;
 }
 
@@ -521,6 +543,8 @@ LevelMeshTextureEntry VkLevelMesh::Resolve(int id)
 	e.displayWidth = (float)tex->GetDisplayWidth();
 	e.displayHeight = (float)tex->GetDisplayHeight();
 	e.shaderSpeed = tex->GetShaderSpeed();
+	e.glossiness = tex->GetGlossiness();
+	e.specularLevel = tex->GetSpecularLevel();
 	return e;
 }
 
@@ -569,6 +593,7 @@ void VkLevelMesh::MaterialInvalidated(VkMaterial *mat)
 
 void VkLevelMesh::BeginFrame()
 {
+	HarvestRefineTime();
 	mRingIndex = (mRingIndex + 1) % HW_MAX_PIPELINE_BUFFERS;
 	mRing[mRingIndex].used = 0;
 	if (!mResident) return;
@@ -642,7 +667,9 @@ bool VkLevelMesh::CreateScatter()
 		(unsigned)(sizeof(LevelMeshSectorState) / 4), (unsigned)(sizeof(LevelMeshCluster) / 4));
 	defines.AppendFormat("#define LM_CLUSTERBOX_WORDS %uu\n#define LM_CLUSTER_BMIN %uu\n#define LM_CLUSTER_BMAX %uu\n", (unsigned)(sizeof(LevelMeshClusterBox) / 4),
 		(unsigned)(offsetof(LevelMeshCluster, bmin) / 4), (unsigned)(offsetof(LevelMeshCluster, bmax) / 4));
-	defines.AppendFormat("#define LM_POLYOBJ_WORDS %uu\n", (unsigned)(sizeof(LevelMeshPolyobj) / 4));
+	defines.AppendFormat("#define LM_POLYOBJ_WORDS %uu\n#define LM_LIGHTREC_WORDS %uu\n", (unsigned)(sizeof(LevelMeshPolyobj) / 4), (unsigned)(sizeof(LevelMeshLightRecord) / 4));
+	defines.AppendFormat("#define LMLW_OWNERS 0x%xu\n#define LMLW_POOL 0x%xu\n#define LMLW_TARGETMASK 0x%xu\n#define LMLW_INDEXMASK 0x%xu\n",
+		(unsigned)LMLW_OWNERS, (unsigned)LMLW_POOL, (unsigned)LMLW_TARGETMASK, (unsigned)LMLW_INDEXMASK);
 	defines.AppendFormat("#define LM_SIDE_WORDS %uu\n#define LM_XFORM_WORDS %uu\n#define LM_LIGHT3D_WORDS %uu\n",
 		(unsigned)(sizeof(LevelMeshSideState) / 4), (unsigned)(sizeof(LevelMeshPlaneXform) / 4), (unsigned)(sizeof(LevelMeshLight3D) / 4));
 	static_assert(offsetof(LevelMeshClusterBox, cluster) == 0 && offsetof(LevelMeshClusterBox, bmin) == 4 && offsetof(LevelMeshClusterBox, bmax) == 16, "scatter.comp reads LevelMeshClusterBox by word");
@@ -689,7 +716,24 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	unsigned nxf = std::min(update.xformIndices.size, update.xforms.size);
 	unsigned nl3 = std::min(update.light3DIndices.size, update.lights3D.size);
 	unsigned npo = std::min(update.polyobjIndices.size, update.polyobjs.size);
-	if (nsec == 0 && ncl == 0 && nside == 0 && nxf == 0 && nl3 == 0 && npo == 0) return 0;
+	unsigned nlr = std::min(update.lightRecIndices.size, update.lightRecs.size);
+	unsigned nlw = update.lightWords.size;
+	unsigned nlc = update.lightClusters.size;
+	if (nsec == 0 && ncl == 0 && nside == 0 && nxf == 0 && nl3 == 0 && npo == 0 && nlr == 0 && nlw == 0 && nlc == 0) return 0;
+	for (unsigned i = 0; i < nlc; i++)
+		if (update.lightClusters.data[i] >= mCounts[LMBIND_CLUSTERS]) return 0;
+	// The light lists need more slots / pool words: grow first (contents kept).
+	if (update.lightSlots > mCounts[LMBIND_LIGHTRECS]) GrowLightBuffer(LMBIND_LIGHTRECS, update.lightSlots, sizeof(LevelMeshLightRecord));
+	if (update.lightPoolWords > mCounts[LMBIND_LIGHTPOOL]) GrowLightBuffer(LMBIND_LIGHTPOOL, update.lightPoolWords, sizeof(uint32_t));
+	for (unsigned i = 0; i < nlr; i++)
+		if (update.lightRecIndices.data[i] >= mCounts[LMBIND_LIGHTRECS]) return 0;
+	for (unsigned i = 0; i < nlw; i++)
+	{
+		uint32_t t = update.lightWords.data[i].target, index = t & LMLW_INDEXMASK;
+		unsigned count = (t & LMLW_TARGETMASK) == LMLW_OWNERS ? mCounts[LMBIND_LIGHTOWNERS] : (t & LMLW_TARGETMASK) == LMLW_POOL ? mCounts[LMBIND_LIGHTPOOL] :
+			(t & LMLW_TARGETMASK) == LMLW_INFO ? mCounts[LMBIND_LIGHTINFO] : 0;
+		if (index >= count) return 0;
+	}
 	for (unsigned i = 0; i < nsec; i++)
 		if (update.sectorIndices.data[i] >= mCounts[LMBIND_SECTORSTATE]) return 0;
 	for (unsigned i = 0; i < ncl; i++)
@@ -712,7 +756,10 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	size_t xfIdx = sideRec + nside * sizeof(LevelMeshSideState), xfRec = xfIdx + align(nxf * 4);
 	size_t l3Idx = xfRec + nxf * sizeof(LevelMeshPlaneXform), l3Rec = l3Idx + align(nl3 * 4);
 	size_t poIdx = l3Rec + nl3 * sizeof(LevelMeshLight3D), poRec = poIdx + align(npo * 4);
-	size_t clRec = poRec + npo * sizeof(LevelMeshPolyobj);
+	size_t lrIdx = align(poRec + npo * sizeof(LevelMeshPolyobj)), lrRec = lrIdx + align(nlr * 4);
+	size_t lwRec = lrRec + nlr * sizeof(LevelMeshLightRecord);
+	size_t lcIdx = align(lwRec + nlw * sizeof(LevelMeshLightWord));
+	size_t clRec = lcIdx + nlc * 4;
 	size_t size = clRec + ncl * sizeof(LevelMeshClusterBox);
 	auto alloc = AllocUpload(size);
 	uint8_t *dst = (uint8_t *)alloc.data;
@@ -741,6 +788,13 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 		memcpy(dst + poIdx, update.polyobjIndices.data, npo * 4);
 		memcpy(dst + poRec, update.polyobjs.data, npo * sizeof(LevelMeshPolyobj));
 	}
+	if (nlr)
+	{
+		memcpy(dst + lrIdx, update.lightRecIndices.data, nlr * 4);
+		memcpy(dst + lrRec, update.lightRecs.data, nlr * sizeof(LevelMeshLightRecord));
+	}
+	if (nlw) memcpy(dst + lwRec, update.lightWords.data, nlw * sizeof(LevelMeshLightWord));
+	if (nlc) memcpy(dst + lcIdx, update.lightClusters.data, nlc * 4);
 	if (ncl) memcpy(dst + clRec, update.clusters.data, ncl * sizeof(LevelMeshClusterBox));
 
 	auto &slot = mRing[mRingIndex];
@@ -774,6 +828,11 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	pc.polyIndices = word(poIdx);
 	pc.polyRecords = word(poRec);
 	pc.numPolys = npo;
+	pc.lightRecIndices = word(lrIdx);
+	pc.lightRecRecords = word(lrRec);
+	pc.numLightRecs = nlr;
+	pc.lightWords = word(lwRec);
+	pc.numLightWords = nlw;
 
 	auto cmd = fb->GetCommands()->GetTransferCommands();
 	// Earlier writes (level upload, earlier scatters) before this one.
@@ -785,12 +844,129 @@ size_t VkLevelMesh::UpdateState(const LevelMeshStateUpdate &update)
 	cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mScatterLayout.get(), 1, slot.scatterSet.get());
 	cmd->pushConstants(mScatterLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ScatterConstants), &pc);
 	size_t items = (size_t)nsec * (sizeof(LevelMeshSectorState) / 4) + ncl + (size_t)nside * (sizeof(LevelMeshSideState) / 4) +
-		(size_t)nxf * (sizeof(LevelMeshPlaneXform) / 4) + (size_t)nl3 * (sizeof(LevelMeshLight3D) / 4) + (size_t)npo * (sizeof(LevelMeshPolyobj) / 4);
-	cmd->dispatch((uint32_t)std::min<size_t>((items + 63) / 64, 65535), 1, 1);
+		(size_t)nxf * (sizeof(LevelMeshPlaneXform) / 4) + (size_t)nl3 * (sizeof(LevelMeshLight3D) / 4) + (size_t)npo * (sizeof(LevelMeshPolyobj) / 4) +
+		(size_t)nlr * (sizeof(LevelMeshLightRecord) / 4) + nlw;
+	if (items) cmd->dispatch((uint32_t)std::min<size_t>((items + 63) / 64, 65535), 1, 1);
 	PipelineBarrier()
 		.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
 		.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+	// Ticket 19: refine the dirty clusters' light lists from the lists just scattered.
+	if (nlc && CreateRefine())
+	{
+		bool timed = mRefineQueries && mRefineTimings < MaxRefineTimings;
+		if (timed)
+		{
+			if (mRefineTimings == 0) cmd->resetQueryPool(mRefineQueries.get(), 0, 2 * MaxRefineTimings);
+			cmd->writeTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, mRefineQueries.get(), 2 * mRefineTimings);
+		}
+		RefineConstants rc = { word(lcIdx), nlc, update.lightRefine ? 1u : 0u, 0 };
+		cmd->bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, mRefinePipeline.get());
+		cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mRefineLayout.get(), 0, mSet.get());
+		cmd->bindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, mRefineLayout.get(), 1, slot.scatterSet.get());
+		cmd->pushConstants(mRefineLayout.get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(RefineConstants), &rc);
+		cmd->dispatch((nlc + 63) / 64, 1, 1);
+		if (timed)
+		{
+			cmd->writeTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mRefineQueries.get(), 2 * mRefineTimings + 1);
+			mRefineTimings++;
+		}
+		PipelineBarrier()
+			.AddMemory(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
+			.Execute(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	}
 	return size;
+}
+
+bool VkLevelMesh::CreateRefine()
+{
+	if (mRefineCreated) return !mRefineFailed;
+	mRefineCreated = true;
+	auto dev = fb->device.get();
+	FString defines = ShaderDefines(0, -1);
+	defines.AppendFormat("#define LMLF_CLASSMASK %uu\n#define LMLF_GROUPSHIFT %uu\n#define LM_LIGHTREC_VEC4 %uu\n", (unsigned)LMLF_CLASSMASK, (unsigned)LMLF_GROUPSHIFT, (unsigned)LM_LIGHTREC_VEC4);
+	try
+	{
+		mRefineShader = fb->GetShaderManager()->LoadComputeShader("levelmesh_lightrefine", "shaders/levelmesh/lightrefine.comp", defines.GetChars());
+	}
+	catch (const CVulkanError &e)
+	{
+		Printf("Levelmesh: light refine shader failed: %s\n", e.what());
+		mRefineFailed = true;
+		return false;
+	}
+	mRefineLayout = PipelineLayoutBuilder()
+		.AddSetLayout(mSetLayout.get())
+		.AddSetLayout(mScatterSetLayout.get())
+		.AddPushConstantRange(VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(RefineConstants))
+		.DebugName("VkLevelMesh.RefineLayout")
+		.Create(dev);
+	mRefinePipeline = ComputePipelineBuilder()
+		.Layout(mRefineLayout.get())
+		.ComputeShader(mRefineShader.get())
+		.DebugName("VkLevelMesh.RefinePipeline")
+		.Create(dev);
+	if (fb->device->GraphicsTimeQueries)
+	{
+		mRefineQueries = QueryPoolBuilder()
+			.QueryType(VK_QUERY_TYPE_TIMESTAMP, 2 * MaxRefineTimings)
+			.Create(dev);
+	}
+	return true;
+}
+
+// The previous frame's refine dispatches completed (VulkanRenderDevice::
+// Update waits for every fence before BeginFrame).
+void VkLevelMesh::HarvestRefineTime()
+{
+	double ms = 0;
+	double period = fb->device->PhysicalDevice.Properties.Properties.limits.timestampPeriod;
+	for (unsigned i = 0; i < mRefineTimings; i++)
+	{
+		uint64_t ts[2] = {};
+		if (mRefineQueries->getResults(2 * i, 2, sizeof(ts), ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) && ts[1] > ts[0])
+			ms += (ts[1] - ts[0]) * period / 1e6;
+	}
+	mRefineMs = ms;
+	mRefineTimings = 0;
+}
+
+//==========================================================================
+//
+// Light buffer growth (ticket 19)
+//
+// The slot records and the pool are written dirty-only, so a grown buffer
+// must keep its contents: the old buffer is copied into the new one ahead
+// of this frame's scatter. Rare (doubling), so it waits for the device like
+// VkHardwareBuffer::Resize: no recorded command still uses the old buffer
+// or the descriptor sets naming it when they are rewritten.
+//
+//==========================================================================
+
+void VkLevelMesh::GrowLightBuffer(ELevelMeshBinding b, unsigned count, size_t elementSize)
+{
+	fb->GetCommands()->WaitForCommands(false);
+	std::unique_ptr<VulkanBuffer> old = std::move(mBuffers[b]);
+	size_t size = std::max(count * elementSize, (size_t)16);
+	FString name = FStringf("VkLevelMesh.%s", BufferName(b));
+	mBuffers[b] = BufferBuilder()
+		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
+		.Size(size)
+		.DebugName(name.GetChars())
+		.Create(fb->device.get());
+	auto cmd = fb->GetCommands()->GetTransferCommands();
+	cmd->copyBuffer(old.get(), mBuffers[b].get(), 0, 0, mSizes[b]);
+	if (b == LMBIND_LIGHTPOOL)
+		cmd->fillBuffer(mBuffers[b]->buffer, mSizes[b], size - mSizes[b], LM_LIGHTLIST_END);
+	else
+		cmd->fillBuffer(mBuffers[b]->buffer, mSizes[b], size - mSizes[b], 0);
+	fb->GetCommands()->TransferDeleteList->Add(std::move(old));
+	mSizes[b] = size;
+	mCounts[b] = count;
+	WriteDescriptors()
+		.AddBuffer(mSet.get(), b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, mBuffers[b].get())
+		.Execute(fb->device.get());
+	fb->GetDescriptorSetManager()->UpdateHWBufferSet();
 }
 
 //==========================================================================
@@ -881,7 +1057,7 @@ void VkLevelMesh::PrintStats()
 		if (e.layers & TEXF_Brightmap) brightmapped++;
 	}
 	FString buckets;
-	static const char *programs[] = { "default", "warp1", "warp2", "sky", "exposure" };
+	static const char *programs[] = { "default", "warp1", "warp2", "specular", "pbr", "sky", "exposure" };
 	static_assert(sizeof(programs) / sizeof(programs[0]) == LMP_COUNT, "program names");
 	for (int b = 0; b < (int)LMB_COUNT; b++)
 	{

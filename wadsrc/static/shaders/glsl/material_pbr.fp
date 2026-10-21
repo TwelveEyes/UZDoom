@@ -78,6 +78,42 @@ float linearDistanceAttenuation(vec4 lightpos)
 	return clamp((lightpos.w - lightdistance) / lightpos.w, 0.0, 1.0);
 }
 
+// One light's cook-torrance contribution (the classic loops and the
+// levelmesh light lists share it).
+vec3 pbrLight(vec4 lightpos, vec4 lightcolor, vec4 lightspot1, vec4 lightspot2, vec3 worldpos, vec3 N, vec3 V, vec3 F0, vec3 albedo, float metallic, float roughness)
+{
+	vec3 L = normalize(lightpos.xyz - worldpos);
+	vec3 H = normalize(V + L);
+
+	float attenuation = linearDistanceAttenuation(lightpos);
+	if (lightspot1.w == 1.0)
+		attenuation *= spotLightAttenuation(lightpos, lightspot1.xyz, lightspot2.x, lightspot2.y);
+	if (lightcolor.a < 0.0)
+		attenuation *= clamp(dot(N, L), 0.0, 1.0); // Sign bit is the attenuated light flag
+
+	if (attenuation > 0.0)
+	{
+		attenuation *= shadowAttenuation(lightpos, lightcolor.a);
+
+		vec3 radiance = lightcolor.rgb * attenuation;
+
+		// cook-torrance brdf
+		float NDF = DistributionGGX(N, H, roughness);
+		float G = GeometrySmith(N, V, L, roughness);
+		vec3 F = fresnelSchlick(clamp(dot(H, V), 0.0, 1.0), F0);
+
+		vec3 kS = F;
+		vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+
+		vec3 nominator = NDF * G * F;
+		float denominator = 4.0 * clamp(dot(N, V), 0.0, 1.0) * clamp(dot(N, L), 0.0, 1.0);
+		vec3 specular = nominator / max(denominator, 0.001);
+
+		return (kD * albedo / PI + specular) * radiance;
+	}
+	return vec3(0.0);
+}
+
 vec3 ProcessMaterialLight(Material material, vec3 ambientLight)
 {
 	vec3 worldpos = pixelpos.xyz;
@@ -94,7 +130,7 @@ vec3 ProcessMaterialLight(Material material, vec3 ambientLight)
 
 	vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
-	vec3 Lo = uDynLightColor.rgb;
+	vec3 Lo = uDynLightColor.rgb + vDynLight;
 
 	if (uLightIndex >= 0)
 	{
@@ -106,83 +142,32 @@ vec3 ProcessMaterialLight(Material material, vec3 ambientLight)
 			//
 			for(int i=lightRange.x; i<lightRange.y; i+=4)
 			{
-				vec4 lightpos = lights[i];
-				vec4 lightcolor = lights[i+1];
-				vec4 lightspot1 = lights[i+2];
-				vec4 lightspot2 = lights[i+3];
-
-				vec3 L = normalize(lightpos.xyz - worldpos);
-				vec3 H = normalize(V + L);
-
-				float attenuation = linearDistanceAttenuation(lightpos);
-				if (lightspot1.w == 1.0)
-					attenuation *= spotLightAttenuation(lightpos, lightspot1.xyz, lightspot2.x, lightspot2.y);
-				if (lightcolor.a < 0.0)
-					attenuation *= clamp(dot(N, L), 0.0, 1.0); // Sign bit is the attenuated light flag
-
-				if (attenuation > 0.0)
-				{
-					attenuation *= shadowAttenuation(lightpos, lightcolor.a);
-
-					vec3 radiance = lightcolor.rgb * attenuation;
-
-					// cook-torrance brdf
-					float NDF = DistributionGGX(N, H, roughness);
-					float G = GeometrySmith(N, V, L, roughness);
-					vec3 F = fresnelSchlick(clamp(dot(H, V), 0.0, 1.0), F0);
-
-					vec3 kS = F;
-					vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
-
-					vec3 nominator = NDF * G * F;
-					float denominator = 4.0 * clamp(dot(N, V), 0.0, 1.0) * clamp(dot(N, L), 0.0, 1.0);
-					vec3 specular = nominator / max(denominator, 0.001);
-
-					Lo += (kD * albedo / PI + specular) * radiance;
-				}
+				Lo += pbrLight(lights[i], lights[i+1], lights[i+2], lights[i+3], worldpos, N, V, F0, albedo, metallic, roughness);
 			}
 			//
 			// subtractive lights
 			//
 			for(int i=lightRange.y; i<lightRange.z; i+=4)
 			{
-				vec4 lightpos = lights[i];
-				vec4 lightcolor = lights[i+1];
-				vec4 lightspot1 = lights[i+2];
-				vec4 lightspot2 = lights[i+3];
-
-				vec3 L = normalize(lightpos.xyz - worldpos);
-				vec3 H = normalize(V + L);
-
-				float attenuation = linearDistanceAttenuation(lightpos);
-				if (lightspot1.w == 1.0)
-					attenuation *= spotLightAttenuation(lightpos, lightspot1.xyz, lightspot2.x, lightspot2.y);
-				if (lightcolor.a < 0.0)
-					attenuation *= clamp(dot(N, L), 0.0, 1.0); // Sign bit is the attenuated light flag
-
-				if (attenuation > 0.0)
-				{
-					attenuation *= shadowAttenuation(lightpos, lightcolor.a);
-
-					vec3 radiance = lightcolor.rgb * attenuation;
-
-					// cook-torrance brdf
-					float NDF = DistributionGGX(N, H, roughness);
-					float G = GeometrySmith(N, V, L, roughness);
-					vec3 F = fresnelSchlick(clamp(dot(H, V), 0.0, 1.0), F0);
-
-					vec3 kS = F;
-					vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
-
-					vec3 nominator = NDF * G * F;
-					float denominator = 4.0 * clamp(dot(N, V), 0.0, 1.0) * clamp(dot(N, L), 0.0, 1.0);
-					vec3 specular = nominator / max(denominator, 0.001);
-
-					Lo -= (kD * albedo / PI + specular) * radiance;
-				}
+				Lo -= pbrLight(lights[i], lights[i+1], lights[i+2], lights[i+3], worldpos, N, V, F0, albedo, metallic, roughness);
 			}
 		}
 	}
+#ifdef LM_LIGHTLISTS
+	else if (uLightOwner != -1 && (uLightConsumer & LMLC_POINT) == 0)
+	{
+		// The levelmesh light list (lm_lights.glsl). The classic PBR shader
+		// ignores additive lights.
+		LMLightList list = lmListBegin(uLightOwner);
+		vec4 lightpos, lightcolor, lightspot1, lightspot2;
+		uint cls;
+		while (lmListNext(list, uLightConsumer, uLightActor, pixelpos.xyz, vWorldNormal.xyz, lightpos, lightcolor, lightspot1, lightspot2, cls))
+		{
+			if (cls == 0u) Lo += pbrLight(lightpos, lightcolor, lightspot1, lightspot2, worldpos, N, V, F0, albedo, metallic, roughness);
+			else if (cls == 1u) Lo -= pbrLight(lightpos, lightcolor, lightspot1, lightspot2, worldpos, N, V, F0, albedo, metallic, roughness);
+		}
+	}
+#endif
 
 	// Pretend we sampled the sector light level from an irradiance map
 

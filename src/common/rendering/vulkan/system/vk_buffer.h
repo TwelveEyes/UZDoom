@@ -61,6 +61,10 @@ public:
 
 	std::unique_ptr<IIndexBuffer> FanToTrisIndexBuffer;
 
+	// Bound in place of the levelmesh light buffers (HW buffer set bindings
+	// 5..8) while no levelmesh is resident; never read then (ticket 19).
+	std::unique_ptr<VulkanBuffer> NullSSBO;
+
 private:
 	void CreateFanToTrisIndexBuffer();
 

@@ -36,6 +36,21 @@ layout(location = LM_SHADE_LOCATION + 2) flat in vec4 vLMGlowTop;
 layout(location = LM_SHADE_LOCATION + 3) flat in vec4 vLMGlowBottom;
 layout(location = LM_SHADE_LOCATION + 4) flat in int vLMFogMode;
 layout(location = LM_EXPOSURE_LOCATION) flat in uvec2 vLMExposure;	// surface leaf, line (read by the mark pass only)
+layout(location = LM_LIGHT_LOCATION) flat in ivec4 vLMLightMat;	// light list owner, 0, glossiness, specular level (levelmesh.vp)
+
+// Dynamic lights (ticket 19): the surface's light list replaces the render
+// state's; surfaces consume it with the surface rules.
+#undef uLightOwner
+#define uLightOwner vLMLightMat.x
+#undef uLightConsumer
+#define uLightConsumer 0
+#undef uLightActor
+#define uLightActor 0
+// Flats read their cluster's refined list (lm_lights.glsl, lightrefine.comp).
+#define lmListBegin(owner) lmListBeginSurface(owner, vLMLightMat.y)
+// The surface texture's Blinn material (func_spec.fp), not the render state's.
+#undef uSpecularMaterial
+#define uSpecularMaterial vec2(intBitsToFloat(vLMLightMat.z), intBitsToFloat(vLMLightMat.w))
 
 // Dither (ticket 18): the dither-capable variant (LM_DITHER) dithers the
 // surfaces the vertex stage flagged (LM_MAT_DITHER), the way the classic

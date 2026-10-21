@@ -589,6 +589,7 @@ bool VulkanRenderDevice::GetLevelMeshStats(LevelMeshPerfStats &stats)
 {
 	if (!mLevelMeshRenderer || mLevelMeshRenderer->GetStats().serial == 0) return false;
 	stats = mLevelMeshRenderer->GetStats();
+	stats.lightRefineMs = mLevelMesh->GetRefineMs();
 	return true;
 }
 

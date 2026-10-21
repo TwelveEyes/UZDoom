@@ -53,6 +53,7 @@ struct LMSurface
 	uint edgeClamp;
 	uint leaf;
 	uint line;
+	uint cluster;		// refined light list (LMBIND_CLUSTERLIGHTS), LM_LIGHTLIST_END = none
 };
 
 struct LMCluster
@@ -112,7 +113,8 @@ struct LMPolyobj
 {
 	float m[4];
 	float t[2];
-	uint reserved[2];
+	uint section;		// its centre subsector's section (dynamic light owner, ticket 19)
+	uint reserved;
 };
 
 struct LMPlaneXform
@@ -141,7 +143,8 @@ struct LMTextureEntry
 	uint layers;
 	float displayWidth, displayHeight;
 	float shaderSpeed;
-	uint reserved[3];
+	float glossiness, specularLevel;
+	uint reserved;
 };
 
 layout(set = LM_SET, binding = LMBIND_VERTICES, std430) buffer readonly LMVertexBuffer { LMVertex lmVertices[]; };
@@ -158,6 +161,9 @@ layout(set = LM_SET, binding = LMBIND_POLYOBJS, std430) buffer readonly LMPolyob
 layout(set = LM_SET, binding = LMBIND_SKYSOURCES, std430) buffer readonly LMSkySourceBuffer { uint lmSkySources[]; };
 // Bit per leaf: the leaves the view may show (LevelMeshView::leafMask, LMVF_LEAFMASK).
 layout(set = LM_SET, binding = LMBIND_LEAFMASK, std430) buffer readonly LMLeafMaskBuffer { uint lmLeafMask[]; };
+// Ticket 19: per leaf its section; the light info words (ELevelMeshLightInfo).
+layout(set = LM_SET, binding = LMBIND_LEAFSECTION, std430) buffer readonly LMLeafSectionBuffer { uint lmLeafSection[]; };
+layout(set = LM_SET, binding = LMBIND_LIGHTINFO, std430) buffer readonly LMLightInfoBuffer { uint lmLightInfoWords[]; };
 #ifndef LM_RESOLVE_WRITER
 layout(set = LM_SET, binding = LMBIND_RESOLVED, std430) buffer readonly LMResolvedBuffer { LMResolved lmResolved[]; };
 #endif
@@ -206,6 +212,29 @@ vec3 LM_SurfaceNormal(LMSurface surf)
 	vec2 r = vec2(po.m[3] * n.x - po.m[2] * n.y, -po.m[1] * n.x + po.m[0] * n.y);
 	float len = length(r);
 	return len > 0.0 ? vec3(r / len, n.z) : n;
+}
+
+// Ticket 19: the dynamic light list a surface reads (lm_lights.glsl):
+// walls their side's (HWWall::SetupLights: seg->sidedef->dlist; polyobject
+// walls the section of their polyobject; 3D-floor sides their group's side),
+// flats their leaf's section (HWFlat::SetupLights). -1: none (sky).
+int LM_LightOwner(LMSurface surf)
+{
+	if ((surf.flags & LMSF_SKY) != 0u) return -1;
+	uint numSides = lmLightInfoWords[LMLI_NUMSIDES];
+	if ((surf.flags & LMSF_KINDMASK) == LMSK_WALL)
+	{
+		if (surf.sideRef == 0xffffffffu) return -1;
+		if ((surf.flags & LMSF_POLYOBJ) != 0u) return int(numSides + lmPolyobjs[lmSides[surf.sideRef].polyobj].section);
+		uint side = surf.sideRef / 3u;
+		if (side < numSides) return int(side);
+		uint group = surf.sideRef - numSides * 3u;
+		if (group >= lmLightInfoWords[LMLI_NUMFFGROUPS]) return -1;
+		uint owner = lmLightInfoWords[LMLI_HEADER + group];
+		return owner == LM_LIGHTLIST_END ? -1 : int(owner);
+	}
+	if (surf.leaf == 0xffffffffu) return -1;
+	return int(numSides + lmLeafSection[surf.leaf]);
 }
 
 // LM_PlaneZ: same operation order as the C++ (no contraction into FMA).

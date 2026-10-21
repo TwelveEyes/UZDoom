@@ -245,6 +245,8 @@ public:
 	void SplitWall(HWWallDispatcher* di, sector_t* frontsector, bool translucent);
 
 	void SetupLights(HWDrawInfo* di, FDynLightData& lightdata);
+	// Ticket 19: the levelmesh light list SetupLights would gather from (-1: no lights).
+	int LightOwner(HWDrawInfo* di);
 
 	void MakeVertices(bool nosplit);
 
@@ -407,6 +409,7 @@ public:
 	float offx, offy;
 	float trans;
 	int dynlightindex;
+	int lightOwner;		// ticket 19: per-pixel model lights from this levelmesh light list (-1: none)
 
 	FGameTexture *texture;
 	AActor * actor;
@@ -453,6 +456,7 @@ struct HWDecal
 	float alpha;
 	FColormap Colormap;
 	int dynlightindex;
+	int lightOwner;		// ticket 19: the wall's levelmesh light list (-1: none)
 	sector_t *frontsector;
 	FVector3 Normal;
 
@@ -468,6 +472,20 @@ inline float Dist2(float x1,float y1,float x2,float y2)
 
 bool hw_SetPlaneTextureRotation(const HWSectorPlane * secplane, FGameTexture * gltexture, VSMatrix &mat);
 void hw_GetDynModelLight(AActor *self, FDynLightData &modellightdata);
+
+// Ticket 19, levelmesh dynamic light lists (hw_levelmeshlights.cpp).
+// Whether the level's consumers read them (a resident levelmesh, lm_lights).
+bool LevelMesh_LightLists(FLevelLocals *Level);
+// Owner index of a side's / section's list (FRenderState::SetLightOwner).
+int LevelMesh_SideLightOwner(FLevelLocals *Level, side_t *side);
+int LevelMesh_SectionLightOwner(FLevelLocals *Level, FSection *section);
+// The light list identity of an actor (ShouldLightActor's target test).
+uint32_t LevelMesh_ActorId(AActor *actor);
+// Big models (hw_GetDynModelLight's BSPWalkCircle set): the lights of the
+// sections the actor's render radius touches, as an inline list in the
+// frame's light buffer. Returns the owner value, or the actor's section
+// owner when the buffer is full.
+int LevelMesh_InlineLightList(FLevelLocals *Level, AActor *actor);
 LightProbe* FindLightProbe(FLevelLocals* level, float x, float y, float z);
 
 extern const float LARGE_VALUE;

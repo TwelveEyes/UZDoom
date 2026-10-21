@@ -78,6 +78,7 @@ void HWDrawInfo::DrawPSprite(HUDSprite *huds, FRenderState &state)
 		state.SetAddColor(0);
 	}
 	state.SetDynLight(huds->dynrgb[0], huds->dynrgb[1], huds->dynrgb[2]);
+	if (huds->lightOwner != -1) state.SetLightOwner(huds->lightOwner, huds->lightConsumer, LevelMesh_ActorId(huds->owner), huds->lightOrigin);
 	state.EnableBrightmap(!(huds->RenderStyle.Flags & STYLEF_ColorIsFixed));
 
 	if (huds->mframe)
@@ -103,7 +104,31 @@ void HWDrawInfo::DrawPSprite(HUDSprite *huds, FRenderState &state)
 	state.SetObjectColor(0xffffffff);
 	state.SetAddColor(0);
 	state.SetDynLight(0, 0, 0);
+	state.ClearLightOwner();
 	state.EnableBrightmap(false);
+}
+
+//==========================================================================
+//
+// Ticket 19: GetDynSpriteLight(playermo, nullptr) through the levelmesh
+// light list: the light probe here, the lights by the vertex stage.
+//
+//==========================================================================
+
+static void SetPlayerSpriteLightList(HUDSprite &hudsprite, AActor *playermo)
+{
+	if (playermo->renderflags2 & RF2_NODYNAMICLIGHTING) return;
+	float x = (float)playermo->X(), y = (float)playermo->Y(), z = (float)playermo->Center();
+	LightProbe *probe = FindLightProbe(playermo->Level, x, y, z);
+	if (probe)
+	{
+		hudsprite.dynrgb[0] = probe->Red;
+		hudsprite.dynrgb[1] = probe->Green;
+		hudsprite.dynrgb[2] = probe->Blue;
+	}
+	hudsprite.lightOwner = LevelMesh_SectionLightOwner(playermo->Level, playermo->section);
+	hudsprite.lightConsumer = LMLC_ACTOR | LMLC_POINT;
+	hudsprite.lightOrigin = FVector3(x, z, y);
 }
 
 //==========================================================================
@@ -741,10 +766,15 @@ void HWDrawInfo::PreparePlayerSprites2D(sector_t * viewsector, area_t in_area)
 
 		hudsprite.dynrgb[0] = hudsprite.dynrgb[1] = hudsprite.dynrgb[2] = 0;
 		hudsprite.lightindex = -1;
+		hudsprite.lightOwner = -1;
+		hudsprite.lightConsumer = 0;
 		// set the lighting parameters
 		if (hudsprite.RenderStyle.BlendOp != STYLEOP_Shadow && Level->HasDynamicLights && !isFullbrightScene() && gl_light_sprites)
 		{
-			GetDynSpriteLight(playermo, nullptr, hudsprite.dynrgb);
+			if (LevelMesh_LightLists(Level))
+				SetPlayerSpriteLightList(hudsprite, playermo);
+			else
+				GetDynSpriteLight(playermo, nullptr, hudsprite.dynrgb);
 		}
 
 		if (!hudsprite.GetWeaponRect(this, psp, spos.X, spos.Y, player, min<double>(bobFrac, frac))) continue;
@@ -845,17 +875,31 @@ void HWDrawInfo::PreparePlayerSprites3D(sector_t * viewsector, area_t in_area)
 
 		hudsprite.dynrgb[0] = hudsprite.dynrgb[1] = hudsprite.dynrgb[2] = 0;
 		hudsprite.lightindex = -1;
+		hudsprite.lightOwner = -1;
+		hudsprite.lightConsumer = 0;
 		// set the lighting parameters
 		if (hudsprite.RenderStyle.BlendOp != STYLEOP_Shadow && Level->HasDynamicLights && !isFullbrightScene() && gl_light_sprites && !(playermo->renderflags2 & RF2_NODYNAMICLIGHTING))
 		{
+			bool lists = LevelMesh_LightLists(Level);
 			if (!(smf_flags & MDL_NOPERPIXELLIGHTING))
 			{
-				hw_GetDynModelLight(playermo, lightdata);
-				hudsprite.lightindex = screen->mLights->UploadLights(lightdata);
+				if (lists)
+				{
+					// hw_GetDynModelLight's split, as HWSprite::PutSprite.
+					hudsprite.lightOwner = playermo->RenderRadius() <= gl_model_light_optimization_radius ?
+						LevelMesh_SectionLightOwner(Level, playermo->section) : LevelMesh_InlineLightList(Level, playermo);
+					hudsprite.lightConsumer = LMLC_ACTOR | LMLC_FORCEATTEN;
+				}
+				else
+				{
+					hw_GetDynModelLight(playermo, lightdata);
+					hudsprite.lightindex = screen->mLights->UploadLights(lightdata);
+				}
 			}
 			else
 			{
-				GetDynSpriteLight(playermo, nullptr, hudsprite.dynrgb);
+				if (lists) SetPlayerSpriteLightList(hudsprite, playermo);
+				else GetDynSpriteLight(playermo, nullptr, hudsprite.dynrgb);
 			}
 			LightProbe* probe = FindLightProbe(playermo->Level, playermo->X(), playermo->Y(), playermo->Center());
 			if (probe)
@@ -863,6 +907,8 @@ void HWDrawInfo::PreparePlayerSprites3D(sector_t * viewsector, area_t in_area)
 				hudsprite.dynrgb[0] = probe->Red;
 				hudsprite.dynrgb[1] = probe->Green;
 				hudsprite.dynrgb[2] = probe->Blue;
+				// The probe replaces the sprite light here (not the model's per-pixel lights).
+				if (hudsprite.lightConsumer & LMLC_POINT) hudsprite.lightOwner = -1;
 			}
 		}
 

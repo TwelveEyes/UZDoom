@@ -398,6 +398,10 @@ void VkRenderState::FillPushConstants()
 	}
 
 	mPushConstants.uLightIndex = mLightIndex;
+	mPushConstants.uLightOwner = mLightOwner;
+	mPushConstants.uLightConsumer = mLightConsumer;
+	mPushConstants.uLightActor = mLightActor;
+	mPushConstants.uLightOrigin = { mLightOrigin.X, mLightOrigin.Y, mLightOrigin.Z, 0.f };
 	mPushConstants.uBoneIndexBase = mBoneIndexBase;
 	mPushConstants.uDataIndex = mStreamBufferWriter.DataIndex();
 }

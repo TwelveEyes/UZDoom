@@ -125,6 +125,7 @@ void Upload(FLevelLocals *Level, LevelMeshBake *bake)
 	data.translationTableSize = ntex;
 	data.numLeaves = Level->subsectors.Size();
 	data.numLines = Level->lines.Size();
+	LevelMesh_ResetLights(Level, bake, data);
 	screen->SetLevelMeshData(&data);
 	LevelMesh_ResetState(Level, bake, sectors, sides, xforms, lights3D, polyobjs);
 	// A polyobject already out of its bake sector starts on the classic path.

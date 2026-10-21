@@ -832,6 +832,7 @@ set (PCH_SOURCES
 	rendering/hwrenderer/hw_levelmeshclusters.cpp
 	rendering/hwrenderer/hw_levelmeshfeedback.cpp
 	rendering/hwrenderer/hw_levelmeshresources.cpp
+	rendering/hwrenderer/hw_levelmeshlights.cpp
 	rendering/hwrenderer/hw_levelmeshshade.cpp
 	rendering/hwrenderer/hw_levelmeshstate.cpp
 	rendering/hwrenderer/hw_models.cpp

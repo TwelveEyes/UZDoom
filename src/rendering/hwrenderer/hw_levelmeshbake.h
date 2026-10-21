@@ -241,6 +241,38 @@ struct LevelMeshStateStream
 	TArray<uint8_t> DitherSideFlag, DitherPlaneFlag;
 };
 
+// Ticket 19: the dynamic light lists' bookkeeping (hw_levelmeshlights.cpp):
+// the slot of every light, the records and lists as last handed to the
+// backend, and the pool allocator.
+struct LevelMeshLightState
+{
+	unsigned NumSides = 0, NumOwners = 0;
+	// Slots: occupant per slot (nullptr = free); the records as uploaded.
+	TArray<FDynamicLight *> SlotLight;
+	TArray<uint32_t> FreeSlots;
+	TArray<LevelMeshLightRecord> Records;
+	TArray<uint8_t> RecordValid;		// per slot: Records[] is on the device
+	unsigned LiveSlots = 0, SlotTop = 0;	// occupied slots; slots handed out so far (the rest never were)
+	// Owners: pool block of the list (LM_LIGHTLIST_END = none) and its size class.
+	TArray<uint32_t> OwnerBlock;
+	TArray<uint8_t> OwnerClass;
+	TArray<uint8_t> OwnerDirtyFlag;
+	TArray<uint32_t> DirtyOwners;		// lists to rebuild (deduplicated by OwnerDirtyFlag)
+	TArray<uint32_t> Uploading;			// owners rebuilt by the update in flight
+	// Pool: power-of-two blocks (class k = 1 << k words) with free lists.
+	unsigned PoolWords = 0, PoolTop = 0;
+	TArray<TArray<uint32_t>> FreeBlocks;
+	// The light info words as uploaded (header, 3D-floor group owners, displacements).
+	TArray<uint32_t> Info;
+	unsigned SlotCapacity = 0;
+	// Cluster refine (lightrefine.comp): per section the clusters whose flats
+	// read it (CSR, numsections + 1 starts); the clusters to refine.
+	TArray<uint32_t> SectionClusterStart, SectionClusters;
+	TArray<uint32_t> ClusterDirtyFlag;
+	TArray<uint32_t> DirtyClusters, UploadingClusters;
+	bool Refine = true;					// lm_lightrefine as last streamed
+};
+
 struct LevelMeshClusterStats
 {
 	unsigned clusters = 0, triangles = 0;
@@ -303,6 +335,7 @@ public:
 	TArray<uint8_t> LineExposed;
 
 	LevelMeshStateStream Stream;
+	LevelMeshLightState Lights;		// ticket 19 (hw_levelmeshlights.cpp)
 	~LevelMeshBake();	// detaches the change hooks (hw_levelmeshstate.cpp)
 
 	// Classic draw-list entries the levelmesh replaces (1 = owned): per side
@@ -478,6 +511,19 @@ void LevelMesh_DitherChanged(sector_t *sec, secplane_t *plane);
 // far (the classic clears its own after drawing them), once per frame
 // before the traces flag the frame's.
 void LevelMesh_ConsumeDither(FLevelLocals *Level);
+
+// Ticket 19, dynamic light lists (hw_levelmeshlights.cpp).
+// Resets the light state for an upload: fills the upload data's light
+// fields (the arrays stay valid until the next reset) and makes every light
+// and every list with lights dirty.
+void LevelMesh_ResetLights(FLevelLocals *Level, LevelMeshBake *bake, LevelMeshUploadData &data);
+// The frame's light records and list words, appended to the state update
+// (called by LevelMesh_UpdateState); LevelMesh_LightsUploaded tells whether
+// the update reached the device (false: everything is sent again).
+// 'movedClusters': the cluster boxes this update refreshed (their refined lists follow).
+void LevelMesh_UpdateLights(FLevelLocals *Level, LevelMeshBake *bake, const TArray<LevelMeshClusterBox> &movedClusters, LevelMeshStateUpdate &update);
+void LevelMesh_LightsUploaded(LevelMeshBake *bake, bool uploaded);
+// The consumer side (LevelMesh_LightLists, owners, inline lists) is declared in hw_drawstructs.h.
 
 // The per-view inputs of the shading resolve (hw_levelmeshshade.cpp).
 void LevelMesh_FillShading(HWDrawInfo *di, LevelMeshShading &out);

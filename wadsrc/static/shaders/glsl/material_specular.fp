@@ -15,12 +15,8 @@
 **
 */
 
-vec2 lightAttenuation(int i, vec3 normal, vec3 viewdir, float lightcolorA, float glossiness, float specularLevel)
+vec2 lightAttenuation(vec4 lightpos, vec4 lightspot1, vec4 lightspot2, vec3 normal, vec3 viewdir, float lightcolorA, float glossiness, float specularLevel)
 {
-	vec4 lightpos = lights[i];
-	vec4 lightspot1 = lights[i+2];
-	vec4 lightspot2 = lights[i+3];
-
 	float lightdistance = distance(lightpos.xyz, pixelpos.xyz);
 	if (lightpos.w < lightdistance)
 		return vec2(0.0); // Early out lights touching surface but not this fragment
@@ -49,7 +45,7 @@ vec2 lightAttenuation(int i, vec3 normal, vec3 viewdir, float lightcolorA, float
 
 vec3 ProcessMaterialLight(Material material, vec3 color)
 {
-	vec4 dynlight = uDynLightColor;
+	vec4 dynlight = uDynLightColor + vec4(vDynLight, 0.0);
 	vec4 specular = vec4(0.0, 0.0, 0.0, 1.0);
 
 	vec3 normal = material.Normal;
@@ -64,7 +60,7 @@ vec3 ProcessMaterialLight(Material material, vec3 color)
 			for(int i=lightRange.x; i<lightRange.y; i+=4)
 			{
 				vec4 lightcolor = lights[i+1];
-				vec2 attenuation = lightAttenuation(i, normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
+				vec2 attenuation = lightAttenuation(lights[i], lights[i+2], lights[i+3], normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
 				dynlight.rgb += lightcolor.rgb * attenuation.x;
 				specular.rgb += lightcolor.rgb * attenuation.y;
 			}
@@ -73,12 +69,29 @@ vec3 ProcessMaterialLight(Material material, vec3 color)
 			for(int i=lightRange.y; i<lightRange.z; i+=4)
 			{
 				vec4 lightcolor = lights[i+1];
-				vec2 attenuation = lightAttenuation(i, normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
+				vec2 attenuation = lightAttenuation(lights[i], lights[i+2], lights[i+3], normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
 				dynlight.rgb -= lightcolor.rgb * attenuation.x;
 				specular.rgb -= lightcolor.rgb * attenuation.y;
 			}
 		}
 	}
+#ifdef LM_LIGHTLISTS
+	else if (uLightOwner != -1 && (uLightConsumer & LMLC_POINT) == 0)
+	{
+		// The levelmesh light list (lm_lights.glsl): modulated and subtractive lights.
+		LMLightList list = lmListBegin(uLightOwner);
+		vec4 lightpos, lightcolor, lightspot1, lightspot2;
+		uint cls;
+		while (lmListNext(list, uLightConsumer, uLightActor, pixelpos.xyz, vWorldNormal.xyz, lightpos, lightcolor, lightspot1, lightspot2, cls))
+		{
+			if (cls == 2u) continue;
+			vec2 attenuation = lightAttenuation(lightpos, lightspot1, lightspot2, normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
+			float sgn = cls == 0u ? 1.0 : -1.0;
+			dynlight.rgb += sgn * (lightcolor.rgb * attenuation.x);
+			specular.rgb += sgn * (lightcolor.rgb * attenuation.y);
+		}
+	}
+#endif
 
 	if ( uLightBlendMode == 1 )
 	{	// COLOR_CORRECT_CLAMPING
@@ -112,13 +125,32 @@ vec3 ProcessMaterialLight(Material material, vec3 color)
 			for(int i=lightRange.z; i<lightRange.w; i+=4)
 			{
 				vec4 lightcolor = lights[i+1];
-				vec2 attenuation = lightAttenuation(i, normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
+				vec2 attenuation = lightAttenuation(lights[i], lights[i+2], lights[i+3], normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
 				addlight.rgb += lightcolor.rgb * attenuation.x;
 			}
 
 			frag = clamp(frag + desaturate(addlight).rgb, 0.0, 1.0);
 		}
 	}
+#ifdef LM_LIGHTLISTS
+	else if (uLightOwner != -1 && (uLightConsumer & LMLC_POINT) == 0)
+	{
+		// Additive lights of the list (see material_normal.fp).
+		LMLightList list = lmListBegin(uLightOwner);
+		vec4 lightpos, lightcolor, lightspot1, lightspot2;
+		uint cls;
+		bool any = false;
+		vec4 addlight = vec4(0.0,0.0,0.0,0.0);
+		while (lmListNext(list, uLightConsumer, uLightActor, pixelpos.xyz, vWorldNormal.xyz, lightpos, lightcolor, lightspot1, lightspot2, cls))
+		{
+			if (cls != 2u) continue;
+			vec2 attenuation = lightAttenuation(lightpos, lightspot1, lightspot2, normal, viewdir, lightcolor.a, material.Glossiness, material.SpecularLevel);
+			addlight.rgb += lightcolor.rgb * attenuation.x;
+			if ((uLightConsumer & LMLC_ACTOR) != 0 || abs(dot(vWorldNormal.xyz, lightpos.xyz - pixelpos.xyz)) <= lightpos.w) any = true;
+		}
+		if (any) frag = clamp(frag + desaturate(addlight).rgb, 0.0, 1.0);
+	}
+#endif
 
 	return frag;
 }

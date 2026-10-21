@@ -182,6 +182,7 @@ DEFINE_ACTION_FUNCTION_NATIVE(ADynamicLight, SetOffset, SetOffset)
 void FDynamicLight::ReleaseLight()
 {
 	assert(prev != nullptr || this == Level->lights);
+	LevelMesh_LightReleased(this);
 	if (prev != nullptr) prev->next = next;
 	else Level->lights = next;
 	if (next != nullptr) next->prev = prev;
@@ -623,6 +624,7 @@ void FDynamicLight::LinkLight()
 		dl_validcount++;
 		::validcount++;
 		CollectWithinRadius(Pos, sect, float(radius*radius));
+		LevelMesh_LightTouched(this);
 	}
 }
 
@@ -634,6 +636,7 @@ void FDynamicLight::LinkLight()
 //==========================================================================
 void FDynamicLight::UnlinkLight()
 {
+	LevelMesh_LightTouched(this);
 	for(int i = 0; i < touchlists.wall_tlist.SSize(); i++)
 	{
 		if(touchlists.wall_tlist[i])

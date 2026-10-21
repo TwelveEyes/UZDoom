@@ -540,6 +540,29 @@ void HWWall::SetupLights(HWDrawInfo*di, FDynLightData &lightdata)
 }
 
 
+//==========================================================================
+//
+// Ticket 19: the levelmesh light list SetupLights would gather this wall's
+// lights from, with its gates (PutWall / DrawWall, SetupLights' wall types
+// and additive style); -1: no lights.
+//
+//==========================================================================
+
+int HWWall::LightOwner(HWDrawInfo *di)
+{
+	if (!LevelMesh_LightLists(di->Level) || !di->Level->HasDynamicLights || di->isFullbrightScene() || texture == nullptr) return -1;
+	if (RenderStyle == STYLE_Add && !di->Level->lightadditivesurfaces) return -1;
+	switch (type)
+	{
+	case RENDERWALL_FOGBOUNDARY:
+	case RENDERWALL_MIRRORSURFACE:
+	case RENDERWALL_COLOR:
+		return -1;
+	}
+	if ((seg->sidedef->Flags & WALLF_POLYOBJ) && sub) return LevelMesh_SectionLightOwner(di->Level, sub->section);
+	return LevelMesh_SideLightOwner(di->Level, seg->sidedef);
+}
+
 const char HWWall::passflag[] = {
 	0,		//RENDERWALL_NONE,
 	1,		//RENDERWALL_TOP,              // unmasked
@@ -610,7 +633,8 @@ void HWWall::PutWall(HWWallDispatcher *di, bool translucent)
 		if (hasDecals)
 		{
 			// If we want to use the light infos for the decal we cannot delay the creation until the render pass.
-			if (screen->BuffersArePersistent())
+			// (The levelmesh light lists need no gather: HWWall::LightOwner.)
+			if (screen->BuffersArePersistent() && !LevelMesh_LightLists(ddi->Level))
 			{
 				if (ddi->Level->HasDynamicLights && !ddi->isFullbrightScene() && texture != nullptr)
 				{

@@ -38,6 +38,7 @@
 #include "v_2ddrawer.h"
 
 #include "vk_postprocess.h"
+#include "vk_levelmesh.h"
 
 VkDescriptorSetManager::VkDescriptorSetManager(VulkanRenderDevice* fb) : fb(fb)
 {
@@ -82,12 +83,25 @@ void VkDescriptorSetManager::UpdateHWBufferSet()
 		HWBufferSet = HWBufferDescriptorPool->allocate(HWBufferSetLayout.get());
 	}
 
+	// Ticket 19: the levelmesh's dynamic light lists, for the classic
+	// pipelines' consumers (lm_lights.glsl); a null buffer without a level.
+	VkLevelMesh *lm = fb->GetLevelMesh();
+	auto lightBuffer = [&](ELevelMeshBinding b)
+	{
+		VulkanBuffer *buf = lm ? lm->GetLightBuffer(b) : nullptr;
+		return buf ? buf : fb->GetBufferManager()->NullSSBO.get();
+	};
+
 	WriteDescriptors()
 		.AddBuffer(HWBufferSet.get(), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, fb->GetBufferManager()->ViewpointUBO->mBuffer.get(), 0, sizeof(HWViewpointUniforms))
 		.AddBuffer(HWBufferSet.get(), 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, fb->GetBufferManager()->MatrixBuffer->UniformBuffer->mBuffer.get(), 0, sizeof(MatricesUBO))
 		.AddBuffer(HWBufferSet.get(), 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, fb->GetBufferManager()->StreamBuffer->UniformBuffer->mBuffer.get(), 0, sizeof(StreamUBO))
 		.AddBuffer(HWBufferSet.get(), 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, fb->GetBufferManager()->LightBufferSSO->mBuffer.get())
 		.AddBuffer(HWBufferSet.get(), 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, fb->GetBufferManager()->BoneBufferSSO->mBuffer.get())
+		.AddBuffer(HWBufferSet.get(), 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, lightBuffer(LMBIND_LIGHTRECS))
+		.AddBuffer(HWBufferSet.get(), 6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, lightBuffer(LMBIND_LIGHTOWNERS))
+		.AddBuffer(HWBufferSet.get(), 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, lightBuffer(LMBIND_LIGHTPOOL))
+		.AddBuffer(HWBufferSet.get(), 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, lightBuffer(LMBIND_LIGHTINFO))
 		.Execute(fb->device.get());
 }
 
@@ -258,8 +272,13 @@ void VkDescriptorSetManager::CreateHWBufferSetLayout()
 		.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
 		.AddBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
 		.AddBinding(2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
-		.AddBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
+		.AddBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
 		.AddBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
+		// Ticket 19: levelmesh light records, owners, pool, info (lm_lights.glsl)
+		.AddBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+		.AddBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+		.AddBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+		.AddBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
 		.DebugName("VkDescriptorSetManager.HWBufferSetLayout")
 		.Create(fb->device.get());
 }
@@ -267,7 +286,8 @@ void VkDescriptorSetManager::CreateHWBufferSetLayout()
 void VkDescriptorSetManager::CreateFixedSetLayout()
 {
 	DescriptorSetLayoutBuilder builder;
-	builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+	// The shadowmap is also sampled by the vertex stage (sprite light lists, ticket 19).
+	builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
 	builder.AddBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
 	if (fb->RaytracingEnabled())
 		builder.AddBinding(2, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -279,7 +299,7 @@ void VkDescriptorSetManager::CreateHWBufferPool()
 {
 	HWBufferDescriptorPool = DescriptorPoolBuilder()
 		.AddPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 3 * maxSets)
-		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * maxSets)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * maxSets)
 		.MaxSets(maxSets)
 		.DebugName("VkDescriptorSetManager.HWBufferDescriptorPool")
 		.Create(fb->device.get());

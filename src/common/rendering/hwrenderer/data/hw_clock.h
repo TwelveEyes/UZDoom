@@ -56,6 +56,7 @@ struct LevelMeshPerfStats
 	double markMs = 0;			// the main view's mark pass (ticket 18), part of totalMs
 	unsigned portalViews = 0;	// portal views the levelmesh drew in that frame (ticket 15)
 	double portalMs = 0;		// their GPU time (cull + resolve + draw, summed)
+	double lightRefineMs = 0;	// ticket 19: cluster light refine GPU time of the last completed frame
 };
 extern int rendered_levelmesh;	// levelmesh draws this frame
 
@@ -96,6 +97,20 @@ struct LevelMeshExposureStats
 };
 extern LevelMeshExposureStats lmExposureStats;
 extern glcycle_t LevelMeshExposureTime;
+
+// Levelmesh dynamic light lists of this frame (ticket 19, LevelMesh_UpdateLights
+// and the inline lists of big models), summed over the views.
+struct LevelMeshLightStats
+{
+	unsigned slots = 0;			// live light slots (the last update's)
+	unsigned records = 0;		// light records uploaded
+	unsigned owners = 0;		// owner lists rebuilt and uploaded
+	unsigned poolWords = 0;		// pool / owner / info words uploaded
+	unsigned inlineLists = 0;	// inline lists built (big models)
+	unsigned clustersRefined = 0;	// cluster light lists refined on the GPU
+};
+extern LevelMeshLightStats lmLightStats;
+extern glcycle_t LevelMeshLightTime;
 
 void ResetProfilingData();
 void CheckBench();

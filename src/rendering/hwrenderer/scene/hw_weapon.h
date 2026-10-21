@@ -75,6 +75,10 @@ struct HUDSprite
 	FVector3 rotation, translation, pivot;
 
 	int lightindex;
+	// Ticket 19: the levelmesh light list instead of lightindex / dynrgb's lights.
+	int lightOwner;
+	int lightConsumer;
+	FVector3 lightOrigin;
 
 	void SetBright(bool isbelow);
 	bool GetWeaponRenderStyle(DPSprite *psp, AActor *playermo, sector_t *viewsector, WeaponLighting &light, double ticFrac);

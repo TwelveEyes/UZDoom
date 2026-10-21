@@ -200,6 +200,12 @@ protected:
 	FLightDefaults * m_AssocLight;
 };
 
+// Levelmesh light lists (hw_levelmeshlights.cpp; no-ops without a levelmesh):
+// a light's touch lists are about to change or just changed (the lists of
+// its sides / sections must be rebuilt), and a light is released.
+void LevelMesh_LightTouched(struct FDynamicLight *light);
+void LevelMesh_LightReleased(struct FDynamicLight *light);
+
 struct FDynamicLightTouchLists
 {
 	TArray<FSection*> flat_tlist;
@@ -243,6 +249,11 @@ struct FDynamicLight
 	inline constexpr bool IsActive() const
 	{
 		return flags & ILF_ACTIVE;
+	}
+
+	inline constexpr bool IsVisibleToPlayer() const
+	{
+		return flags & ILF_VISIBLE_TO_PLAYER;
 	}
 
 	inline constexpr bool IsShadowMapped() const
@@ -341,6 +352,7 @@ public:
 	int m_tickCount;
 	int m_lastUpdate;
 	int mShadowmapIndex;
+	int lmSlot = -1;		// levelmesh light slot (hw_levelmeshlights.cpp), -1 = none
 private:
 	uint32_t flags;
 public:

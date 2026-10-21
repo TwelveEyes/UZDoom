@@ -357,6 +357,8 @@ namespace ShaderInputsOutputs
 		{ShaderPosition::VOutput, {UniformType::Vec4, "", "ClipDistanceA"}, 0, HasClipDistance},
 		{ShaderPosition::VOutput, {UniformType::Vec4, "", "ClipDistanceB"}, 0, HasClipDistance},
 		{ShaderPosition::VOutput, {UniformType::Vec3, "", "vLightmap"}, 0, Simple},
+		// levelmesh light lists (ticket 19): sprite light evaluated by the vertex stage (main.vp)
+		{ShaderPosition::VOutput, {UniformType::Vec3, "flat", "vDynLight"}, 0, Simple},
 		//frag shader outputs
 		{ShaderPosition::FOutput, {UniformType::Vec4, "", "FragColor"}, 0, 0},
 		{ShaderPosition::FOutput, {UniformType::Vec4, "", "FragFog"}, GBufferPass, 0},

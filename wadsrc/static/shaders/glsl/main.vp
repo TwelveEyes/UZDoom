@@ -55,6 +55,14 @@ void main()
 	#ifndef SIMPLE
 		vLightmap = aLightmap;
 
+		// Sprites, particles and point-lit models: the levelmesh light list
+		// evaluated once at the actor (GetDynSpriteLight, lm_lights.glsl).
+		vDynLight = vec3(0.0);
+		#ifdef LM_LIGHTLISTS
+		if ((uLightConsumer & LMLC_POINT) != 0 && uLightOwner != -1)
+			vDynLight = lmPointLight(uLightOwner, uLightActor, uLightOrigin.xyz);
+		#endif
+
 		pixelpos.xyz = worldcoord.xyz;
 		pixelpos.w = -eyeCoordPos.z/eyeCoordPos.w;
 

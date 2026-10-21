@@ -197,8 +197,10 @@ tracked, but the perf bars only apply after ticket 20 removes the walk from the 
     clusters, exposure, dither) lag by at most the readback depth. This must be bounded and
     measured. Measured in ticket 17: exactly one rendered frame (the device waits for every
     submit at the frame boundary).
-  - **DC4 light selection:** clustered light binning versus per-surface lists at edges
-    (ticket 19).
+  - **DC4 light evaluation:** (a) float summation order of a surface's light list vs the classic
+    per-surface list; (b) additive light colour on sprites / particles (`× 5.0` of the packed
+    `0.2`: ULP); (c) the sprite shadow test, nearest shadowmap texel vs the classic CPU ray test,
+    shadowmaps on only (ticket 19; selection itself is the classic's touch lists, exact).
   - **DC5 visibility precision:** exact depth visibility versus the classic clipper's
     approximations. This affects game-state sets (exposure / dither eligibility), not pixels.
 - Game state (exposure flags, savegames) is compared by set-diff, with DC5 differences classified.
@@ -249,7 +251,8 @@ are included.
   the classic path.
 - A clean build is the per-change smoke test (user preference); A/B runs on request or at ticket
   acceptance. Test runs are launched unsandboxed on the real GPU (a sandbox silently falls back to
-  llvmpipe).
+  llvmpipe). Every in-game run is headless under gamescope (`tools/abtest/gamescope_wrap.py`), one
+  game instance at a time (`flock /tmp/helion-smoke/game.lock`).
 - This is fork work: `CONTRIBUTING.md` prohibits upstreaming AI-generated code. Flag this before any
   commit or PR.
 
@@ -275,7 +278,7 @@ are included.
 | 16 | Translucent surfaces, fog boundaries, hack fills | task | 10 |
 | 17 | Visibility feedback + actor/decal gather | task | 15 |
 | 18 | Game-logic feedback: exposure, dither, OOB/ortho/radar | task | 17 |
-| 19 | Dynamic lights (clustered forward+), shadowmaps, SSAO normals | task | 10 |
+| 19 | Dynamic lights (owner light lists), shadowmaps, SSAO normals, specular / PBR | task | 10 |
 | 20 | Retire the BSP walk from the levelmesh frame | task | 11, 13, 16, 18, 19, 22 |
 | 21 | Integrate: matrix, perf bars, soak, PROVEN, default flip | task | 03, 20 |
 | 22 | Remaining material paths: lightmaps, user shaders, canvases, colors | task | 11 |
@@ -521,3 +524,14 @@ ticket file, and decisions that change this map are written back here, under Dec
   - Game-state set-diffs (DC5: exact depth vs the clipper) staged in `allowlists/pending/` for
     review. Test kit `tools/abtest/make_oobtest.py`; perflog v9 `lmxv lmxl lmxn lmxms lmmk`;
     cvars `lm_exposure`, `lm_exposurelog`, `lm_oobmask`.
+- 2026-10-21: ticket 19 implemented → dynamic lights are **owner light lists**, not froxels (user
+  decision): the playsim touch lists (`side_t::dlist`, `FSection::dlist`) kept on the GPU as
+  retained per-side / per-section lists of persistent light slots, streamed dirty-only. Every
+  consumer reads one list by index: levelmesh walls / flats (flat varying), decals, sprites /
+  particles / HUD (vertex-stage `GetDynSpriteLight`), models (section list or an inline list).
+  Selection is the classic's own (exact; no per-view pass), so DC4 narrows to evaluation (ADR 0002
+  amendment). Per-cluster refine for flats (`lightrefine.comp`, conservative). Specular / PBR
+  programs. HW buffer set 1 grows bindings 5..8 (aliases of the light buffers); `PushConstants`
+  grows to 96 bytes. All in-game tool runs are headless under gamescope. Details and runs:
+  `issues/19-dynamic-lights.md`. Ticket 20 still owns removing `HWWall::SetupLights` from the walk
+  for levelmesh-owned walls.

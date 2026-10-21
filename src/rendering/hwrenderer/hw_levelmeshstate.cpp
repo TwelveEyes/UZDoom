@@ -450,6 +450,8 @@ void LevelMesh_FillPolyobj(FLevelLocals *Level, const LevelMeshBake *bake, unsig
 	out.m[0] = out.m[3] = 1.f;
 	if (poly >= Level->Polyobjects.Size() || poly + 1 >= bake->PolyVertexStart.Size()) return;
 	const FPolyObj &po = Level->Polyobjects[poly];
+	// Ticket 19: the section whose dynamic lights reach its walls.
+	if (po.CenterSubsector && po.CenterSubsector->section) out.section = (uint32_t)Level->sections.SectionIndex(po.CenterSubsector->section);
 	uint32_t first = bake->PolyVertexStart[poly];
 	unsigned n = std::min<unsigned>(bake->PolyVertexStart[poly + 1] - first, po.Vertices.Size());
 	if (n == 0) return;
@@ -1123,8 +1125,13 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		ClusterUpdates.Push(box);
 	}
 
+	// Dynamic light records and lists (ticket 19, hw_levelmeshlights.cpp).
+	LevelMeshStateUpdate lightUpdate;
+	LevelMesh_UpdateLights(Level, bake, ClusterUpdates, lightUpdate);
+	bool lightsDirty = lightUpdate.lightRecIndices.size || lightUpdate.lightWords.size || lightUpdate.lightClusters.size;
+
 	size_t bytes = 0;
-	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size() || DirtyLights.Size() || DirtyGroups.Size() || DirtyPolys.Size())
+	if (DirtySectors.Size() || ClusterUpdates.Size() || DirtySides.Size() || DirtyXforms.Size() || DirtyLights.Size() || DirtyGroups.Size() || DirtyPolys.Size() || lightsDirty)
 	{
 		// The group records follow the side tiers in the side buffer.
 		UploadSides = DirtySides;
@@ -1148,7 +1155,15 @@ void LevelMesh_UpdateState(FLevelLocals *Level)
 		update.lights3D = LM_Span(DirtyLightRecords);
 		update.polyobjIndices = LM_Span(DirtyPolys);
 		update.polyobjs = LM_Span(DirtyPolyRecords);
+		update.lightRecIndices = lightUpdate.lightRecIndices;
+		update.lightRecs = lightUpdate.lightRecs;
+		update.lightWords = lightUpdate.lightWords;
+		update.lightSlots = lightUpdate.lightSlots;
+		update.lightPoolWords = lightUpdate.lightPoolWords;
+		update.lightClusters = lightUpdate.lightClusters;
+		update.lightRefine = lightUpdate.lightRefine;
 		bytes = screen->UpdateLevelMeshState(update);
+		LevelMesh_LightsUploaded(bake, bytes != 0);
 		if (bytes == 0)
 		{
 			// Not uploaded: keep the mirror equal to the device, so the

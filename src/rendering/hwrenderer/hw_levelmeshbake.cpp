@@ -85,7 +85,7 @@ CVAR(Int, lm_bake_debug, 0, 0)
 CVAR(Int, lm_cluster_budget, 256, 0)
 // Debug: material programs the levelmesh draws (bit per ELevelMeshProgram,
 // read at level setup); the others stay on the classic path.
-CVAR(Int, lm_programs, 7, CVAR_NOSAVE)
+CVAR(Int, lm_programs, 31, CVAR_NOSAVE)
 // Debug: draw surfaces lit by a 3D light through the levelmesh (read at
 // level setup); 0 leaves them on the classic path.
 CVAR(Bool, lm_light3d, true, CVAR_NOSAVE)
@@ -968,10 +968,11 @@ void Baker::ProcessPolyobjects()
 
 } // namespace
 
-// The levelmesh program of a texture's material (FMaterial's shader index:
-// default, warp 1, warp 2), or -1 for the material shaders the levelmesh
-// does not build (specular / PBR, paletted, user shaders, canvases).
-// Animation frames are assumed to share their base's shader.
+// The levelmesh program of a texture's material (FMaterial's shader index,
+// chosen as its constructor does: default, warp 1, warp 2, specular, PBR),
+// or -1 for the material shaders the levelmesh does not build (paletted,
+// user shaders, canvases). Animation frames are assumed to share their
+// base's shader.
 int LevelMesh_MaterialProgram(FGameTexture *tex)
 {
 	if (tex == nullptr) return LMP_DEFAULT;
@@ -979,7 +980,8 @@ int LevelMesh_MaterialProgram(FGameTexture *tex)
 	if (tex->GetShaderIndex() != SHADER_Default) return -1;
 	int program = LMP_DEFAULT;
 	if (tex->isWarped()) program = tex->isWarped() == 1 ? LMP_WARP1 : LMP_WARP2;
-	else if (tex->GetNormalmap() != nullptr) return -1;	// specular / PBR
+	else if (tex->GetNormalmap() && tex->GetSpecularmap()) program = LMP_SPECULAR;
+	else if (tex->GetNormalmap() && tex->GetMetallic() && tex->GetRoughness() && tex->GetAmbientOcclusion()) program = LMP_PBR;
 	return (lm_programs & (1 << program)) ? program : -1;
 }
 

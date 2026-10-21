@@ -58,6 +58,15 @@ enum ELevelMeshBinding
 	LMBIND_SKYSOURCES,		// per sky source: its sky configuration this frame (uint)
 	LMBIND_LEAFMASK,		// bit per leaf: the leaves the view may show (LevelMeshView::leafMask, ticket 18)
 	LMBIND_EXPOSURE,		// per view index (0 main, 1 + k portal view k): leaf bits, then line bits (mark pass, ticket 18)
+	// Ticket 19: dynamic light lists (hw_levelmeshdata.h). The first four are
+	// also bound as set 1 (HW buffers) bindings 5..8 for the classic
+	// pipelines (VkDescriptorSetManager::UpdateHWBufferSet).
+	LMBIND_LIGHTRECS,		// LevelMeshLightRecord per light slot
+	LMBIND_LIGHTOWNERS,		// per owner (side, numSides + section): pool word offset of its list
+	LMBIND_LIGHTPOOL,		// the lists
+	LMBIND_LIGHTINFO,		// ELevelMeshLightInfo words, 3D-floor group owners, portal displacements
+	LMBIND_LEAFSECTION,		// per leaf (render subsector): its section index
+	LMBIND_CLUSTERLIGHTS,	// per cluster: its refined light list (lightrefine.comp)
 	LMBIND_NUMBUFFERS,
 	LMBIND_SAMPLERS = LMBIND_NUMBUFFERS,	// sampler[NUMSAMPLERS], indexed by clamp mode
 };
@@ -125,6 +134,10 @@ public:
 	unsigned GetLeafWords() const { return mLeafWords; }
 	unsigned GetLineWords() const { return mLineWords; }
 	unsigned GetExposureWords() const { return mLeafWords + mLineWords; }
+	// Ticket 19: the light buffers aliased into set 1 (null while no level is resident).
+	VulkanBuffer *GetLightBuffer(ELevelMeshBinding b) { return mResident ? mBuffers[b].get() : nullptr; }
+	// Ticket 19: the cluster light refine GPU time of the last completed frame.
+	double GetRefineMs() const { return mRefineMs; }
 	enum { MaxExposureViews = 1 + 64 };	// the main view + VkLevelMeshRenderer::MaxPortalViews
 	uint64_t GetId() const { return mResident ? mId : 0; }
 
@@ -139,6 +152,9 @@ private:
 	void FlushSlotWrites();
 	void UploadTable();
 	bool CreateScatter();
+	bool CreateRefine();
+	void GrowLightBuffer(ELevelMeshBinding b, unsigned count, size_t elementSize);
+	void HarvestRefineTime();
 
 	VulkanRenderDevice *fb = nullptr;
 
@@ -207,9 +223,26 @@ private:
 		uint32_t xformIndices, xformRecords, numXforms;
 		uint32_t light3DIndices, light3DRecords, numLights3D;
 		uint32_t polyIndices, polyRecords, numPolys;
+		uint32_t lightRecIndices, lightRecRecords, numLightRecs;
+		uint32_t lightWords, numLightWords;
 		uint32_t padding[3];
 	};
-	static_assert(sizeof(ScatterConstants) == 20 * 4, "scatter.comp declares 20 words of push constants");
+	static_assert(sizeof(ScatterConstants) == 25 * 4, "scatter.comp declares 25 words of push constants");
+	// Cluster light refine (ticket 19). Keep in sync with lightrefine.comp.
+	struct RefineConstants
+	{
+		uint32_t clusterList, numClusters, enabled, padding;
+	};
+	bool mRefineCreated = false, mRefineFailed = false;
+	std::unique_ptr<VulkanShader> mRefineShader;
+	std::unique_ptr<VulkanPipelineLayout> mRefineLayout;
+	std::unique_ptr<VulkanPipeline> mRefinePipeline;
+	// Timestamps of the frame's refine dispatches (frames are serialized:
+	// harvested at the next BeginFrame).
+	enum { MaxRefineTimings = 16 };
+	std::unique_ptr<VulkanQueryPool> mRefineQueries;
+	unsigned mRefineTimings = 0;
+	double mRefineMs = 0;
 	bool mScatterCreated = false, mScatterFailed = false;
 	std::unique_ptr<VulkanShader> mScatterShader;
 	std::unique_ptr<VulkanDescriptorSetLayout> mScatterSetLayout;

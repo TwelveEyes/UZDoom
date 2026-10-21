@@ -31,6 +31,13 @@ Initial classes:
 
 Adding a class requires amending this ADR.
 
+Amendment (2026-10-21, ticket 19): the levelmesh selects dynamic lights by the classic's own
+reachability (the playsim's side / section touch lists, kept on the GPU as per-owner lists), not by
+view-space binning, so DC4 narrows to evaluation differences: (a) float summation order of a
+surface's list vs the classic per-surface list; (b) additive-light color on sprites / particles
+(the record's `0.2`-scaled color `× 5.0`: ULP); (c) the sprite shadow test, nearest shadowmap
+texel vs the classic CPU ray test, with shadowmaps on only.
+
 Geometry and visibility must match exactly wherever they can be tested. Game state (exposure flags,
 savegames) is compared by set-diff, with differences classified under DC5.
 

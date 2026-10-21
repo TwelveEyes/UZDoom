@@ -93,7 +93,7 @@ enum ELevelMeshSurfaceFlags : uint32_t
 	LMSF_SKYCLOSED = 1 << 20,	// sky wall of a sky-sky line: shown only while the back sector (vRef's) is closed (HWWall::SkyTop / SkyBottom)
 	LMSF_POLYOBJ = 1 << 19,		// polyobject wall: x / y are polyobject-local, placed by its LevelMeshPolyobj (index in the side record)
 	LMSF_WALLTYPESHIFT = 24,	// RENDERWALL_* in bits 24..27
-	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..30
+	LMSF_PROGRAMSHIFT = 28,		// ELevelMeshProgram in bits 28..30 (LMP_COUNT <= 8)
 	LMSF_PROGRAMMASK = 7u << 28,
 };
 
@@ -170,8 +170,12 @@ struct LevelMeshSurface
 	// flats and sky caps no line).
 	uint32_t leaf;
 	uint32_t line;
+	// Ticket 19: the cluster whose refined light list the surface reads
+	// (LMBIND_CLUSTERLIGHTS); LM_LIGHTLIST_END = its owner list (walls, sky,
+	// polyobjects, flats split over several clusters).
+	uint32_t cluster;
 };
-static_assert(sizeof(LevelMeshSurface) == 34 * 4, "LevelMeshSurface must stay std430-compatible");
+static_assert(sizeof(LevelMeshSurface) == 35 * 4, "LevelMeshSurface must stay std430-compatible");
 
 // A 3D light: one lightlist_t of a sector with 3D floors, identified at bake
 // by (sector, lightsource, p_lightlevel, caster), the inputs the classic
@@ -201,14 +205,16 @@ static_assert(sizeof(LevelMeshLight3D) == 8 * 4, "LevelMeshLight3D must stay std
 
 // The material programs of the levelmesh: the classic material shaders
 // (FMaterial::GetShaderIndex) it builds a levelmesh variant of. The value is
-// the shader index (SHADER_Default, SHADER_Warp1, SHADER_Warp2). Other
-// material shaders (specular / PBR, paletted, user shaders, canvases) stay on
-// the classic path (LevelMesh_NeedsClassicMaterial).
+// the shader index (SHADER_Default, SHADER_Warp1, SHADER_Warp2,
+// SHADER_Specular, SHADER_PBR). Other material shaders (paletted, user
+// shaders, canvases) stay on the classic path (LevelMesh_NeedsClassicMaterial).
 enum ELevelMeshProgram : uint32_t
 {
 	LMP_DEFAULT,
 	LMP_WARP1,
 	LMP_WARP2,
+	LMP_SPECULAR,	// ticket 19: normal + specular map (Blinn)
+	LMP_PBR,		// ticket 19: normal + metallic + roughness + ambient occlusion maps
 	// Not a material: sky walls and caps (LMSF_SKY), drawn with the default
 	// program's shaders into depth / stencil / alpha only, by the sky
 	// portals (DFrameBuffer::DrawLevelMeshSky), never by the scene draw.
@@ -219,6 +225,7 @@ enum ELevelMeshProgram : uint32_t
 	LMP_EXPOSURE,
 	LMP_COUNT,
 };
+static_assert(LMP_COUNT <= 8, "the program is 3 bits of LevelMeshSurface::flags (LMSF_PROGRAMMASK)");
 
 // Material buckets: alpha class (opaque / masked) x program. Inside a
 // cluster the index range is ordered by bucket. Opaque and masked follow the
@@ -346,7 +353,8 @@ struct LevelMeshTextureEntry
 	uint32_t layers;		// number of layers (low 16 bits) | TEXF_* (LMTE_TEXFMASK) | LMTE_*
 	float displayWidth, displayHeight;	// FGameTexture display size (flat texture matrix)
 	float shaderSpeed;		// FGameTexture::GetShaderSpeed (material shader timer)
-	uint32_t reserved[3];
+	float glossiness, specularLevel;	// FGameTexture::GetGlossiness / GetSpecularLevel (LMP_SPECULAR: uSpecularMaterial)
+	uint32_t reserved;
 };
 static_assert(sizeof(LevelMeshTextureEntry) == 8 * 4, "LevelMeshTextureEntry must stay std430-compatible");
 
@@ -492,6 +500,110 @@ template<class T> struct LevelMeshSpan
 	unsigned size = 0;
 };
 
+// Ticket 19: dynamic lights. Every FDynamicLight has a persistent slot
+// (LevelMeshLightRecord, LMBIND_LIGHTRECS). The lights reaching a side or a
+// section (the playsim's side_t::dlist / FSection::dlist touch lists) are a
+// list in the light pool (LMBIND_LIGHTPOOL): [portal group, slot, ...,
+// LM_LIGHTLIST_END], slots ascending; the owner table (LMBIND_LIGHTOWNERS)
+// holds each owner's pool word offset (LM_LIGHTLIST_END = no list). Owner
+// index: side index for sides, numSides + section index for sections.
+// Records and lists are streamed dirty-only (hw_levelmeshlights.cpp); every
+// consumer reads one list by owner index (lm_lights.glsl).
+constexpr uint32_t LM_LIGHTLIST_END = 0xffffffffu;
+
+enum ELevelMeshLightFlags : uint32_t
+{
+	LMLF_CLASSMASK = 3,				// 0 modulated, 1 subtractive, 2 additive (AddLightToList's array index)
+	LMLF_DONTLIGHTSELF = 1 << 2,	// LF_DONTLIGHTSELF
+	LMLF_DONTLIGHTOTHERS = 1 << 3,	// LF_DONTLIGHTOTHERS
+	LMLF_DONTLIGHTACTORS = 1 << 4,	// LF_DONTLIGHTACTORS
+	LMLF_DONTLIGHTMAP = 1 << 5,		// FDynamicLight::DontLightMap: no surface consumers
+	LMLF_VISIBLETOPLAYER = 1 << 6,	// ILF_VISIBLE_TO_PLAYER (ShouldLightActor requires it)
+	LMLF_ADDITIVE = 1 << 7,			// LF_ADDITIVE: the color carries AddLightToList's 0.2 scale
+	LMLF_GROUPSHIFT = 16,			// bits 16..31: the light's sector PortalGroup
+};
+
+// One dynamic light in its slot, packed like AddLightToList
+// (hw_dynlightdata.cpp): the material light loops read it as four vec4
+// (position / radius, color / shadow index, spot direction / type, spot
+// cosines / flags / owner actor), then the radius the cluster refine tests
+// (lightrefine.comp). The position is in the light's own portal group; the
+// consumer adds the displacement to its list's group (LevelMeshLightInfo).
+// A light that is inactive (or all lights while the level has none,
+// lm_lights 0) has radius 0: every consumer skips it.
+// std430-compatible: 20 x 32 bit.
+struct LevelMeshLightRecord
+{
+	float pos[3];			// X, Z, Y (GL order)
+	float radius;			// FDynamicLight::GetRadius()
+	float color[3];			// AddLightToList's r, g, b (subtractive: length - c)
+	float shadowIndex;		// mShadowmapIndex + 1 (1025 = none), negative = attenuated
+	float spotDir[3];		// spot direction (GL order), zero for point lights
+	float lightType;		// 0 point, 1 spot
+	float spotCosInner, spotCosOuter;
+	uint32_t flags;			// LMLF_*
+	uint32_t ownerActor;	// LevelMesh_ActorId(light->target), 0 = none
+	// The largest radius the light reaches with its current settings
+	// (FDynamicLight::radius, at least GetRadius()): a flickering or
+	// pulsing light keeps its refined cluster lists.
+	float refineRadius;
+	uint32_t reserved[3];
+};
+static_assert(sizeof(LevelMeshLightRecord) == 20 * 4, "LevelMeshLightRecord must stay std430-compatible");
+constexpr unsigned LM_LIGHTREC_VEC4 = sizeof(LevelMeshLightRecord) / 16;
+
+// LMBIND_LIGHTINFO words: a header (LMLI_*), the owner of every 3D-floor
+// group (its side; LM_LIGHTLIST_END for plane groups: flats find their
+// section by leaf), then the portal displacements as float bits:
+// offset(from, to) = FDisplacementTable::getOffset(from, to) at word
+// LMLI_HEADER + numFFGroups + 2 * (from * numGroups + to).
+enum ELevelMeshLightInfo : uint32_t
+{
+	LMLI_NUMGROUPS,
+	LMLI_NUMSIDES,
+	LMLI_NUMOWNERS,
+	LMLI_NUMFFGROUPS,
+	LMLI_HEADER,
+};
+
+// Per-cluster refined light lists (LMBIND_CLUSTERLIGHTS, lightrefine.comp):
+// a crowded section costs every flat pixel its whole list; the refine keeps
+// the lights whose sphere touches the cluster's box (additive lights are
+// always kept: their presence decides the classic's additive clamp).
+// LM_CLUSTERLIGHT_WORDS per cluster: [count (LM_LIGHTLIST_END = unrefined:
+// read the owner list), section[LM_REFINE_SECTIONS], portal group,
+// entry..., LM_LIGHTLIST_END]; entry = slot | section mask << 24 (bit k:
+// in section[k]'s list), slots ascending.
+enum ELevelMeshClusterLights : uint32_t
+{
+	LM_REFINE_SECTIONS = 8,		// sections per cluster (more: unrefined)
+	LM_REFINE_MAX = 32,			// entries per cluster (more survivors: unrefined)
+	LM_REFINE_MIN = 16,			// lights in the sections' union below which the owner lists are kept
+	LM_CLUSTERLIGHT_GROUP = 1 + LM_REFINE_SECTIONS,
+	LM_CLUSTERLIGHT_ENTRIES = LM_CLUSTERLIGHT_GROUP + 1,
+	LM_CLUSTERLIGHT_WORDS = 48,
+	LM_CLUSTERLIGHT_SLOTMASK = 0xffffff,
+	LM_CLUSTERLIGHT_MASKSHIFT = 24,
+};
+static_assert(LM_CLUSTERLIGHT_ENTRIES + LM_REFINE_MAX + 1 <= LM_CLUSTERLIGHT_WORDS, "cluster light list overflow");
+
+// One word of the owner table, pool or light info (LevelMeshStateUpdate::lightWords).
+enum ELevelMeshLightWordTarget : uint32_t
+{
+	LMLW_OWNERS = 0u << 30,
+	LMLW_POOL = 1u << 30,
+	LMLW_INFO = 2u << 30,
+	LMLW_TARGETMASK = 3u << 30,
+	LMLW_INDEXMASK = ~LMLW_TARGETMASK,
+};
+
+struct LevelMeshLightWord
+{
+	uint32_t target;		// LMLW_* | word index
+	uint32_t value;
+};
+
+
 // A refreshed cluster box: the z-range follows the anchor planes, the xy
 // box of a polyobject's cluster follows the polyobject.
 struct LevelMeshClusterBox
@@ -512,7 +624,12 @@ struct LevelMeshPolyobj
 {
 	float m[4];
 	float t[2];
-	uint32_t reserved[2];
+	// Ticket 19: the section of its centre subsector
+	// (FLevelLocals::sections.SectionIndex): its walls are lit by that
+	// section's dynamic lights (HWWall::SetupLights uses the subsector's
+	// section for polyobject segs).
+	uint32_t section;
+	uint32_t reserved;
 };
 static_assert(sizeof(LevelMeshPolyobj) == 8 * 4, "LevelMeshPolyobj must stay std430-compatible");
 
@@ -533,6 +650,14 @@ struct LevelMeshStateUpdate
 	LevelMeshSpan<LevelMeshLight3D> lights3D;		// parallel to light3DIndices
 	LevelMeshSpan<uint32_t> polyobjIndices;
 	LevelMeshSpan<LevelMeshPolyobj> polyobjs;		// parallel to polyobjIndices
+	// Ticket 19: dynamic lights. The light slots and pool words the lists
+	// need (the backend grows its buffers, keeping their contents).
+	LevelMeshSpan<uint32_t> lightRecIndices;		// slots
+	LevelMeshSpan<LevelMeshLightRecord> lightRecs;	// parallel to lightRecIndices
+	LevelMeshSpan<LevelMeshLightWord> lightWords;	// owner table / pool / light info words
+	unsigned lightSlots = 0, lightPoolWords = 0;
+	LevelMeshSpan<uint32_t> lightClusters;			// clusters whose light list is refined again
+	bool lightRefine = true;						// false: the refine writes them unrefined (lm_lightrefine 0)
 };
 
 // Everything the backend uploads at level setup. The arrays only need to
@@ -555,4 +680,11 @@ struct LevelMeshUploadData
 	LevelMeshSpan<int> textureIds;		// ids resolved into the translation table
 	unsigned translationTableSize = 0;	// number of texture ids (TexMan.NumTextures())
 	unsigned numLeaves = 0, numLines = 0;	// render subsectors / linedefs (exposure and leaf mask bits, ticket 18)
+	// Ticket 19: dynamic light lists. Per leaf (render subsector) its
+	// section; the light info words (ELevelMeshLightInfo); the owner count
+	// (the owner table starts without lists) and the initial capacities.
+	LevelMeshSpan<uint32_t> leafSections;
+	LevelMeshSpan<uint32_t> lightInfo;
+	unsigned numLightOwners = 0;
+	unsigned lightSlots = 0, lightPoolWords = 0;
 };

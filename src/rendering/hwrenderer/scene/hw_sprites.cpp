@@ -168,11 +168,53 @@ void HWSprite::DrawSprite(HWDrawInfo *di, FRenderState &state, bool translucent)
 	{
 		if (di->Level->HasDynamicLights && !di->isFullbrightScene() && !fullbright)
 		{
-			if (dynlightindex == -1)	// only set if we got no light buffer index. This covers all cases where sprite lighting is used.
+			if (lightOwner != -1)
 			{
-				float out[3] = {};
-				di->GetDynSpriteLight(gl_light_sprites ? actor : nullptr, gl_light_particles ? particle : nullptr, out);
-				state.SetDynLight(out[0], out[1], out[2]);
+				// Per-pixel model lights from the levelmesh light list (PutSprite).
+				state.SetLightOwner(lightOwner, LMLC_ACTOR | LMLC_FORCEATTEN, LevelMesh_ActorId(actor));
+			}
+			else if (dynlightindex == -1)	// only set if we got no light buffer index. This covers all cases where sprite lighting is used.
+			{
+				if (LevelMesh_LightLists(di->Level))
+				{
+					// GetDynSpriteLight on the GPU: the vertex stage sums the
+					// section's light list at the actor (lm_lights.glsl); the
+					// light probe stays here.
+					AActor *thing = gl_light_sprites ? actor : nullptr;
+					particle_t *part = gl_light_particles ? particle : nullptr;
+					FVector3 pos;
+					FSection *section = nullptr;
+					if (thing && !(thing->renderflags2 & RF2_NODYNAMICLIGHTING))
+					{
+						pos = { (float)thing->X(), (float)thing->Y(), (float)thing->Center() };
+						section = thing->section;
+					}
+					else if (part && !(part->flags & SPF_NODYNAMICLIGHTING))
+					{
+						pos = { (float)part->Pos.X, (float)part->Pos.Y, (float)part->Pos.Z };
+						section = part->subsector->section;
+						thing = nullptr;
+					}
+					float out[3] = {};
+					if (section)
+					{
+						LightProbe *probe = FindLightProbe(di->Level, pos.X, pos.Y, pos.Z);
+						if (probe)
+						{
+							out[0] = probe->Red;
+							out[1] = probe->Green;
+							out[2] = probe->Blue;
+						}
+						state.SetLightOwner(LevelMesh_SectionLightOwner(di->Level, section), LMLC_ACTOR | LMLC_POINT, LevelMesh_ActorId(thing), FVector3(pos.X, pos.Z, pos.Y));
+					}
+					state.SetDynLight(out[0], out[1], out[2]);
+				}
+				else
+				{
+					float out[3] = {};
+					di->GetDynSpriteLight(gl_light_sprites ? actor : nullptr, gl_light_particles ? particle : nullptr, out);
+					state.SetDynLight(out[0], out[1], out[2]);
+				}
 			}
 		}
 		sector_t *cursec = actor ? actor->Sector : particle ? particle->subsector->sector : nullptr;
@@ -345,6 +387,7 @@ void HWSprite::DrawSprite(HWDrawInfo *di, FRenderState &state, bool translucent)
 	state.SetAddColor(0);
 	state.EnableTexture(true);
 	state.SetDynLight(0, 0, 0);
+	state.ClearLightOwner();
 }
 
 //==========================================================================
@@ -602,11 +645,28 @@ inline void HWSprite::PutSprite(HWDrawInfo *di, bool translucent)
 		&& gl_light_sprites && di->Level->HasDynamicLights && !di->isFullbrightScene() && !fullbright
 		&& actor && !(actor->renderflags2 & RF2_NODYNAMICLIGHTING))
 	{
-		hw_GetDynModelLight(actor, lightdata);
-		dynlightindex = screen->mLights->UploadLights(lightdata);
+		if (LevelMesh_LightLists(di->Level))
+		{
+			// The levelmesh light lists (ticket 19): hw_GetDynModelLight's
+			// split, the section's list or the touched sections' lights.
+			dynlightindex = -1;
+			if (actor->RenderRadius() <= gl_model_light_optimization_radius)
+				lightOwner = LevelMesh_SectionLightOwner(di->Level, actor->section);
+			else
+				lightOwner = LevelMesh_InlineLightList(di->Level, actor);
+		}
+		else
+		{
+			hw_GetDynModelLight(actor, lightdata);
+			dynlightindex = screen->mLights->UploadLights(lightdata);
+			lightOwner = -1;
+		}
 	}
 	else
+	{
 		dynlightindex = -1;
+		lightOwner = -1;
+	}
 
 	vertexindex = -1;
 	if (!screen->BuffersArePersistent())

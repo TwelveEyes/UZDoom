@@ -1,0 +1,176 @@
+/*
+** lightrefine.comp
+**
+** Levelmesh per-cluster dynamic light lists (ticket 19)
+**
+**---------------------------------------------------------------------------
+**
+** Copyright 2025-2026 UZDoom Maintainers and Contributors
+**
+** SPDX-License-Identifier: GPL-3.0-or-later
+**
+**---------------------------------------------------------------------------
+**
+** A flat reads its section's light list (the playsim's FSection::dlist):
+** in a crowded section every pixel loops over every light of it. This pass
+** narrows the lists per cluster: the union of the lists of the sections of
+** the cluster's flats, minus the lights whose sphere misses the cluster's
+** box (no pixel inside the box is within their radius: the per-pixel
+** distance test would reject them anyway). Additive lights are always kept
+** (the classic clamps the additive sum whenever its list has one). Each
+** entry carries the mask of the sections whose lists hold it, so a flat
+** still only reads its own section's lights; the order stays ascending by
+** slot. The result is the same set of lit pixels with fewer lights per
+** pixel: exact, and independent of the view.
+**
+** One invocation per dirty cluster (VkLevelMesh::UpdateState, after the
+** scatter wrote the frame's lists). A cluster stays unrefined (its flats
+** read their owner lists) when its flats span more than LM_REFINE_SECTIONS
+** sections or several portal groups, when the union has at most
+** LM_REFINE_MIN lights, or when more than LM_REFINE_MAX lights survive.
+*/
+
+layout(local_size_x = 64) in;
+
+#include "shaders/levelmesh/lm_data.glsl"
+
+layout(set = 0, binding = LMBIND_CLUSTERSURFACES, std430) buffer readonly ClusterSurfaceWords { uint clusterSurfaces[]; };
+layout(set = 0, binding = LMBIND_LIGHTRECS, std430) buffer readonly LightRecs { vec4 lightRecs[]; };
+layout(set = 0, binding = LMBIND_LIGHTOWNERS, std430) buffer readonly LightOwners { uint lightOwners[]; };
+layout(set = 0, binding = LMBIND_LIGHTPOOL, std430) buffer readonly LightPool { uint lightPool[]; };
+layout(set = 0, binding = LMBIND_CLUSTERLIGHTS, std430) buffer ClusterLights { uint clusterLights[]; };
+layout(set = 1, binding = 0, std430) buffer readonly SourceWords { uint src[]; };
+
+// Keep in sync with VkLevelMesh::RefineConstants.
+layout(push_constant) uniform RefineConstants
+{
+	uint clusterList;	// word offset of the dirty cluster indices in the staging buffer
+	uint numClusters;
+	uint enabled;		// 0: write every cluster unrefined (lm_lightrefine 0)
+	uint padding;
+};
+
+void main()
+{
+	uint i = gl_GlobalInvocationID.x;
+	if (i >= numClusters) return;
+	uint c = src[clusterList + i];
+	uint base = c * LM_CLUSTERLIGHT_WORDS;
+	if (enabled == 0u)
+	{
+		clusterLights[base] = LM_LIGHTLIST_END;
+		return;
+	}
+
+	// The sections of the flats that read this cluster's list.
+	uint numSides = lmLightInfoWords[LMLI_NUMSIDES];
+	LMCluster cl = lmClusters[c];
+	uint sections[LM_REFINE_SECTIONS];
+	uint numSections = 0u;
+	for (uint k = 0u; k < cl.numSurfaces; k++)
+	{
+		LMSurface surf = lmSurfaces[clusterSurfaces[cl.firstSurface + k]];
+		if (surf.cluster != c) continue;
+		uint sec = lmLeafSection[surf.leaf];
+		bool found = false;
+		for (uint j = 0u; j < numSections; j++) found = found || sections[j] == sec;
+		if (found) continue;
+		if (numSections == LM_REFINE_SECTIONS)
+		{
+			clusterLights[base] = LM_LIGHTLIST_END;
+			return;
+		}
+		sections[numSections++] = sec;
+	}
+
+	// Their lists, which must share one portal group.
+	uint cur[LM_REFINE_SECTIONS];
+	uint group = LM_LIGHTLIST_END;
+	for (uint j = 0u; j < numSections; j++)
+	{
+		uint off = lightOwners[numSides + sections[j]];
+		cur[j] = LM_LIGHTLIST_END;
+		if (off == LM_LIGHTLIST_END) continue;
+		uint g = lightPool[off];
+		if (group != LM_LIGHTLIST_END && g != group)
+		{
+			clusterLights[base] = LM_LIGHTLIST_END;
+			return;
+		}
+		group = g;
+		cur[j] = off + 1u;
+	}
+	if (group == LM_LIGHTLIST_END)
+	{
+		// No lights at all: the owner lists say so already.
+		clusterLights[base] = LM_LIGHTLIST_END;
+		return;
+	}
+
+	// The box in GL order (x, z, y), and the displacement table.
+	vec3 bmin = vec3(cl.bmin[0], cl.bmin[2], cl.bmin[1]);
+	vec3 bmax = vec3(cl.bmax[0], cl.bmax[2], cl.bmax[1]);
+	uint numGroups = lmLightInfoWords[LMLI_NUMGROUPS];
+	uint dispBase = LMLI_HEADER + lmLightInfoWords[LMLI_NUMFFGROUPS];
+
+	// Merge the ascending lists.
+	uint count = 0u, unionCount = 0u;
+	while (true)
+	{
+		uint best = LM_LIGHTLIST_END;
+		for (uint j = 0u; j < numSections; j++)
+			if (cur[j] != LM_LIGHTLIST_END) best = min(best, lightPool[cur[j]]);
+		if (best == LM_LIGHTLIST_END) break;
+		uint mask = 0u;
+		for (uint j = 0u; j < numSections; j++)
+		{
+			if (cur[j] != LM_LIGHTLIST_END && lightPool[cur[j]] == best)
+			{
+				mask |= 1u << j;
+				cur[j]++;
+			}
+		}
+		unionCount++;
+
+		uint b = best * LM_LIGHTREC_VEC4;
+		vec4 lightpos = lightRecs[b];
+		// The largest radius of the light's current settings: a flickering
+		// light keeps the clusters it may reach (LevelMeshLightRecord).
+		lightpos.w = lightRecs[b + 4u].x;
+		if (lightpos.w <= 0.0) continue;	// inactive: no consumer reads it
+		uint flags = floatBitsToUint(lightRecs[b + 3u].z);
+		bool keep = (flags & LMLF_CLASSMASK) == 2u;
+		if (!keep)
+		{
+			uint lightGroup = flags >> LMLF_GROUPSHIFT;
+			if (lightGroup != group && lightGroup < numGroups && group < numGroups)
+			{
+				uint o = dispBase + 2u * (lightGroup * numGroups + group);
+				lightpos.x += uintBitsToFloat(lmLightInfoWords[o]);
+				lightpos.z += uintBitsToFloat(lmLightInfoWords[o + 1u]);
+			}
+			vec3 d = max(max(bmin - lightpos.xyz, lightpos.xyz - bmax), vec3(0.0));
+			// Padded by a unit: the per-pixel test runs on rounded positions.
+			float r = lightpos.w + 1.0;
+			keep = dot(d, d) <= r * r;
+		}
+		if (!keep) continue;
+		if (count == LM_REFINE_MAX)
+		{
+			clusterLights[base] = LM_LIGHTLIST_END;
+			return;
+		}
+		clusterLights[base + LM_CLUSTERLIGHT_ENTRIES + count] = best | (mask << LM_CLUSTERLIGHT_MASKSHIFT);
+		count++;
+	}
+	if (unionCount <= LM_REFINE_MIN)
+	{
+		clusterLights[base] = LM_LIGHTLIST_END;
+		return;
+	}
+	clusterLights[base + LM_CLUSTERLIGHT_ENTRIES + count] = LM_LIGHTLIST_END;
+	for (uint j = 0u; j < LM_REFINE_SECTIONS; j++)
+		clusterLights[base + 1u + j] = j < numSections ? sections[j] : LM_LIGHTLIST_END;
+	clusterLights[base + LM_CLUSTERLIGHT_GROUP] = group;
+	clusterLights[base] = count;
+}

@@ -301,6 +301,12 @@ static const char *shaderBindings = R"(
 		int uLevelMeshFlags;
 		float uLevelMeshTime;
 		int uLevelMeshView;
+
+		// dynamic light list (ticket 19, lm_lights.glsl)
+		int uLightOwner;
+		int uLightConsumer;
+		int uLightActor;
+		vec4 uLightOrigin;
 	};
 
 	// material types
@@ -350,6 +356,7 @@ static const char *shaderBindings = R"(
 	#define uNpotEmulation data[uDataIndex].uNpotEmulation
 
 	#define SUPPORTS_SHADOWMAPS
+	#define LM_LIGHTLISTS
 	#define VULKAN_COORDINATE_SYSTEM
 	#define HAS_UNIFORM_VERTEX_DATA
 
@@ -365,6 +372,21 @@ static const char *shaderBindings = R"(
 	vec4 noise4(vec4) { return vec4(0); }
 )";
 
+// The constants of lm_lights.glsl (ticket 19).
+static FString LightListDefines()
+{
+	FString d;
+	d.AppendFormat("#define LMLF_CLASSMASK %uu\n#define LMLF_DONTLIGHTSELF %uu\n#define LMLF_DONTLIGHTOTHERS %uu\n#define LMLF_DONTLIGHTACTORS %uu\n",
+		(unsigned)LMLF_CLASSMASK, (unsigned)LMLF_DONTLIGHTSELF, (unsigned)LMLF_DONTLIGHTOTHERS, (unsigned)LMLF_DONTLIGHTACTORS);
+	d.AppendFormat("#define LMLF_DONTLIGHTMAP %uu\n#define LMLF_VISIBLETOPLAYER %uu\n#define LMLF_ADDITIVE %uu\n#define LMLF_GROUPSHIFT %uu\n",
+		(unsigned)LMLF_DONTLIGHTMAP, (unsigned)LMLF_VISIBLETOPLAYER, (unsigned)LMLF_ADDITIVE, (unsigned)LMLF_GROUPSHIFT);
+	d.AppendFormat("#define LMLI_NUMGROUPS_WORD %uu\n#define LMLI_NUMFFGROUPS_WORD %uu\n#define LMLI_HEADER_WORDS %uu\n#define LM_LIGHTLIST_END_WORD 0x%xu\n",
+		(unsigned)LMLI_NUMGROUPS, (unsigned)LMLI_NUMFFGROUPS, (unsigned)LMLI_HEADER, LM_LIGHTLIST_END);
+	d.AppendFormat("#define LM_LIGHTREC_VEC4 %d\n", (int)LM_LIGHTREC_VEC4);
+	d.AppendFormat("#define LMLC_ACTOR %d\n#define LMLC_FORCEATTEN %d\n#define LMLC_POINT %d\n", (int)LMLC_ACTOR, (int)LMLC_FORCEATTEN, (int)LMLC_POINT);
+	return d;
+}
+
 std::unique_ptr<VulkanShader> VkShaderManager::LoadVertShader(FString shadername, const char *vert_lump, const char *defines, AllShaderIndex type)
 {
 	FString code = GetTargetGlslVersion();
@@ -378,6 +400,8 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadVertShader(FString shadername
 	code << "layout(set = 1, binding = 0, std140) uniform readonly ViewpointUBO" << ShaderInputsOutputs::GenerateStruct<HWViewpointUniforms>() << ";\n";
 	code << ShaderInputsOutputs::GenerateInputsOutputs(true, false, type, false, fb->device->EnabledFeatures.Features.shaderClipDistance);
 	if (!fb->device->EnabledFeatures.Features.shaderClipDistance) code << "#define NO_CLIPDISTANCE_SUPPORT\n";
+	code << LightListDefines();
+	code << "#include \"shaders/levelmesh/lm_lights.glsl\"\n";
 	code << "#line 1\n";
 	code << LoadPrivateShaderLump(vert_lump).GetChars() << "\n";
 
@@ -414,6 +438,8 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername
 	if (!fb->device->EnabledFeatures.Features.shaderClipDistance) code << "#define NO_CLIPDISTANCE_SUPPORT\n";
 	if (!alphatest) code << "#define NO_ALPHATEST\n";
 	if (gbufferpass) code << "#define GBUFFER_PASS\n";
+	code << LightListDefines();
+	code << "#include \"shaders/levelmesh/lm_lights.glsl\"\n";
 	if (levelmesh) code << "#include \"shaders/levelmesh/lm_frag.glsl\"\n";
 
 	code << "\n#line 1\n";
@@ -507,7 +533,8 @@ std::unique_ptr<VulkanShader> VkShaderManager::LoadFragShader(FString shadername
 
 VkShaderProgram *VkShaderManager::GetLevelMesh(bool alphatest, EPassType passType, int program, bool dither)
 {
-	static_assert(int(LMP_DEFAULT) == int(SHADER_Default) && int(LMP_WARP1) == int(SHADER_Warp1) && int(LMP_WARP2) == int(SHADER_Warp2), "levelmesh programs are shader indices");
+	static_assert(int(LMP_DEFAULT) == int(SHADER_Default) && int(LMP_WARP1) == int(SHADER_Warp1) && int(LMP_WARP2) == int(SHADER_Warp2) &&
+		int(LMP_SPECULAR) == int(SHADER_Specular) && int(LMP_PBR) == int(SHADER_PBR), "levelmesh programs are shader indices");
 	// Sky: depth / stencil only. Exposure quads: the mark pass only.
 	if (program < 0 || program >= int(LMP_COUNT) || program == int(LMP_SKY) || program == int(LMP_EXPOSURE)) program = LMP_DEFAULT;
 	auto &prog = mLevelMeshShaders[program][alphatest ? 1 : 0][passType][dither ? 1 : 0];
